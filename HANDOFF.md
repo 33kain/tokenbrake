@@ -17,8 +17,8 @@ Brakes don't raise anyone's cap. They cut the share of the cap that goes to wast
 | # | Name | Surface | Status |
 |---|------|---------|--------|
 | 1 | Bash-output guard hooks | npm package (`tokenbrake`) | **published 0.1.0**, live-verified on Linux (Claude Code 2.1.261) |
-| 2 | Fork thread with summary | CONTEXA | **built in 0.9.73**, not field-tested |
-| 3 | Send-cost preview + long-thread warning | CONTEXA | **built in 0.9.73** (cost line only; no peak-window indicator, no usage-page read) |
+| 2 | Fork thread with summary | CONTEXA | **built 0.9.73, field-verified on Cowork 0.9.87** (444 vs 123,813 tokens) |
+| 3 | Send-cost preview + long-thread warning | CONTEXA | **built 0.9.73, field-verified on Cowork 0.9.82** (exact count from the session record) |
 | 4 | What's eating your tokens | `tokenbrake report` | **built**, run on one real 64-request session |
 | 5 | Batch + model-routing nudge | CONTEXA | **built in 0.9.74**, not field-tested |
 
@@ -278,6 +278,12 @@ Cowork session — the thesis's first measured number (99.6% less per send). `cl
 page; the new-session screen's URL is unknown, so 0.9.87 lands a parked brief on any claude.ai page that is not an
 existing conversation, has a composer and holds no messages (take is consuming, so only then). Open question: the
 new Cowork session's URL, to open it from the chip.**
+
+**Thirteenth card (0.9.87): the brief landed by itself on `claude.ai/cowork/project/<chat_project_id>` — the project page
+is the new-session screen. 0.9.88 opens it from the chip (the id is in the session record), retires `probe.js`, and is
+the store candidate. The Cowork path is closed end to end: exact count → cost line → brief (444 vs 123,813 tokens)
+→ new session in the same project. Field-open: the chat path's Start fresh on the phone, and a second session's
+numbers.**
 
 ## Launch vehicle
 
