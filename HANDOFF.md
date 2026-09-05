@@ -303,7 +303,21 @@ project the session lives in — and the brief landed in its composer by itself.
 field-verified: exact count → cost line → brief (444 vs 123,813 tokens) → new session in the same project.** The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
 → new session in the same project (the brief lands by itself once the right project page opens). Field-open: the chat
-path's Start fresh on the phone, and a second session's numbers.**
+path's Start fresh on the phone (the chip rendered on two chats; the click is untested).**
+
+**Twenty-first card (0.9.94): four more sessions, the brief measured on each.**
+
+| page | thread (re-read per send) | brief |
+|---|---|---|
+| Cowork `cse_01Pc8b…` | ≈ 689k | ≈ 441 |
+| Cowork `cse_01SMDg…` | ≈ 214k | ≈ 313 |
+| chat `5d0b6192…` | ≈ 14k | ≈ 442 |
+| chat `e9e4e32e…` | ≈ 22k | ≈ 427 |
+
+With the first (123,813 → 444) that is five sessions, 14k to 689k, and the brief lands between 313 and 444 tokens
+every time. The second-session condition on any marketing number is met. The honest claim is "a brief of about four
+hundred tokens instead of re-reading the whole thread on every send" — tokens re-read, not money: prompt caching
+prices a cached re-read at a tenth, and how claude.ai's usage limits count cached tokens is not public.
 
 ## Launch vehicle
 
