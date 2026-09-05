@@ -273,6 +273,12 @@ paths (`rawBrief`, injected block), raises the fork ceiling to 2,000, and the di
 its diag. Start fresh on Cowork copies the brief, parks it and opens `claude.ai/cowork`; whether the brief lands in
 the new session's composer is not yet verified.
 
+**Twelfth card (0.9.86): the brief. `Brief ready: ≈ 444 tokens instead of ≈ 124k per send` on the live 123,813-token
+Cowork session — the thesis's first measured number (99.6% less per send). `claude.ai/cowork` redirects to a product
+page; the new-session screen's URL is unknown, so 0.9.87 lands a parked brief on any claude.ai page that is not an
+existing conversation, has a composer and holds no messages (take is consuming, so only then). Open question: the
+new Cowork session's URL, to open it from the chip.**
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
