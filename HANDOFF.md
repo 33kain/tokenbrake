@@ -302,8 +302,8 @@ drops every lookup of 0.9.89–0.9.93. **Twentieth card (0.9.94): the chip opene
 project the session lives in — and the brief landed in its composer by itself. The Cowork path is closed end to end and
 field-verified: exact count → cost line → brief (444 vs 123,813 tokens) → new session in the same project.** The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
-→ new session in the same project (the brief lands by itself once the right project page opens). Field-open: the chat
-path's Start fresh on the phone (the chip rendered on two chats; the click is untested).**
+→ new session in the same project (the brief lands by itself once the right project page opens). Field-open: nothing on
+the extension. The chat path's Start fresh was clicked on the phone (twenty-second card): /new opened with the brief in its box.**
 
 **Twenty-first card (0.9.94): four more sessions, the brief measured on each.**
 
