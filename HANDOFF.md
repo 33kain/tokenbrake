@@ -229,9 +229,11 @@ sent while claude.ai's model selector (`[data-testid="model-selector-dropdown"]`
 2.5× Sonnet's usage per token", the API list-price ratio, source named in the code). Retrospective by design:
 said when the reply lands, the one moment the pattern is complete and the composer is empty; nothing watches
 the composer. "ŠRAF classification" does not exist in this repository; the fragment definition is the
-one in `content.js`. The selector name is the one part not verified against live claude.ai — the mock uses
-it; if the live page names its selector differently, the model line simply never renders, and the first
-live session should check for the `[CONTEXA] nudge — model opus` console line on an Opus chat.
+one in `content.js`. **Field, 2026-09-05, Quetta on Android, 0.9.74 sideloaded:** the model line rendered on a live Opus 5 chat, so
+the selector is verified. The cost line did not render on a long chat — the virtualised DOM held a fraction of
+the thread — and 0.9.75 scales the read by page height and exposes the measured number in the wordmark's
+tooltip. Also reported: "on most chats CONTEXA does not open"; 0.9.75 arms the settle fallback at attach so a
+finished, flagless, static page draws its card. Whether that was the cause is the next thing to check.
 
 ## Launch vehicle
 
