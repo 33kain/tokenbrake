@@ -289,7 +289,9 @@ asks `/api/organizations/<org>/projects` for the entry carrying the `claude_proj
 list's keys are `uuid,name,description,is_private,creator,is_starred,is_starter_project,is_harmony_project,type,subtype,settings,
 archiver,archived_at,created_at`, none holding the id; `/v1/code/projects/<id>` is 404. 0.9.91 adds the project details,
 `/v1/code/projects` as a list, and the page's own resource timing (`/api/organizations/<org>/projects/<uuid>` fetched by the
-session page to show its project's name), the last used only when exactly one uuid was fetched. The Cowork
+session page to show its project's name), the last used only when exactly one uuid was fetched. Seventeenth card: details add
+only `prompt_template,organization_role`, `/v1/code/projects` 404, five resource entries, both links in plain divs. 0.9.92 searches
+the org's `chat_conversations` and each project's `…/conversations` for the `cse_` id, and `/v1/code/sessions?limit=50`. The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
 → new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
 project mapping (fifteenth card pending), the chat path's Start fresh on the phone, and a second session's numbers.**
