@@ -294,10 +294,14 @@ only `prompt_template,organization_role`, `/v1/code/projects` 404, five resource
 the org's `chat_conversations` and each project's `…/conversations` for the `cse_` id, and `/v1/code/sessions?limit=50`. Eighteenth card: conversations carry
 `project_uuid,session_id,workspace_session_id` (none holding the cse id in 76 + 14 entries); the sessions list carries
 `relations,tags,title,participants,status` — the record's diag summary cut at twelve keys, so 0.9.93 searches the record itself
-first and shows all its keys. The Cowork
+first and shows all its keys. Nineteenth card: the record has no project uuid either — and needs none. **`chat_project_id` is the
+uuid in another spelling: `claude_proj_01` + base58 (Bitcoin alphabet, 22 chars, `1`-padded) of the uuid's 16 bytes.**
+`claude_proj_011CeAvYWZiPwTSnbTDUTRkX` → `01a016c6-92cb-713e-982d-db1fbc14c7fc`, verified against the page reached by hand and
+by round trip. 0.9.94 decodes (`projectUuidOf`), asks the org's project list once only to name the project on the chip, and
+drops every lookup of 0.9.89–0.9.93. The Cowork path is closed end to end. The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
 → new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
-project mapping (fifteenth card pending), the chat path's Start fresh on the phone, and a second session's numbers.**
+project mapping's twentieth card (0.9.94 opens the decoded page), the chat path's Start fresh on the phone, and a second session's numbers.**
 
 ## Launch vehicle
 
