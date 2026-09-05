@@ -233,7 +233,11 @@ one in `content.js`. **Field, 2026-09-05, Quetta on Android, 0.9.74 sideloaded:*
 the selector is verified. The cost line did not render on a long chat — the virtualised DOM held a fraction of
 the thread — and 0.9.75 scales the read by page height and exposes the measured number in the wordmark's
 tooltip. Also reported: "on most chats CONTEXA does not open"; 0.9.75 arms the settle fallback at attach so a
-finished, flagless, static page draws its card. Whether that was the cause is the next thing to check.
+finished, flagless, static page draws its card. Whether that was the cause is the next thing to check. **Second session: 0.9.75 changed nothing.** 0.9.76 reads
+the thread size from claude.ai's own conversation API (same origin, read-only, fails quietly to the DOM
+estimate) and adds a three-tap diagnostic card on the wordmark, because the phone has no console and no
+tooltip. The next report must carry that card's numbers. If the API read works it is also the fix for the
+head-truncated capture (`captureTurns` could read the whole session from it) — a deliberate later step.
 
 ## Launch vehicle
 
