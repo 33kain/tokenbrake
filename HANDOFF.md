@@ -243,7 +243,13 @@ chat — Cowork's API is unknown. 0.9.78 adds a main-world probe that lists the 
 card. **Fourth/fifth cards:** on a chat the API read works on the phone (8,111 chars, 6 user messages vs 3 in the DOM);
 on Cowork the base is `/api/organizations/<org>/cowork/sessions/<cse_id>/…` and the content did not appear among
 same-origin fetches — 0.9.79 widens the probe (ws, sse, other hosts) and reports the status and key names of four
-GETs under that base. Next: read the shape, implement the Cowork session read, decide what "Start fresh" means on Cowork (a new
+GETs under that base. **Sixth card:** the Cowork page calls `/v1/code/sessions/<cse_id>` and `…/events` (same origin) — the Claude Code
+Remote API, proxied. The session record (checked from this side via get_session) carries
+`external_metadata.context_usage.used_tokens`: **123,813** on the field session, exact, against a DOM estimate of
+6,324; lifetime 245M cache-read tokens, $1,432. 0.9.80 reads the record for the count and the events for the
+user's turns (shape parsed defensively; keys reported in the diag). On Cowork the fork copies the brief instead of
+opening /new. Open: the events shape (one card will confirm), and opening a new Cowork session with the brief.
+Was: read the shape, implement the Cowork session read, decide what "Start fresh" means on Cowork (a new
 Cowork session, not `/new`). Note for brake 1: Cowork remote sessions are Claude Code sessions in Anthropic's
 cloud; hooks there would have to come from the repo's own `.claude/settings.json` (`tokenbrake init --project`). If the API read works it is also the fix for the
 head-truncated capture (`captureTurns` could read the whole session from it) — a deliberate later step.
