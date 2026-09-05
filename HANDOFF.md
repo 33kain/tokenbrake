@@ -285,7 +285,11 @@ the store candidate — except that `chat_project_id` is a `claude_proj_…` id 
 (fourteenth card: "Couldn't load this project"); 0.9.89 read the project link off the session page instead — and the
 fifteenth card opened the wrong project: the page's first `/cowork/project/` link is the sidebar's first project. 0.9.90
 asks `/api/organizations/<org>/projects` for the entry carrying the `claude_proj_…` id and takes its `uuid`; else
-`/v1/code/projects/<id>` (code headers) and records its shape; else the chip copies and opens nothing. The Cowork
+`/v1/code/projects/<id>` (code headers) and records its shape; else the chip copies and opens nothing. Sixteenth card: the
+list's keys are `uuid,name,description,is_private,creator,is_starred,is_starter_project,is_harmony_project,type,subtype,settings,
+archiver,archived_at,created_at`, none holding the id; `/v1/code/projects/<id>` is 404. 0.9.91 adds the project details,
+`/v1/code/projects` as a list, and the page's own resource timing (`/api/organizations/<org>/projects/<uuid>` fetched by the
+session page to show its project's name), the last used only when exactly one uuid was fetched. The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
 → new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
 project mapping (fifteenth card pending), the chat path's Start fresh on the phone, and a second session's numbers.**
