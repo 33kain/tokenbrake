@@ -236,7 +236,9 @@ tooltip. Also reported: "on most chats CONTEXA does not open"; 0.9.75 arms the s
 finished, flagless, static page draws its card. Whether that was the cause is the next thing to check. **Second session: 0.9.75 changed nothing.** 0.9.76 reads
 the thread size from claude.ai's own conversation API (same origin, read-only, fails quietly to the DOM
 estimate) and adds a three-tap diagnostic card on the wordmark, because the phone has no console and no
-tooltip. The next report must carry that card's numbers. If the API read works it is also the fix for the
+tooltip. The next report must carry that card's numbers. **It did:** 3 blocks, 1 user turn, scale ×3.81 → 6.3k tokens on a
+long chat, API "not asked" (the card could not tell pending from never). 0.9.77 reads the user's turns from the API
+when it answers (so moves and brief stop being mined from one turn) and makes the card's API states honest. If the API read works it is also the fix for the
 head-truncated capture (`captureTurns` could read the whole session from it) — a deliberate later step.
 
 ## Launch vehicle
