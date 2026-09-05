@@ -291,7 +291,10 @@ archiver,archived_at,created_at`, none holding the id; `/v1/code/projects/<id>` 
 `/v1/code/projects` as a list, and the page's own resource timing (`/api/organizations/<org>/projects/<uuid>` fetched by the
 session page to show its project's name), the last used only when exactly one uuid was fetched. Seventeenth card: details add
 only `prompt_template,organization_role`, `/v1/code/projects` 404, five resource entries, both links in plain divs. 0.9.92 searches
-the org's `chat_conversations` and each project's `…/conversations` for the `cse_` id, and `/v1/code/sessions?limit=50`. The Cowork
+the org's `chat_conversations` and each project's `…/conversations` for the `cse_` id, and `/v1/code/sessions?limit=50`. Eighteenth card: conversations carry
+`project_uuid,session_id,workspace_session_id` (none holding the cse id in 76 + 14 entries); the sessions list carries
+`relations,tags,title,participants,status` — the record's diag summary cut at twelve keys, so 0.9.93 searches the record itself
+first and shows all its keys. The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
 → new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
 project mapping (fifteenth card pending), the chat path's Start fresh on the phone, and a second session's numbers.**
