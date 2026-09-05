@@ -265,6 +265,14 @@ autocompact_state, active_goal) and the field session has >23,000 events, so the
 `post_turn_summary`, the two cheap sources a Cowork brief can be built from. Next: read from the end, build the
 Cowork brief, and decide what Start fresh opens on Cowork (a new Cowork session in the same project).
 
+**Ninth–eleventh cards (0.9.85–0.9.86):** the stream takes `limit=500`, its cursor is a sequence number and every answer
+carries `resume_cursor` (the head, 23,435 on the field session); reading 500 from the start plus the last 3,000 back
+from the head found 137 user turns in the tail (12 pages), and the moves came from the present. The first live fork
+failed with the generic parse-failure card; 0.9.86 salvages a cut or JSON-broken brief from the raw text on both
+paths (`rawBrief`, injected block), raises the fork ceiling to 2,000, and the diag card carries the last error with
+its diag. Start fresh on Cowork copies the brief, parks it and opens `claude.ai/cowork`; whether the brief lands in
+the new session's composer is not yet verified.
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
