@@ -254,6 +254,17 @@ Cowork session, not `/new`). Note for brake 1: Cowork remote sessions are Claude
 cloud; hooks there would have to come from the repo's own `.claude/settings.json` (`tokenbrake init --project`). If the API read works it is also the fix for the
 head-truncated capture (`captureTurns` could read the whole session from it) — a deliberate later step.
 
+**Eighth card (0.9.82): the cost line rendered on the live Cowork session — `≈ 124k tokens re-read per send`, exact,
+from `/v1/code/sessions/<id>` → `response_shape.external_metadata.context_usage.used_tokens` (needs the page's own
+headers: anthropic-version 2023-06-01, anthropic-beta ccr-byoc-2025-07-29, anthropic-client-feature ccr,
+anthropic-client-platform web_claude_ai, x-organization-uuid from the lastActiveOrg cookie).** Events:
+`/v1/code/sessions/<id>/events` → `{data,next_cursor,resume_cursor}`, 50 per page, `data[].{event_type,payload,
+sequence_num,…}`; the first page is session setup (control_request/response, env_manager_log, system,
+autocompact_state, active_goal) and the field session has >23,000 events, so the brief cannot walk from the start.
+0.9.83 probes `limit` and `from_sequence_num` on /events and reports the shape of `active_goal` and the record's
+`post_turn_summary`, the two cheap sources a Cowork brief can be built from. Next: read from the end, build the
+Cowork brief, and decide what Start fresh opens on Cowork (a new Cowork session in the same project).
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
