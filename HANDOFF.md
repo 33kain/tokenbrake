@@ -298,10 +298,12 @@ first and shows all its keys. Nineteenth card: the record has no project uuid ei
 uuid in another spelling: `claude_proj_01` + base58 (Bitcoin alphabet, 22 chars, `1`-padded) of the uuid's 16 bytes.**
 `claude_proj_011CeAvYWZiPwTSnbTDUTRkX` → `01a016c6-92cb-713e-982d-db1fbc14c7fc`, verified against the page reached by hand and
 by round trip. 0.9.94 decodes (`projectUuidOf`), asks the org's project list once only to name the project on the chip, and
-drops every lookup of 0.9.89–0.9.93. The Cowork path is closed end to end. The Cowork
+drops every lookup of 0.9.89–0.9.93. **Twentieth card (0.9.94): the chip opened `/cowork/project/01a016c6-…` — the CONTEXA
+project the session lives in — and the brief landed in its composer by itself. The Cowork path is closed end to end and
+field-verified: exact count → cost line → brief (444 vs 123,813 tokens) → new session in the same project.** The Cowork
 path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
-→ new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
-project mapping's twentieth card (0.9.94 opens the decoded page), the chat path's Start fresh on the phone, and a second session's numbers.**
+→ new session in the same project (the brief lands by itself once the right project page opens). Field-open: the chat
+path's Start fresh on the phone, and a second session's numbers.**
 
 ## Launch vehicle
 
