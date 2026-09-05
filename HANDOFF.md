@@ -282,10 +282,13 @@ new Cowork session's URL, to open it from the chip.**
 **Thirteenth card (0.9.87): the brief landed by itself on `claude.ai/cowork/project/<chat_project_id>` — the project page
 is the new-session screen. 0.9.88 opens it from the chip (the id is in the session record), retires `probe.js`, and is
 the store candidate — except that `chat_project_id` is a `claude_proj_…` id and the project page wants the project uuid
-(fourteenth card: "Couldn't load this project"); 0.9.89 reads the project link off the session page instead. The Cowork
-path is closed end to end: exact count → cost line → brief (444 vs 123,813 tokens)
-→ new session in the same project. Field-open: the chat path's Start fresh on the phone, and a second session's
-numbers.**
+(fourteenth card: "Couldn't load this project"); 0.9.89 read the project link off the session page instead — and the
+fifteenth card opened the wrong project: the page's first `/cowork/project/` link is the sidebar's first project. 0.9.90
+asks `/api/organizations/<org>/projects` for the entry carrying the `claude_proj_…` id and takes its `uuid`; else
+`/v1/code/projects/<id>` (code headers) and records its shape; else the chip copies and opens nothing. The Cowork
+path is closed end to end except that last hop: exact count → cost line → brief (444 vs 123,813 tokens)
+→ new session in the same project (the brief lands by itself once the right project page opens). Field-open: the
+project mapping (fifteenth card pending), the chat path's Start fresh on the phone, and a second session's numbers.**
 
 ## Launch vehicle
 
