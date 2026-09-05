@@ -320,8 +320,8 @@ hundred tokens instead of re-reading the whole thread on every send" — tokens 
 prices a cached re-read at a tenth, and how claude.ai's usage limits count cached tokens is not public.
 
 **Twenty-second card (0.9.94): the limit, measured.** Five messages in the 689k-token Cowork session (Opus 5), then
-Start fresh and the same five in the new session (Fable 5.1, the project's default), the usage page read before and
-after each arm:
+Start fresh and the same five in the new conversation it opened — a chat in the same project, on Opus 5 as well, so the
+two arms share a model — the usage page read before and after each arm:
 
 | | before | +5 in the 689k session | +5 in the fresh session |
 |---|---|---|---|
@@ -332,10 +332,11 @@ after each arm:
 Three times cheaper per message on the five-hour window; the weekly limit moved 2 points on the heavy side and none on
 the fresh one. Not the 200× of the raw token ratio, for three expected reasons: cached re-reads are counted at a
 discount (first evidence that the subscription limit discounts them, and still counts them); a fresh Cowork session
-carries tens of thousands of tokens of system prompt and tool definitions per turn before the brief; and message 4 on
-the heavy side used three tools, three extra re-reads. Caveats: different models on the two arms, one short reply of
-mine in the window (part of the Fable +1), 1% resolution. A tighter run is the same model both sides, ten messages,
-"in one sentence, no tools". The number that holds as written: *five messages in a 689k-token session used 9% of the
+carries tens of thousands of tokens of system prompt and tool definitions per turn before the brief (the fresh arm was
+a project chat with commands available, lighter than a Cowork task, so a Cowork-to-Cowork run would sit between the
+two); and message 4 on the heavy side used three tools, three extra re-reads. Caveats: one short reply of mine, on Fable,
+in the window — that is the whole Fable +1, and it is not on the Opus arms — and 1% resolution. A tighter run is ten
+messages, "in one sentence, no tools", and Cowork on both sides. The number that holds as written: *five messages in a 689k-token session used 9% of the
 five-hour limit; the same five after Start fresh used 3%.*
 
 ## Launch vehicle
