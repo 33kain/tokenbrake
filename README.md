@@ -7,6 +7,11 @@ Claude Code's own ceiling for a valid Bash result is ~30,000 characters inline (
 that gets re-sent with every turn until you `/compact`. tokenbrake lowers that ceiling to something sane,
 keeps the parts that matter, and tells you afterwards what ate your tokens.
 
+**Measured (2026-09-06).** The same eleven-step read-only task on the same repository, run twice as a Cowork session on
+Fable 5.1, once without the hooks and once with them: API cost $8.40 → $7.02 (−16%), cache-read tokens 4.62M → 2.72M
+(−41%), requests 21 → 15, identical answers. The five-hour usage limit moved +9 and +8. The protocol and every number
+are in [`AB-TASK.md`](AB-TASK.md).
+
 ## Install
 
 ```

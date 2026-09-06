@@ -339,13 +339,23 @@ in the window — that is the whole Fable +1, and it is not on the Opus arms —
 messages, "in one sentence, no tools", and Cowork on both sides. The number that holds as written: *five messages in a 689k-token session used 9% of the
 five-hour limit; the same five after Start fresh used 3%.*
 
-**Twenty-third card, planned (2026-09-06): brake 1 against the usage limit.** `tokenbrake init --project` wrote
-`.claude/settings.json` and `.claude/hooks/tokenbrake/guard.js` into the repository, so every Cowork session on it runs the
-hooks once merged. The A/B is in `tokenbrake/AB-TASK.md`: one identical read-heavy task, arm A on `main` before the merge
-(no hooks), arm B after (hooks on), the usage page read before and after each, and `tokenbrake report` run by the session
-itself as its last step so both arms carry their internal numbers out. Simulated on this session's own transcript first:
-the guard would have kept 37k tokens out of context and 4.9M token-reads out of the carry (27% of what tool results cost,
-2.4% of the session's API cost). The measured number replaces that estimate.
+**Twenty-third card (2026-09-06): brake 1 against the usage limit, measured.** `tokenbrake init --project` merged
+(#46), so every Cowork session on the repository runs the hooks, and the first one confirmed it in its own words. The A/B
+in `tokenbrake/AB-TASK.md`: one identical eleven-step read-heavy task as a single message, arm A before the merge, arm B
+after, Fable 5.1 both, the usage page read around each, the session records read afterwards for exact usage and cost.
+
+| | no hooks | hooks on | change |
+|---|---|---|---|
+| API cost | $8.40 | $7.02 | −16% |
+| cache-read tokens | 4.62M | 2.72M | −41% |
+| requests | 21 | 15 | −29% |
+| five-hour window | +9 | +8 | −1 point |
+
+Same answers on all ten questions. The saving is mostly indirect: a trimmed `cat` sent the model to bounded Read calls
+instead of Claude Code's persisted-result path, whose re-reads were 96% of arm A's carry; the Read cap itself never fired.
+The usage page, at 1% resolution, moved consistently with the cost and cannot say more than "about one point in nine".
+The number that holds: *on an identical Cowork task, brake 1 cut the session's cost by 16% and its cache reads by 41%,
+with nothing lost on the task.* Sharpen with a longer task and an Opus run.
 
 ## Launch vehicle
 
