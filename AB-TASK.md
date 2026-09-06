@@ -194,3 +194,40 @@ The limit moved with the cost on both, as far as 1% resolution can show. A
 side fact worth keeping: the same task moved the five-hour window three
 times as far on Fable as on Opus while costing more in dollars too, so the
 limit weighs Fable heavily per dollar.
+
+## Debugging round — planned 2026-09-06, both arms on the same model
+
+The audit task reads files once each. A debugging session runs the test suite
+over and over, and the CONTEXA suite prints about 50 KB per run, so this is the
+workload where shell output should dominate the context. Arms as in the Opus
+round: step 0 writes `{"enabled": false}` or `{"enabled": true}` to
+`~/.claude/tokenbrake.json`, and step 5 prints it back.
+
+`scripts/ab/inject-faults.mjs` in the CONTEXA repository plants five faults in
+the working tree, each one exact string replacement, each probed to break one
+or two tests alone; all five planted show four failures at first and reveal
+the rest as they are fixed. The session is told not to open the script, not to
+edit tests, and to re-run the full suite after every change. It reports each
+fault it fixed, how many times it ran the suite, `git diff --stat`, the config
+file, and `npx tokenbrake@0.2.0 report --top=8`.
+
+Success on the task is the same for both arms: the suite green, and the diff
+touching only the five planted sites. What the comparison reads is the same as
+before: cost and cache reads from the session record, the five-hour window from
+the usage page, and the report's own numbers, plus this time the number of
+`npm test` runs, since each run is one 50 KB result carried until the end.
+
+The prompt (both arms; step 0 differs):
+
+```
+Debugging task. Work in this repository's checkout. Do every step with tools, in order. Do not read or modify anything under scripts/ab/, do not modify any test file, do not commit or push. At the end write the final answer described in step 6.
+
+1. Run `node scripts/ab/inject-faults.mjs`. It plants a few faults in the source files. Do not open the script.
+2. Run `npm test` in full. Read the failures.
+3. Fix every failure by editing source files under extension/ and worker/ only. After each change, re-run the full `npm test`. Repeat until the whole suite passes. Do not skip, disable or edit tests.
+4. Run `git diff --stat` and keep the output.
+5. Run `cat ~/.claude/tokenbrake.json` and keep the output.
+6. Run `npx --yes tokenbrake@0.2.0 report --top=8` and keep the full output.
+
+Final answer: one line per fault you fixed (file, what was wrong, what you changed); the number of times you ran `npm test`; then the outputs of steps 4, 5 and 6 pasted verbatim.
+```
