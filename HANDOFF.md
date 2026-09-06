@@ -1,5 +1,9 @@
 # Brakes — handoff
 
+*Split out of `33kain/contexa` on 2026-09-06 into `33kain/tokenbrake`, history included. Paths below that say
+`tokenbrake/…` are from before the split; in this repository they are at the root. Brakes 2, 3 and 5 are CONTEXA and
+stay in that repository; this file keeps their cards because the plan was one plan.*
+
 Written 2026-09-05, updated the same day after the first live run. Pick this up in Claude Code;
 everything below is state, not conversation.
 

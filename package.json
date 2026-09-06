@@ -4,12 +4,11 @@
   "description": "Claude Code hooks that trim oversized tool output and cap unbounded file reads before they hit your context window, and a report of what ate a session's context. Zero dependencies, Windows-friendly.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/33kain/contexa.git",
-    "directory": "tokenbrake"
+    "url": "git+https://github.com/33kain/tokenbrake.git"
   },
-  "homepage": "https://github.com/33kain/contexa/tree/main/tokenbrake#readme",
+  "homepage": "https://github.com/33kain/tokenbrake#readme",
   "bugs": {
-    "url": "https://github.com/33kain/contexa/issues"
+    "url": "https://github.com/33kain/tokenbrake/issues"
   },
   "bin": {
     "tokenbrake": "cli.js"

@@ -1,0 +1,57 @@
+name: Publish tokenbrake
+
+# Publishes this package to npm on demand. Run it from the Actions tab (Run
+# workflow) after merging; it needs one repository secret, NPM_TOKEN — an npm
+# granular access token with read/write on packages — and nothing else. The
+# repo is public, so the publish carries npm provenance (id-token: write),
+# which ties the package on the registry to this workflow run.
+#
+# Guards, in order: the tokenbrake suite must pass; the version in
+# package.json must not already be on the registry (a re-run of a published
+# version fails at npm anyway, but this says so in plain words first); then
+# publish. Nothing here touches the extension or the worker.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: tokenbrake tests
+        run: node test.mjs
+
+      - name: Refuse to republish an existing version
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view "tokenbrake@$V" version >/dev/null 2>&1; then
+            echo "tokenbrake@$V is already on the registry — bump the version in package.json first"
+            exit 1
+          fi
+          echo "publishing tokenbrake@$V"
+
+      - name: What will ship
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify on the registry
+        run: |
+          sleep 10
+          npm view tokenbrake version dist.tarball

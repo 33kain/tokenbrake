@@ -105,3 +105,12 @@ npx tokenbrake clean --days=7   # delete saved full outputs older than 7 days
   settings.json if you want it lighter and don't need the full ledger.
 - Reads capped by tokenbrake are partial views; `Edit` still requires an exact string match, so a capped read
   can't cause a wrong edit — Claude will read the section it needs first.
+
+## Where this lives
+
+`33kain/tokenbrake` since 2026-09-06. It was built inside the CONTEXA repository
+(`33kain/contexa`, folder `tokenbrake/`) and split out with its history; the
+measurements in `AB-TASK.md` were run on that repository, which is why the task
+there says `node tokenbrake/cli.js` where this repository says `node cli.js`.
+CONTEXA is a Chrome extension for claude.ai; tokenbrake is hooks for Claude
+Code. They share an idea and nothing else.
