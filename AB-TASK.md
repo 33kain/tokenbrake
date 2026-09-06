@@ -339,3 +339,36 @@ measurement (nothing was trimmed either way) but it makes the "debugging"
 lighter than intended. Closed the same day: the injector now commits the
 planted tree (contexa #51), `git diff` is clean, fixes are compared with
 `git diff --stat HEAD~1`, and the prompts say so in step 4.
+
+### The debugging round again, faults committed (v2) — Fable 5.1, 2026-09-06
+
+The injector now commits the planted tree, so `git diff` is clean and the
+faults have to be found by tests and reading. Both arms did exactly that:
+neither ran a diff, both worked from `npm test | grep -v '^ok'` and `sed -n`
+ranges, both fixed all five and left `git diff --stat HEAD~1` empty.
+
+| usage page | arm A, hooks off | arm B, hooks on |
+|---|---|---|
+| five-hour window | 31% → 34% (+3) | 34% → 37% (+3) |
+| weekly, all / Fable | +1 / +1 | 0 / 0 |
+
+| session record | arm A | arm B | change |
+|---|---|---|---|
+| API cost | $2.83 | $2.12 | −25% |
+| cache-read tokens | 2,685,151 | 1,718,544 | −36% |
+| output tokens | 14,374 | 11,101 | −23% |
+| requests | 24 | 17 | −29% |
+| tool results entered (report) | 14k | 8k | |
+| tool results carried | 154k | 69k | |
+| trimmed by the guard | 0 | 3 results, ≈ 2k tokens kept out, ≈ 18k token-reads not carried | |
+| `npm test` runs | 6 | 6 | |
+| faults fixed | 5 of 5, diff empty | 5 of 5, diff empty | |
+
+**Attributable to the hook: about 1%.** The guard fired for the first time on
+a debugging arm, three times, on outputs of about 2k tokens each; 18k
+token-reads not carried against 1.7M cache reads. The other 24 points of the
+cost gap are, again, the model doing the job in fewer requests (17 against
+24), which the hook cannot cause when it touched 2k tokens. Same conclusion
+as v1 and as Opus: on a debugging loop where the model bounds its own output,
+brake 1 saves next to nothing. The task flaw is closed and the result did not
+move, which is what a closed flaw should do.

@@ -382,6 +382,11 @@ Flaw found: the injector leaves the faults in the working tree and both Fable ar
 should commit the planted tree. Standing result across two models and three workloads: brake 1 saves what the model would
 otherwise let in — 16% and 37% on whole-file audits, 0% on a debugging loop where the model bounds its own output.
 
+**Twenty-seventh card (2026-09-06): debugging v2, faults committed, Fable 5.1.** Neither arm could diff; both fixed all
+five by tests and reading. Cost $2.83 → $2.12, but the guard trimmed three 2k outputs, 18k token-reads against 1.7M cache
+reads: about 1% attributable, the rest planning variance (17 requests against 24). The closed flaw did not move the result.
+Measurements on this repository are complete: audit 16% / 37%, debugging ≈ 0% / ≈ 1%, identical answers everywhere.
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
