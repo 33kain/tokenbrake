@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/guard.js", "post"],
+            "timeout": 15,
+            "statusMessage": "tokenbrake"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/guard.js", "read-pre"],
+            "timeout": 15,
+            "statusMessage": "tokenbrake"
+          }
+        ]
+      }
+    ]
+  }
+}

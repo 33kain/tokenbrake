@@ -20,7 +20,7 @@ Brakes don't raise anyone's cap. They cut the share of the cap that goes to wast
 
 | # | Name | Surface | Status |
 |---|------|---------|--------|
-| 1 | Bash-output guard hooks | npm package (`tokenbrake`) | **published 0.1.0**, live-verified on Linux (Claude Code 2.1.261) |
+| 1 | Bash-output guard hooks | npm package (`tokenbrake`) + Claude Code plugin | **0.2.0**: own repo, plugin + marketplace, A/B measured on two models; live-verified on Linux, Windows still unrun |
 | 2 | Fork thread with summary | CONTEXA | **built 0.9.73, field-verified on Cowork 0.9.87** (444 vs 123,813 tokens) |
 | 3 | Send-cost preview + long-thread warning | CONTEXA | **built 0.9.73, field-verified on Cowork 0.9.82** (exact count from the session record) |
 | 4 | What's eating your tokens | `tokenbrake report` | **built**, run on one real 64-request session |

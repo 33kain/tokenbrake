@@ -1,0 +1,22 @@
+{
+  "name": "tokenbrake",
+  "description": "tokenbrake: hooks that keep oversized tool output out of your Claude Code context window.",
+  "owner": {
+    "name": "Mili",
+    "url": "https://github.com/33kain"
+  },
+  "plugins": [
+    {
+      "name": "tokenbrake",
+      "source": {
+        "source": "github",
+        "repo": "33kain/tokenbrake"
+      },
+      "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Two hooks, no dependencies.",
+      "version": "0.2.0",
+      "author": {
+        "name": "Mili"
+      }
+    }
+  ]
+}

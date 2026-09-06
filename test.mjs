@@ -265,6 +265,24 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the ledger row carries the tool_use_id and the transcript path', g.status === 0 && /"id":"toolu_1"/.test(last) && /"transcript":"\/t\/s.jsonl"/.test(last), last.slice(0, 160));
 }
 
+/* ---- 0.2.0 — the plugin manifest and the marketplace ---------------------- */
+{
+  const plugin = JSON.parse(readFileSync('./.claude-plugin/plugin.json', 'utf8'));
+  const pkg = JSON.parse(readFileSync('./package.json', 'utf8'));
+  t('plugin: named tokenbrake, same version as the npm package', plugin.name === 'tokenbrake' && plugin.version === pkg.version);
+  const hooks = JSON.parse(readFileSync('./hooks/hooks.json', 'utf8')).hooks;
+  const post = hooks.PostToolUse && hooks.PostToolUse[0], pre = hooks.PreToolUse && hooks.PreToolUse[0];
+  t('plugin: PostToolUse on every tool, PreToolUse on Read only', post && post.matcher === '*' && pre && pre.matcher === 'Read');
+  const ok = h => h && h.type === 'command' && h.command === 'node' && Array.isArray(h.args) && h.args[0] === '${CLAUDE_PLUGIN_ROOT}/guard.js';
+  t('plugin: both hooks exec-form, node, the guard from the plugin root', ok(post.hooks[0]) && ok(pre.hooks[0]) && post.hooks[0].args[1] === 'post' && pre.hooks[0].args[1] === 'read-pre');
+  const market = JSON.parse(readFileSync('./.claude-plugin/marketplace.json', 'utf8'));
+  const entry = market.plugins.find(p => p.name === 'tokenbrake');
+  t('marketplace: one entry, this repository, same version', market.name === 'tokenbrake' && entry && entry.source && entry.source.repo === '33kain/tokenbrake' && entry.version === pkg.version);
+  const cli = spawnSync('claude', ['plugin', 'validate', '.claude-plugin/plugin.json'], { encoding: 'utf8' });
+  if (cli.error) console.log('  skip plugin validate: no claude CLI on this machine');
+  else t('claude plugin validate accepts the plugin manifest', cli.status === 0, (cli.stdout + cli.stderr).trim().split('\n').pop());
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

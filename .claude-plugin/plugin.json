@@ -1,0 +1,13 @@
+{
+  "name": "tokenbrake",
+  "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Two hooks, no dependencies.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Mili",
+    "url": "https://github.com/33kain"
+  },
+  "homepage": "https://github.com/33kain/tokenbrake#readme",
+  "repository": "https://github.com/33kain/tokenbrake",
+  "license": "MIT",
+  "keywords": ["hooks", "claude-code", "context-window", "tokens", "usage"]
+}

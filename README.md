@@ -14,10 +14,22 @@ five-hour usage limit moved with the cost. The protocol and every number are in 
 
 ## Install
 
+As a Claude Code plugin (0.2.0):
+
+```
+claude plugin marketplace add 33kain/tokenbrake
+claude plugin install tokenbrake@tokenbrake
+```
+
+or with npx, which writes the two hooks into a settings file you own:
+
 ```
 npx tokenbrake init            # user scope: ~/.claude/settings.json, applies to every project
 npx tokenbrake init --project  # this project only: .claude/settings.json (commit it to share with a team)
 ```
+
+One or the other. With both, every result runs through the guard twice: the second pass is a no-op on an already
+trimmed output, but the ledger records it twice and `report` counts it twice.
 
 Restart Claude Code (or run `/hooks` to confirm two tokenbrake entries). Node 18+ is the only requirement — no
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
