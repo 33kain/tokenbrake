@@ -48,3 +48,27 @@ Read-only audit of this repository. Do every step with tools, in this order, one
 
 The result goes into `HANDOFF.md` as the twenty-third card, and, if it holds,
 into `tokenbrake/README.md` as the first measured number for brake 1.
+
+## Arm A — run 2026-09-06, no hooks (main before the merge)
+
+Fable 5.1, effort Auto. One message, eleven steps, 21 requests.
+
+| usage page | 09:12 before | 09:17 after | moved |
+|---|---|---|---|
+| five-hour window | 16% | 25% | +9 |
+| weekly, all models | 25% | 26% | +1 |
+| weekly, Fable | 46% | 48% | +2 |
+
+The session's own report (step 11): 21 requests, 31 tool results; context
+processed 4.2M tokens (92% from cache); output 7k; context at the end ≈ 383k;
+tool results entered ≈ 187k tokens, carried ≈ 1.6M token-reads. By tool: Read
+18 calls, 174k entered, 1.6M carried (96%); Bash 13 calls, 14k entered, 59k
+carried (4%). Every one of the top eight was a Read of a persisted tool-result
+file under the session's own `tool-results/` directory, 8k to 15k tokens each,
+carried 7 to 16 times: the big file reads went through Claude Code's own
+"result too large, saved to a file" path and came back as reads of that file.
+
+What that means for arm B: the guard's PostToolUse trim acts on shell output,
+and the Read cap acts on an unbounded Read of a file over 60 KB. Whether either
+catches the persisted-result reads is exactly what arm B answers; the `[trimmed
+from …]` marks in its report, or their absence, say which.
