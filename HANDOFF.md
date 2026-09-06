@@ -355,7 +355,14 @@ Same answers on all ten questions. The saving is mostly indirect: a trimmed `cat
 instead of Claude Code's persisted-result path, whose re-reads were 96% of arm A's carry; the Read cap itself never fired.
 The usage page, at 1% resolution, moved consistently with the cost and cannot say more than "about one point in nine".
 The number that holds: *on an identical Cowork task, brake 1 cut the session's cost by 16% and its cache reads by 41%,
-with nothing lost on the task.* Sharpen with a longer task and an Opus run.
+with nothing lost on the task.*
+
+**Twenty-fourth card (2026-09-06): the Opus run.** Same task, both arms on Opus 5, told apart by a step 0 the session runs
+itself (`{"enabled": false}` / `{"enabled": true}` in `~/.claude/tokenbrake.json`, printed back in step 11). Cost $5.97 →
+$3.77 (−37%), cache reads 5.77M → 3.99M (−31%), tool results entered 160k → 76k, five-hour window +3 → +2, identical
+answers. On Opus the Read cap fired twice and the model went to head + heading index + tail and to grep, which is where
+the larger saving came from. Two models, one task, both cheaper with nothing lost: 16% on Fable, 37% on Opus. Details and
+every number in `tokenbrake/AB-TASK.md`. Left to sharpen: a longer task, so the usage page moves tens of points.
 
 ## Launch vehicle
 

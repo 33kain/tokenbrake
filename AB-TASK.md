@@ -138,3 +138,59 @@ carry. Six fewer requests, each one a full re-read of the context, is where
 **What would sharpen it.** A longer task, so the arms move the five-hour
 window by 30 points rather than 9 and a 16% difference becomes 5 points;
 and the same task on Opus, where the per-token weight differs.
+
+## Opus round — run 2026-09-06, both arms on Opus 5, effort Auto
+
+`main` now carries the hooks, so the arms are told apart by a step 0 that the
+session runs itself: arm A writes `{"enabled": false}` to
+`~/.claude/tokenbrake.json`, arm B writes `{"enabled": true}`; the guard reads
+that file on every call. Step 11 prints the file back so the answer carries
+the arm's identity; step 12 is the report. Everything else is the same task.
+Both arms ran on the same `main` (after #47).
+
+| usage page | arm A, hooks off | arm B, hooks on |
+|---|---|---|
+| five-hour window | 38% → 41% (+3) | 41% → 43% (+2) |
+| weekly, all models | 27% → 28% (+1) | 28% → 28% (0) |
+
+| session record | arm A | arm B | change |
+|---|---|---|---|
+| API cost | $5.97 | $3.77 | −37% |
+| cache-read tokens | 5,774,364 | 3,990,823 | −31% |
+| cache-write tokens | 288,833 | 157,955 | −45% |
+| output tokens | 7,891 | 7,718 | −2% |
+| requests | 31 | 28 | −10% |
+| context processed (report) | 5.7M | 3.9M | −32% |
+| context at the end | 331k | 200k | −40% |
+| tool results entered | 160k | 76k | −53% |
+| tool results carried | 2.2M | 1.2M | −45% |
+| trimmed by the guard | 0 | 3 results, 13k tokens, 284k token-reads | |
+
+Answers identical on all ten questions (649/0; contexa-v0.9.95.zip;
+weightLine with costLine; MAX_BRIEF_CHARS 1800; two minutes; 0.9.0; 239; a
+23–23 tie between tokenbrake/HANDOFF.md and publishing/website/index.html,
+the log having moved on since the Fable round; 29; "# Brakes — handoff").
+Step 11 read `{"enabled": false}` on A and `{"enabled": true}` on B.
+
+**What was different from the Fable round.** On Opus the Read cap fired,
+twice, and the session said so: "the tokenbrake hook capped the full-file
+read at 300 lines, so I read the head, the complete 91-entry heading index,
+and the tail rather than every line" (CHANGELOG.md), and the `t(` count came
+from a grep over the whole file with the harness section read directly
+(test.mjs). Nine Read calls against seventeen; 76k tokens of results entered
+against 160k. The guard's note after a trimmed `cat` and the cap's note after
+a capped Read both point at offset/limit and Grep, and Opus followed them.
+
+**Reading across both models.** Same task, same repository, one message:
+
+| | Fable 5.1 | Opus 5 |
+|---|---|---|
+| cost, hooks off → on | $8.40 → $7.02 (−16%) | $5.97 → $3.77 (−37%) |
+| cache reads, off → on | 4.62M → 2.72M (−41%) | 5.77M → 3.99M (−31%) |
+| five-hour window, off → on | +9 → +8 | +3 → +2 |
+| answers | identical | identical |
+
+The limit moved with the cost on both, as far as 1% resolution can show. A
+side fact worth keeping: the same task moved the five-hour window three
+times as far on Fable as on Opus while costing more in dollars too, so the
+limit weighs Fable heavily per dollar.
