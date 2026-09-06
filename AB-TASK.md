@@ -231,3 +231,26 @@ Debugging task. Work in this repository's checkout. Do every step with tools, in
 
 Final answer: one line per fault you fixed (file, what was wrong, what you changed); the number of times you ran `npm test`; then the outputs of steps 4, 5 and 6 pasted verbatim.
 ```
+
+## Debugging round — planned 2026-09-06
+
+The workload where tool output should dominate: a broken test suite, fixed by
+running the 50 KB suite repeatedly and reading source. `scripts/ab/inject-faults.mjs`
+in `33kain/contexa` (merged, #50) plants five exact-string faults in the
+session's working tree: fitTurns dropping the pinned first turn, the action
+gate testing a label with its first word removed, takeBrief inverting the TTL
+check, the daily limit 20 → 25, the reply cut at MIN_REPLY_CHARS. Each breaks
+one or two tests on its own; all five show four failures at first and reveal
+the rest as they are fixed. The script refuses to run if an anchor is missing.
+
+Arms as in the Opus round: step 0 writes `{"enabled": false}` or `{"enabled": true}`
+to `~/.claude/tokenbrake.json`; the task then runs the script (without reading
+it), runs `npm test`, fixes source files under extension/ and worker/ only,
+re-runs the full suite after every change until green, and ends with
+`git diff --stat`, the config, and `npx --yes tokenbrake@0.2.0 report --top=8`.
+The answer lists each fault fixed and the number of test runs, so the arms can
+be compared on work done, not only on cost.
+
+What to read: cost and cache reads from the session records, the usage page
+around each arm, the number of `npm test` runs, and whether both arms fixed
+the same five faults.
