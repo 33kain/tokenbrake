@@ -339,6 +339,14 @@ in the window — that is the whole Fable +1, and it is not on the Opus arms —
 messages, "in one sentence, no tools", and Cowork on both sides. The number that holds as written: *five messages in a 689k-token session used 9% of the
 five-hour limit; the same five after Start fresh used 3%.*
 
+**Twenty-third card, planned (2026-09-06): brake 1 against the usage limit.** `tokenbrake init --project` wrote
+`.claude/settings.json` and `.claude/hooks/tokenbrake/guard.js` into the repository, so every Cowork session on it runs the
+hooks once merged. The A/B is in `tokenbrake/AB-TASK.md`: one identical read-heavy task, arm A on `main` before the merge
+(no hooks), arm B after (hooks on), the usage page read before and after each, and `tokenbrake report` run by the session
+itself as its last step so both arms carry their internal numbers out. Simulated on this session's own transcript first:
+the guard would have kept 37k tokens out of context and 4.9M token-reads out of the carry (27% of what tool results cost,
+2.4% of the session's API cost). The measured number replaces that estimate.
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
