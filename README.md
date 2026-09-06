@@ -10,7 +10,11 @@ keeps the parts that matter, and tells you afterwards what ate your tokens.
 **Measured (2026-09-06).** The same read-only audit task on the same repository, run as a Cowork session without the
 hooks and with them, on two models. Fable 5.1: API cost $8.40 → $7.02 (−16%), cache-read tokens 4.62M → 2.72M (−41%).
 Opus 5: $5.97 → $3.77 (−37%), cache reads 5.77M → 3.99M (−31%). Identical answers on every question, both models; the
-five-hour usage limit moved with the cost. The protocol and every number are in [`AB-TASK.md`](AB-TASK.md).
+five-hour usage limit moved with the cost. A third run, a five-fault debugging task on Opus 5, saved nothing: the model
+bounded its own reads (`npm test | tail -80`, `grep`, `sed -n`) and let only 10k tokens of tool results in, so the guard
+never fired. The saving is whatever the model would otherwise have let in, 0% to 37% across these three runs; the
+report's "Tool results entered" line says which end of that range a session was on. The protocol and every number are in
+[`AB-TASK.md`](AB-TASK.md).
 
 ## Install
 

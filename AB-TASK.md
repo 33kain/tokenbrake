@@ -195,7 +195,7 @@ side fact worth keeping: the same task moved the five-hour window three
 times as far on Fable as on Opus while costing more in dollars too, so the
 limit weighs Fable heavily per dollar.
 
-## Debugging round — planned 2026-09-06, both arms on the same model
+## Debugging round — run 2026-09-06, Opus 5 both arms, both arms on the same model
 
 The audit task reads files once each. A debugging session runs the test suite
 over and over, and the CONTEXA suite prints about 50 KB per run, so this is the
@@ -232,7 +232,7 @@ Debugging task. Work in this repository's checkout. Do every step with tools, in
 Final answer: one line per fault you fixed (file, what was wrong, what you changed); the number of times you ran `npm test`; then the outputs of steps 4, 5 and 6 pasted verbatim.
 ```
 
-## Debugging round — planned 2026-09-06
+## Debugging round — run 2026-09-06, Opus 5 both arms
 
 The workload where tool output should dominate: a broken test suite, fixed by
 running the 50 KB suite repeatedly and reading source. `scripts/ab/inject-faults.mjs`
@@ -254,3 +254,51 @@ be compared on work done, not only on cost.
 What to read: cost and cache reads from the session records, the usage page
 around each arm, the number of `npm test` runs, and whether both arms fixed
 the same five faults.
+
+### Result: no measurable difference, and the reason is the finding
+
+| usage page | arm A, hooks off | arm B, hooks on |
+|---|---|---|
+| five-hour window | 0% → 1% (+1, window freshly reset) | 14% → 15% (+1) |
+| weekly, all / Fable | 33 → 33, 61 → 61 | 35 → 35, 64 → 64 |
+
+| session record | arm A | arm B | change |
+|---|---|---|---|
+| API cost | $2.76 | $2.63 | −5% |
+| cache-read tokens | 3,831,950 | 3,543,572 | −8% |
+| cache-write tokens | 58,300 | 57,065 | −2% |
+| output tokens | 10,484 | 11,481 | +10% |
+| requests | 44 | 41 | −7% |
+| tool results entered (report) | 11k | 10k | |
+| tool results carried | 276k | 234k | |
+| trimmed by the guard | 0 | **0** | |
+| `npm test` runs | 6 | 4 | |
+| faults fixed | 5 of 5, diff empty | 5 of 5, diff empty | |
+
+Both arms fixed all five faults and restored every file byte-for-byte to
+HEAD. The 5% is within the variation between two runs of the same task; the
+guard trimmed nothing in arm B, because nothing crossed its threshold.
+
+**Why nothing crossed it.** Opus 5 in a debugging loop bounds its own reads.
+Neither arm ran `npm test` bare; both ran `npm test 2>&1 | tail -80`, or the
+worker suite through `grep FAIL`, and read source through `grep -n … -A 20`
+and `sed -n 'a,bp'`. The largest tool result in either session was about
+1,000 tokens; tool results entered 10–11k of context in total, against 160k
+on the audit task and 187k on Fable's. There was nothing for brake 1 to do.
+
+**What this says.** Brake 1 saves what the model would otherwise let in. On
+a read-heavy audit that asks for whole files, Opus let in 160k and the guard
+cut the session's cost by 37%. On a debugging task where the model chose
+`tail` and `grep` on its own, it let in 10k and the guard saved nothing.
+The pre-registered expectation ("the biggest honest number") was wrong, and
+it is recorded as wrong. The honest range for Opus 5 on this repository is
+0% to 37%, set by how much output the model lets in, which `report` shows
+in one line: "Tool results entered".
+
+Two side notes. In auto permission mode the classifier blocked
+`printf … > ~/.claude/tokenbrake.json` from Bash in both arms; the sessions
+wrote the file with the Write tool instead, same path, same content, and the
+guard read it (arm A's report carries no trim entries with hooks off; arm B's
+says "trimmed none" with hooks on). And arm B's session guessed that the
+project-scope install "applies regardless" of the config file; it does not:
+the project hook runs the same guard, which reads `enabled` on every call.

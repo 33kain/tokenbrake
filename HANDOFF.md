@@ -366,7 +366,14 @@ itself (`{"enabled": false}` / `{"enabled": true}` in `~/.claude/tokenbrake.json
 $3.77 (−37%), cache reads 5.77M → 3.99M (−31%), tool results entered 160k → 76k, five-hour window +3 → +2, identical
 answers. On Opus the Read cap fired twice and the model went to head + heading index + tail and to grep, which is where
 the larger saving came from. Two models, one task, both cheaper with nothing lost: 16% on Fable, 37% on Opus. Details and
-every number in `tokenbrake/AB-TASK.md`. Left to sharpen: a longer task, so the usage page moves tens of points.
+every number in `AB-TASK.md`.
+
+**Twenty-fifth card (2026-09-06): the debugging round, a null result.** Five planted faults, the 50 KB suite to run until
+green, Opus 5 both arms. Cost $2.76 → $2.63 (−5%, within run-to-run variation), the guard trimmed nothing, both arms fixed
+all five and left an empty diff. Opus bounded its own reads (`npm test | tail -80`, `grep -A`, `sed -n`): tool results
+entered 10–11k against 160k on the audit. Brake 1 saves what the model would otherwise let in, and on this workload it let
+in nothing. The expectation that debugging would give the biggest number was wrong and is recorded as wrong. The honest
+range on Opus 5, this repository: 0% to 37%, set by "Tool results entered" in the report.
 
 ## Launch vehicle
 
