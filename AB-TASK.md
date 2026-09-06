@@ -302,3 +302,39 @@ guard read it (arm A's report carries no trim entries with hooks off; arm B's
 says "trimmed none" with hooks on). And arm B's session guessed that the
 project-scope install "applies regardless" of the config file; it does not:
 the project hook runs the same guard, which reads `enabled` on every call.
+
+### The same round on Fable 5.1 — run 2026-09-06
+
+Same two prompts, step 0 rewritten to use the Write tool (the auto-mode
+classifier had blocked the shell redirect for both Opus arms), and a step 7
+that commits the answer to the session's branch so nothing has to be
+transcribed from a phone. Usage page: arm A 21% → 23% (+2), arm B 23% → 24%
+(+1) on the five-hour window; weekly Fable 65 → 65 and 65 → 66.
+
+| session record | arm A, hooks off | arm B, hooks on | change |
+|---|---|---|---|
+| API cost | $1.54 | $1.16 | −24% |
+| cache-read tokens | 1,508,345 | 720,867 | −52% |
+| output tokens | 6,583 | 4,348 | −34% |
+| requests | 16 | 7 | −56% |
+| tool results entered (report) | 3k | 2k | |
+| trimmed by the guard | 0 | **0** | |
+| `npm test` runs | 3 | 3 | |
+| faults fixed | 5 of 5, diff empty | 5 of 5, diff empty | |
+
+**The 24% is not the hook's.** The guard trimmed nothing: Fable, like Opus,
+never let the suite in whole (`npm test 2>&1 | tail -80`, `grep -v '^ok'`),
+and the largest result in either arm was about 1k tokens. Arm B was cheaper
+because it did the job in 7 requests instead of 16, batching the fixes from
+one read; that is run-to-run variation in how the model plans, and with
+nothing trimmed there is no mechanism by which the hook could have caused it.
+Recorded as a null result, like the Opus round. Debugging on this repository,
+on both models: 0% attributable to brake 1.
+
+**A flaw in the task, found by both Fable arms.** The injector edits the
+working tree, so `git diff` shows every planted fault in one command, and
+both Fable arms ran `git diff` early (705 tokens, second row of both reports)
+and read the answers off it. The Opus arms did not. It does not change the
+measurement (nothing was trimmed either way) but it makes the "debugging"
+lighter than intended. A next version of the script should commit the
+planted tree, so the faults are found by tests and reading, not by diff.

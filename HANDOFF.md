@@ -375,6 +375,13 @@ entered 10–11k against 160k on the audit. Brake 1 saves what the model would o
 in nothing. The expectation that debugging would give the biggest number was wrong and is recorded as wrong. The honest
 range on Opus 5, this repository: 0% to 37%, set by "Tool results entered" in the report.
 
+**Twenty-sixth card (2026-09-06): the debugging round on Fable 5.1, also null.** Cost $1.54 → $1.16, but the guard trimmed
+nothing on either arm: Fable bounded its own reads too (`tail -80`, `grep -v '^ok'`), and the difference is arm B doing the
+job in 7 requests instead of 16, which is planning variance, not the hook. Both arms fixed all five with an empty diff.
+Flaw found: the injector leaves the faults in the working tree and both Fable arms read them off `git diff`; a next version
+should commit the planted tree. Standing result across two models and three workloads: brake 1 saves what the model would
+otherwise let in — 16% and 37% on whole-file audits, 0% on a debugging loop where the model bounds its own output.
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
