@@ -336,5 +336,6 @@ working tree, so `git diff` shows every planted fault in one command, and
 both Fable arms ran `git diff` early (705 tokens, second row of both reports)
 and read the answers off it. The Opus arms did not. It does not change the
 measurement (nothing was trimmed either way) but it makes the "debugging"
-lighter than intended. A next version of the script should commit the
-planted tree, so the faults are found by tests and reading, not by diff.
+lighter than intended. Closed the same day: the injector now commits the
+planted tree (contexa #51), `git diff` is clean, fixes are compared with
+`git diff --stat HEAD~1`, and the prompts say so in step 4.
