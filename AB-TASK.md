@@ -449,3 +449,55 @@ evidence for 25,000 and some against. What it does not say is what happens on
 a session that reads a 40 KB file once and moves on, where the sweep's 40%
 applies with no return trip. The default stays at 60,000 until a run of that
 shape says otherwise.
+
+## Feature round — run 2026-09-07, Opus 5 both arms
+
+The audit is reading without writing and the debugging round is a test loop;
+ordinary work is neither. This round is a small feature on `33kain/contexa`:
+add a check to `build.mjs` that the first `## <version> —` heading in
+`CHANGELOG.md` carries the manifest version, with a test covering the passing
+and the failing case, and `npm test` and `node build.mjs` green. One message
+per arm, the same to the letter apart from step 0. Each arm commits its code
+to its own branch and its report to `ab-results/feature-<arm>.txt`.
+
+Arm A ran from `claude/feature-A-nohooks`, main with an empty
+`.claude/settings.json`, so brake 1 was off from session start without any
+write to `~/.claude`. That was the second attempt: the first arm A was told to
+write `{"enabled": false}` to `~/.claude/tokenbrake.json`, the permission
+classifier refused the write (Write tool and shell redirect alike), the
+session said so and did not work around it, and so ran with the project hooks
+on. That run is kept below as a second hooks-on reading of the same task. Arm
+B wrote `{"enabled": true}` and ran from main.
+
+| session record | arm A, hooks off | arm B, hooks on | change | first arm A, hooks on (voided) |
+|---|---|---|---|---|
+| API cost | $2.45 | $2.38 | −3% | $2.89 |
+| cache-read tokens | 2,614,181 | 2,713,808 | +4% | 3,435,844 |
+| output tokens | 16,022 | 13,902 | −13% | 18,071 |
+| requests | 24 | 23 | | 30 |
+| tool results entered (report) | 13k | 10k | | 11k |
+| tool results carried | 222k | 159k | −28% | 206k |
+| trimmed by the guard | 0 | 1 result, ≈ 4k tokens kept out, ≈ 79k token-reads not carried | | 2 results, ≈ 4k kept out, ≈ 109k not carried |
+| `npm test` runs | 3 | 2 | | 2 |
+| `node build.mjs` runs | 2 | 3 | | 3 |
+| result | check + test, both green | check + test, both green | | check + test, both green |
+
+All three trees pass `npm test` and `node build.mjs` when checked out clean.
+
+**Result: a null, and the noise is now measured.** Cost −3%, cache reads
++4%. The two hooks-on runs of the identical task, arm B and the voided arm A,
+came out 21% apart in cost and 27% in cache reads on nothing but how the
+model planned (23 against 30 requests), so anything inside that band is not
+the hook. The mechanism is the one from the debugging round: the model
+bounded its own reads (`sed -n`, `grep -n`, `wc -l`, then ranges), and its
+largest result was one `cat -n build.mjs` at 5k tokens, which the guard
+trimmed to 1k in the hooks-on arms and left whole in the off arm. That is
+where the −28% in carried tool results comes from, 63k token-reads against
+2.3M processed: real, mechanical, and 3% of the session.
+
+So three shapes are measured now. Read-heavy audit that asks for whole files:
+−16% on Fable 5.1, −37% on Opus 5. Debugging loop: ≈ 0%. A small feature:
+≈ 0%, inside the noise. The hook saves what the model would otherwise let in,
+and on two of three shapes Opus lets little in. The `ab-results/real/`
+files in `33kain/contexa` will say which shape ordinary sessions on that
+repository take.
