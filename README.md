@@ -103,7 +103,11 @@ characters in the first place.
 The two also differ in blast radius. Compaction is all or nothing: it resets everything, including the plan and
 the decisions you wanted kept. The guard only touches shell output over `maxChars` and unbounded reads of files
 over `readMaxBytes`; small results pass through untouched, and reads that already carry an `offset`/`limit` are
-never modified.
+never modified. One exception to the size rule: a saved tool output (Claude Code's `tool-results/<id>.txt`, or
+the guard's own `tokenbrake/out/<id>.txt`) read without bounds is capped at `persistedLimitLines` however big it
+is, because it was too big to show inline and is therefore too big to read whole. That is the door through which
+oversized output came back in the audit A/B, and in the session that wrote this rule those reads carried 24% of
+everything (`AB-TASK.md`, "Persisted outputs").
 
 And the guard changes what the model does next, which compaction cannot. Most of the saving measured in
 `AB-TASK.md` was indirect: a trimmed `cat`, plus a note naming `offset`/`limit` and `Grep`, sent the model to
@@ -133,6 +137,7 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
   "keepErrorLines": 20,
   "readMaxBytes": 60000,
   "readLimitLines": 300,
+  "persistedLimitLines": 80,
   "logAllTools": true,
   "enabled": true
 }

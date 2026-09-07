@@ -24,8 +24,16 @@ const DEFAULTS = {
   keepErrorLines: 20,    // lines from the middle that look like errors/warnings are kept
   readMaxBytes: 60000,   // Read without offset/limit on a file bigger than this gets capped
   readLimitLines: 300,
+  persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
   logAllTools: true      // record size of every tool result in the ledger (feeds `tokenbrake report`)
 };
+
+/* A persisted output: a tool result that was too big to show inline and was written to a file, by Claude Code
+   (<config>/projects/<cwd>/<session>/tool-results/<id>.txt, its ~30,000-character ceiling) or by this guard
+   (<config>/tokenbrake/out/<id>.txt). Reading one whole puts the oversized output back into context by another
+   door; it carried 96% of the untrimmed audit arm's context (AB-TASK.md). Output that was too big to show is
+   too big to read whole, whatever readMaxBytes says. */
+const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
 
 const ERR = /\b(error|err!|fail(ed|ure|ing)?|exception|traceback|panic|fatal|warn(ing)?|not found|cannot|denied|refused)\b|✗|✖/i;
 
@@ -135,21 +143,27 @@ function handleReadPre(input, cfg) {
 
   let st;
   try { st = fs.statSync(fp); } catch { return; }
-  if (!st.isFile() || st.size <= cfg.readMaxBytes) return;
+  if (!st.isFile()) return;
+  const persisted = PERSISTED.test(fp) && st.size > cfg.maxChars;
+  if (!persisted && st.size <= cfg.readMaxBytes) return;
+  const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;
 
   let lineCount = null;
   if (st.size <= 20 * 1024 * 1024) {
     try { const buf = fs.readFileSync(fp); lineCount = 0; for (let i = 0; i < buf.length; i++) if (buf[i] === 10) lineCount++; } catch { lineCount = null; }
   }
 
-  log({ ev: 'read-cap', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount });
+  log({ ev: 'read-cap', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, limit, persisted });
 
   const sizeDesc = `${lineCount != null ? lineCount.toLocaleString() + ' lines / ' : ''}${Math.round(st.size / 1024)} KB`;
+  const why = persisted
+    ? `${path.basename(fp)} is a saved tool output, ${sizeDesc}: it was too big to show inline, so it is too big to read whole. tokenbrake capped this read at the first ${limit} lines.`
+    : `${path.basename(fp)} is ${sizeDesc}. tokenbrake capped this read at the first ${limit} lines to save context.`;
   emit({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      updatedInput: { ...ti, limit: cfg.readLimitLines },
-      additionalContext: `${path.basename(fp)} is ${sizeDesc}. tokenbrake capped this read at the first ${cfg.readLimitLines} lines to save context. Use offset/limit to read the section you need, or Grep to locate it first.`
+      updatedInput: { ...ti, limit },
+      additionalContext: `${why} Use offset/limit to read the section you need, or Grep to locate it first.`
     }
   });
 }

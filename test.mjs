@@ -112,6 +112,36 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 }
 
 {
+  console.log('\n-- PreToolUse Read cap on persisted outputs');
+  /* A 40 KB file sits under readMaxBytes and is read whole as a source file. The same 40 KB under
+     tool-results/ or tokenbrake/out/ is a saved tool output: it was too big to show inline, so it is
+     capped at persistedLimitLines, whatever readMaxBytes says. */
+  const body = Array.from({ length: 500 }, (_, i) => `saved output line ${i + 1}`.padEnd(79, '.')).join('\n') + '\n';
+  const ccDir = join(CFG, 'projects', '-home-me-repo', 'sess-1', 'tool-results');
+  const tbDir = join(CFG, 'tokenbrake', 'out');
+  mkdirSync(ccDir, { recursive: true }); mkdirSync(tbDir, { recursive: true });
+  const ccFile = join(ccDir, 'abc123.txt'), tbFile = join(tbDir, 'sess-1-x9.txt'), srcFile = join(PROJ, 'source.txt');
+  for (const f of [ccFile, tbFile, srcFile]) writeFileSync(f, body);
+  let r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: srcFile } });
+  t('a 40 KB source file under readMaxBytes is read whole', r.status === 0 && r.stdout === '');
+  r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: ccFile } });
+  let h = parse(r.stdout) && parse(r.stdout).hookSpecificOutput;
+  t("the same 40 KB under Claude Code's tool-results/ is capped at persistedLimitLines", !!h && h.updatedInput.limit === 80 && h.updatedInput.file_path === ccFile);
+  t('and the note says it is a saved tool output, with the size', !!h && /saved tool output/.test(h.additionalContext) && /500 lines/.test(h.additionalContext) && /80 lines/.test(h.additionalContext));
+  r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: tbFile } });
+  h = parse(r.stdout) && parse(r.stdout).hookSpecificOutput;
+  t("the same 40 KB under tokenbrake's own out/ is capped the same way", !!h && h.updatedInput.limit === 80);
+  r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: ccFile, offset: 200, limit: 40 } });
+  t('a bounded read of a persisted output is untouched', r.status === 0 && r.stdout === '');
+  writeFileSync(join(ccDir, 'small.txt'), 'short output\n'.repeat(40));
+  r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: join(ccDir, 'small.txt') } });
+  t('a persisted output under maxChars is untouched', r.status === 0 && r.stdout === '');
+  const led = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+  const cap = led.filter(x => x.ev === 'read-cap' && x.what === ccFile).pop();
+  t('the ledger row says the cap fired for a persisted output, with the limit', !!cap && cap.persisted === true && cap.limit === 80);
+}
+
+{
   console.log('\n-- cli: init / status / uninstall');
   writeFileSync(join(CFG, 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo theirs' }] }] } }));
   let r = cli(['init']);
