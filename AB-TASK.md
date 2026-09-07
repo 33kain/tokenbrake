@@ -406,13 +406,46 @@ Read sends the model to two or three bounded reads, and every extra request
 re-reads the whole context. Whether the 25–60 KB band pays for itself is a live
 question.
 
-**The live A/B, running.** Two Cowork sessions on Opus 5, both with the hooks
-on, the same twelve-step read-only audit of `33kain/contexa`, differing only in
-`~/.claude/tokenbrake.json`: `readMaxBytes` 60000 (arm A) against 25000 (arm B).
-The audit reads `worker/test.mjs` (60 KB), `extension/background.js` (59 KB)
-and `scripts/screenshots/capture.mjs` (35 KB) whole, all three in the band, and
+**The live A/B — run 2026-09-07, Opus 5 both arms.** Two Cowork sessions,
+both with the hooks on, the same twelve-step read-only audit of
+`33kain/contexa`, differing only in `~/.claude/tokenbrake.json`:
+`readMaxBytes` 60000 (arm A) against 25000 (arm B). The audit reads
+`worker/test.mjs` (60 KB), `extension/background.js` (59 KB) and
+`scripts/screenshots/capture.mjs` (35 KB) whole, all three in the band, and
 two of the answers it asks for sit past line 300. Decision rule, fixed before
 the run: 25,000 becomes the default only if arm B is cheaper or equal with
-identical answers; if the extra requests eat the saving, 60,000 stays and the
-result is recorded as a null. Results go in `ab-results/readmax-60k.txt` and
-`ab-results/readmax-25k.txt` on the arms' branches, and here.
+identical answers. Results: `ab-results/readmax-60k.txt` on
+`claude/ab-readmax-60k` and `ab-results/readmax-25k.txt` on
+`claude/ab-readmax-25k` in `33kain/contexa`.
+
+| session record | arm A, 60000 | arm B, 25000 | change |
+|---|---|---|---|
+| API cost | $5.13 | $5.64 | +10% |
+| cache-read tokens | 4,855,785 | 6,817,176 | +40% |
+| output tokens | 13,161 | 11,857 | −10% |
+| requests | 25 | 34 | +36% |
+| tool results entered (report) | 91k | 92k | |
+| tool results carried | 912k | 1.5M | +64% |
+| Read calls | 21 | 17 | |
+| trimmed by the guard | 1 result, ≈ 789 tokens | 1 result, ≈ 790 tokens | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**Result: the lower trigger cost more, and 60,000 stays.** The same tokens
+entered on both arms, 91k against 92k, because the task asks for whole files
+and the model reads whatever the cap withholds in further bounded reads: in
+both arms `content.js` (112 KB, capped either way) went in as six or seven
+chunks of 4–6k tokens. Lowering the trigger added the same chunking to
+`background.js`, `worker/test.mjs` and `capture.mjs`, and each extra read is an
+extra request that re-reads the whole context: 34 requests against 25, 1.5M
+token-reads carried against 912k, 40% more cache reads, 10% more cost. The
+cap saves tokens only when the model does not come back for the rest, which
+is the behaviour change the audit A/B credited it with, and which a task that
+says "read in full" forbids by construction.
+
+One run per arm. Earlier rounds put run-to-run variation in planning at 17
+against 24 requests on identical setups, so a nine-request gap is not
+separable from noise on its own; what the run establishes is that there is no
+evidence for 25,000 and some against. What it does not say is what happens on
+a session that reads a 40 KB file once and moves on, where the sweep's 40%
+applies with no return trip. The default stays at 60,000 until a run of that
+shape says otherwise.
