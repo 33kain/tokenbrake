@@ -1,6 +1,7 @@
 name: Website
 
-# Publishes site/ to GitHub Pages on every push to main that touches it, or on
+# Publishes site/ to https://tokenbrake.site (GitHub Pages, custom domain in
+# site/CNAME) on every push to main that touches it, or on
 # demand from the Actions tab. One-time setup: Settings → Pages → Source:
 # "GitHub Actions". The site is plain HTML and CSS; nothing is built.
 
