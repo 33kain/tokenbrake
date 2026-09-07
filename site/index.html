@@ -24,6 +24,7 @@
     <a href="#what">What it does</a>
     <a href="#report">Report</a>
     <a href="#measured">Measured</a>
+    <a href="#tables">Tables</a>
     <a href="https://github.com/33kain/tokenbrake" rel="noopener">GitHub</a>
     <a href="https://www.npmjs.com/package/tokenbrake" rel="noopener">npm</a>
   </nav>
@@ -206,6 +207,34 @@ Sizes are chars/4 estimates; the usage line is what the API reported.</code></pr
   models already piped through <code>tail -80</code> and <code>grep</code>, so there was nothing to trim. The report's
   "Tool results entered" line says which end of that range a session was on.
   The protocol and every number are in <a href="https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md" rel="noopener">AB-TASK.md</a>.</p>
+</section>
+
+<section id="tables" class="tables">
+  <h2>Every table, in one place</h2>
+  <p>The test suite and every A/B measurement as images, the same ones used in the write-ups. Click one for the full-size version.
+  Every number here is also in <a href="https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md" rel="noopener">AB-TASK.md</a> as text.</p>
+  <div class="gallery">
+    <figure>
+      <a href="img/4-summary.png"><img src="img/4-summary.png" width="2200" height="1034" loading="lazy" alt="Summary table: what the hook saves per task and model. Audit on Fable 5.1: $8.40 to $7.02, 16% cost and 41% cache reads saved. Audit on Opus 5: $5.97 to $3.77, 37% cost and 31% cache reads saved. Three debugging rounds: 0%, 0% and about 1% attributable."></a>
+      <figcaption>Summary. The saving is whatever the model would otherwise have let in: 0% to 37% across five runs, identical answers in every pair.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/2-audit-ab.png"><img src="img/2-audit-ab.png" width="2200" height="1578" loading="lazy" alt="A/B run 1, read-only audit task, hooks off versus on, Fable 5.1 and Opus 5 side by side. API cost, cache-read tokens, cache-write tokens, output tokens, requests, context processed, context at end of session, tool results carried, results trimmed by the guard, five-hour usage window moved, and answers identical on all ten questions."></a>
+      <figcaption>A/B run 1, the read-only audit task. Same repository, same one-message task, hooks off against on, two models.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/3-debugging-ab.png"><img src="img/3-debugging-ab.png" width="2200" height="1458" loading="lazy" alt="A/B run 2, debugging task with five planted faults, hooks off versus on, on Opus 5 and two rounds on Fable 5.1. Cost, cache reads, output tokens, requests, tool results entered, npm test runs, results trimmed by the guard, faults fixed five of five in every arm, and saving attributable to the hook: 0%, 0% and about 1%."></a>
+      <figcaption>A/B run 2, the debugging task. A null result, recorded as one: both models bounded their own reads, so almost nothing crossed the trim threshold.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/5-vs-compact.png"><img src="img/5-vs-compact.png" width="2200" height="1502" loading="lazy" alt="tokenbrake versus Claude Code's /compact: when each acts, scope, what each reduces, what is kept, whether the detail is recoverable, what each costs, and when each fails. They compose rather than compete."></a>
+      <figcaption>Against Claude Code's compaction. A result costs its size times the requests that re-read it; compaction cuts the second factor after the fact, tokenbrake cuts the first before the result lands.</figcaption>
+    </figure>
+    <figure>
+      <a href="img/1-test-suite.png"><img src="img/1-test-suite.png" width="2200" height="1244" loading="lazy" alt="Test suite: node test.mjs, 85 checks across seven sections, 85 passed, 0 failed, exit code 0."></a>
+      <figcaption>The test suite, <code>node test.mjs</code>: 85 checks, all passing, no Claude Code needed to run them.</figcaption>
+    </figure>
+  </div>
 </section>
 
 <section class="configure">

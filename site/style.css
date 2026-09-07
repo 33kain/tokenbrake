@@ -150,6 +150,15 @@ tr:last-child td { border-bottom: none; }
 td.num { font-family: var(--mono); text-align: right; }
 td.good { color: var(--good); font-weight: 600; }
 
+/* tables */
+.tables p { max-width: 80ch; }
+.gallery { display: grid; gap: 2rem; margin-top: 1.4rem; }
+.gallery figure { margin: 0; min-width: 0; }
+.gallery a { display: block; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #0f1115; }
+.gallery a:hover { border-color: var(--accent); }
+.gallery img { display: block; width: 100%; height: auto; }
+.gallery figcaption { font-size: .9rem; color: var(--fg-2); margin-top: .6rem; max-width: 80ch; }
+
 /* configure, limits */
 .configure p, .limits li { max-width: 80ch; }
 .limits ul { padding-left: 1.2rem; margin: 0; }
