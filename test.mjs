@@ -273,10 +273,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
    Both arms are the same session: the same tool calls, in the same order, over the
    same file. They differ only in whether guard.js sat in front of them. Arm A is what
-   Claude Code does alone — an unbounded Read of a 240 KB file truncated at its own
-   ~30,000-char save-to-a-file ceiling, the model re-reading it twice more, and a test
-   run whose 400 lines land whole. Arm B sends every one of those through the real
-   hooks and carries whatever they actually return.
+   Claude Code does alone — an unbounded Read of a 48 KB source file landing whole (Read
+   has no ceiling of its own: a 65 KB file entered a real session as 60,359 characters;
+   the ~30,000-char save-to-a-file ceiling is Bash's), the model re-reading it twice
+   more, and a test run whose 400 lines land whole. Arm B sends every one of those
+   through the real hooks and carries whatever they actually return. The file sits in the
+   25-60 KB band because that is where the Read cap's trigger is argued over
+   (AB-TASK.md, "The Read cap's trigger"): the fixture is meant to keep biting there.
 
    The re-read loop is in the fixture because it was 96% of the untrimmed session's
    carried context in the live run (README, "Compaction and tokenbrake"). Arm B repeats
@@ -295,13 +298,15 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const guardAB = (mode, input) => spawnSync(process.execPath, ['./guard.js', mode],
     { input: JSON.stringify(input), encoding: 'utf8', env: envAB });
 
-  const bigLines = Array.from({ length: 12000 }, (_, i) => `bigline ${i + 1} of the file the model kept re-reading`);
-  const bigPath = join(cfgAB, 'big.txt');
+  const bigLines = Array.from({ length: 600 }, (_, i) => `line ${i + 1} of the source file the model kept re-reading`.padEnd(79, '.'));
+  const bigPath = join(cfgAB, 'big.js');
   writeFileSync(bigPath, bigLines.join('\n') + '\n');
-  const CC_CEILING = 30000;                                   // Claude Code's own result-too-large ceiling
-  const wholeRead = bigLines.join('\n').slice(0, CC_CEILING);
+  const wholeRead = bigLines.join('\n');                     // 48 KB: over 25,000, under 60,000, and Read returns it whole
 
   // what the hooks really return for this file and this output — not a hand-written "after"
+  // the cap's trigger for this fixture, set here and not inherited from DEFAULTS: whether the shipped
+  // default should sit at 25,000 or 60,000 is the live A/B's question, not this test's
+  writeFileSync(join(cfgAB, 'tokenbrake.json'), JSON.stringify({ readMaxBytes: 25000 }));
   const pre = parse(guardAB('read-pre', { session_id: 'ab', tool_name: 'Read', tool_input: { file_path: bigPath } }).stdout);
   const capped = pre && pre.hookSpecificOutput && pre.hookSpecificOutput.updatedInput;
   const cappedRead = bigLines.slice(0, (capped && capped.limit) || bigLines.length).join('\n');
@@ -349,15 +354,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the fixture is the re-read loop: the repeated Read is most of what arm A carries',
     readShare > 0.85, `${Math.round(readShare * 100)}%`);
   t('arm A carries every result at full size through every later request',
-    cA === 7500 * (5 + 4 + 3) + Math.round(noisy.length / 4) * 2, String(cA));
+    cA === Math.round(wholeRead.length / 4) * (5 + 4 + 3) + Math.round(noisy.length / 4) * 2, String(cA));
   t('the guard cuts carried context, and by more than the shell trim alone',
     cB < cA && cA - cB > Math.round(noisy.length / 4) * 2, `${cA} -> ${cB}`);
 
-  /* The floor. This fixture yields 54% today: against Claude Code's own 30,000-char ceiling
-     the Read cap is a halving, not an order of magnitude, and the order of magnitude in the
-     live run came from the behaviour change this fixture deliberately withholds. Pinned under
-     that so retuning headLines or readLimitLines has room, and a regression that halves the
-     saving does not. */
+  /* The floor. This fixture yields 52% today: 300 lines of a 600-line file is a halving
+     of the Read, and the order of magnitude in the live run came from the behaviour change
+     this fixture deliberately withholds. Pinned under that so retuning headLines or
+     readLimitLines has room, and a regression that halves the saving does not. */
   const FLOOR = 0.50;
   t(`carried context falls by at least ${Math.round(FLOOR * 100)}%`,
     saved >= FLOOR, `${(saved * 100).toFixed(1)}%, ${cA} -> ${cB} token-reads`);
