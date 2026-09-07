@@ -372,3 +372,80 @@ cost gap are, again, the model doing the job in fewer requests (17 against
 as v1 and as Opus: on a debugging loop where the model bounds its own output,
 brake 1 saves next to nothing. The task flaw is closed and the result did not
 move, which is what a closed flaw should do.
+
+## The Read cap's trigger — 2026-09-07
+
+Brake 1 has two knobs on the Read side: `readMaxBytes`, the file size from which an
+unbounded Read is capped, and `readLimitLines`, what the cap keeps. The default
+trigger, 60,000 bytes, was never argued for. Three things now bear on it.
+
+**A real 40-request audit session on this repository, hooks off.** 4.3M tokens
+processed, 515k token-reads carried. Six unbounded Reads: 1, 8, 15, 16, 31 and
+34 KB. None at or above 60 KB, so `readMaxBytes: 60000` would not have fired
+once; the two largest, 31 and 34 KB, carried half of the Read total, and a
+trigger around 25,000 catches both. 79% of the carried context was Bash, mostly
+small `sed -n` excerpts of 1–2k tokens carried 27–38 times because the session
+was long. Those sit under `maxChars` and are compaction's problem, not the
+guard's. The 96% mechanism from the audit A/B reproduced live: `git log --stat
+-40` hit Claude Code's own ~30,000-character ceiling, was persisted to a file,
+and the file was then read whole, 34 KB.
+
+**The sweep (`scripts/sweep-readmax.mjs`).** `readMaxBytes` is a trigger, not a
+strength: on a 64 KB file every value from 60,000 down to 10,000 gives the same
+62.5% at `readLimitLines` 300, and only `readLimitLines` moves the number (75%
+at 200, 87.5% at 100). In the band the trigger does change, a 40 KB file goes
+from 0% at 60,000 (the guard never fires) to 40% at 25,000. The first version
+of the sweep reported 19% for that file because it truncated arm A at the
+30,000-character Bash ceiling; Read has no such ceiling in these sizes (a 65 KB
+file entered a real session as 60,359 characters), and the fixture in
+`test.mjs` had the same premise and was corrected the same way.
+
+So lowering the trigger cannot change how much a capped Read saves, only how
+many Reads get capped. What no simulation can say is the other side: a capped
+Read sends the model to two or three bounded reads, and every extra request
+re-reads the whole context. Whether the 25–60 KB band pays for itself is a live
+question.
+
+**The live A/B — run 2026-09-07, Opus 5 both arms.** Two Cowork sessions,
+both with the hooks on, the same twelve-step read-only audit of
+`33kain/contexa`, differing only in `~/.claude/tokenbrake.json`:
+`readMaxBytes` 60000 (arm A) against 25000 (arm B). The audit reads
+`worker/test.mjs` (60 KB), `extension/background.js` (59 KB) and
+`scripts/screenshots/capture.mjs` (35 KB) whole, all three in the band, and
+two of the answers it asks for sit past line 300. Decision rule, fixed before
+the run: 25,000 becomes the default only if arm B is cheaper or equal with
+identical answers. Results: `ab-results/readmax-60k.txt` on
+`claude/ab-readmax-60k` and `ab-results/readmax-25k.txt` on
+`claude/ab-readmax-25k` in `33kain/contexa`.
+
+| session record | arm A, 60000 | arm B, 25000 | change |
+|---|---|---|---|
+| API cost | $5.13 | $5.64 | +10% |
+| cache-read tokens | 4,855,785 | 6,817,176 | +40% |
+| output tokens | 13,161 | 11,857 | −10% |
+| requests | 25 | 34 | +36% |
+| tool results entered (report) | 91k | 92k | |
+| tool results carried | 912k | 1.5M | +64% |
+| Read calls | 21 | 17 | |
+| trimmed by the guard | 1 result, ≈ 789 tokens | 1 result, ≈ 790 tokens | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**Result: the lower trigger cost more, and 60,000 stays.** The same tokens
+entered on both arms, 91k against 92k, because the task asks for whole files
+and the model reads whatever the cap withholds in further bounded reads: in
+both arms `content.js` (112 KB, capped either way) went in as six or seven
+chunks of 4–6k tokens. Lowering the trigger added the same chunking to
+`background.js`, `worker/test.mjs` and `capture.mjs`, and each extra read is an
+extra request that re-reads the whole context: 34 requests against 25, 1.5M
+token-reads carried against 912k, 40% more cache reads, 10% more cost. The
+cap saves tokens only when the model does not come back for the rest, which
+is the behaviour change the audit A/B credited it with, and which a task that
+says "read in full" forbids by construction.
+
+One run per arm. Earlier rounds put run-to-run variation in planning at 17
+against 24 requests on identical setups, so a nine-request gap is not
+separable from noise on its own; what the run establishes is that there is no
+evidence for 25,000 and some against. What it does not say is what happens on
+a session that reads a 40 KB file once and moves on, where the sweep's 40%
+applies with no return trip. The default stays at 60,000 until a run of that
+shape says otherwise.

@@ -265,6 +265,110 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the ledger row carries the tool_use_id and the transcript path', g.status === 0 && /"id":"toolu_1"/.test(last) && /"transcript":"\/t\/s.jsonl"/.test(last), last.slice(0, 160));
 }
 
+/* ---- brake 1: the carried-context A/B, with a floor ------------------------
+   The number brake 1 is sold on, computed instead of read off the usage page.
+   AB-TASK.md measures the same quantity for real — one reading per five-hour
+   window, by hand — which makes it a proof and not a tool. This runs in a second,
+   so a change that quietly stops the guard from paying for itself fails here.
+
+   Both arms are the same session: the same tool calls, in the same order, over the
+   same file. They differ only in whether guard.js sat in front of them. Arm A is what
+   Claude Code does alone — an unbounded Read of a 48 KB source file landing whole (Read
+   has no ceiling of its own: a 65 KB file entered a real session as 60,359 characters;
+   the ~30,000-char save-to-a-file ceiling is Bash's), the model re-reading it twice
+   more, and a test run whose 400 lines land whole. Arm B sends every one of those
+   through the real hooks and carries whatever they actually return. The file sits in the
+   25-60 KB band because that is where the Read cap's trigger is argued over
+   (AB-TASK.md, "The Read cap's trigger"): the fixture is meant to keep biting there.
+
+   The re-read loop is in the fixture because it was 96% of the untrimmed session's
+   carried context in the live run (README, "Compaction and tokenbrake"). Arm B repeats
+   the identical unbounded reads rather than the bounded ones the guard's note sends the
+   model to, so the guard is credited only with what it mechanically does. The live
+   saving is the larger number; this floor sits under the smaller one.
+
+   What is asserted is carried context — size × the requests that re-read it — because
+   that, not the size of any single result, is what the five-hour limit counts. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+
+  const cfgAB = mkdtempSync(join(tmpdir(), 'tokenbrake-ab-'));
+  const envAB = { ...process.env, CLAUDE_CONFIG_DIR: cfgAB };
+  const guardAB = (mode, input) => spawnSync(process.execPath, ['./guard.js', mode],
+    { input: JSON.stringify(input), encoding: 'utf8', env: envAB });
+
+  const bigLines = Array.from({ length: 600 }, (_, i) => `line ${i + 1} of the source file the model kept re-reading`.padEnd(79, '.'));
+  const bigPath = join(cfgAB, 'big.js');
+  writeFileSync(bigPath, bigLines.join('\n') + '\n');
+  const wholeRead = bigLines.join('\n');                     // 48 KB: over 25,000, under 60,000, and Read returns it whole
+
+  // what the hooks really return for this file and this output — not a hand-written "after"
+  // the cap's trigger for this fixture, set here and not inherited from DEFAULTS: whether the shipped
+  // default should sit at 25,000 or 60,000 is the live A/B's question, not this test's
+  writeFileSync(join(cfgAB, 'tokenbrake.json'), JSON.stringify({ readMaxBytes: 25000 }));
+  const pre = parse(guardAB('read-pre', { session_id: 'ab', tool_name: 'Read', tool_input: { file_path: bigPath } }).stdout);
+  const capped = pre && pre.hookSpecificOutput && pre.hookSpecificOutput.updatedInput;
+  const cappedRead = bigLines.slice(0, (capped && capped.limit) || bigLines.length).join('\n');
+  const post = parse(guardAB('post', { session_id: 'ab', tool_use_id: 'tu4', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, tool_response: bashResp(noisy) }).stdout);
+  const trimmedShell = post && post.hookSpecificOutput.updatedToolOutput.stdout;
+
+  console.log('\n-- brake 1: carried context, guard off vs guard on');
+  t('the fixture exercises both brakes: the Read is capped and the shell output trimmed',
+    !!capped && capped.limit === 300 && capped.file_path === bigPath && !!trimmedShell && trimmedShell.length < noisy.length,
+    `read ${wholeRead.length}->${cappedRead.length} chars, shell ${noisy.length}->${trimmedShell ? trimmedShell.length : '?'}`);
+
+  /* Six requests: three unbounded reads of the same big file, one test run, then two more
+     requests, so every result is carried by what follows it. No compaction — this measures
+     what the guard keeps out, not what compaction later relieves. */
+  const session = (name, read, shell) => {
+    const L = [];
+    const call = (i, id, tool, input, text) => {
+      L.push(JSON.stringify({ type: 'assistant', requestId: 'r' + i, uuid: 'r' + i, sessionId: 'ab', cwd: '/w',
+        message: { model: 'm', content: [{ type: 'tool_use', id, name: tool, input }] } }));
+      L.push(JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: 'ab',
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }));
+    };
+    call(0, 'tu1', 'Read', { file_path: bigPath }, read);
+    call(1, 'tu2', 'Read', { file_path: bigPath }, read);
+    call(2, 'tu3', 'Read', { file_path: bigPath }, read);
+    call(3, 'tu4', 'Bash', { command: 'npm test' }, shell);
+    for (const rid of ['r4', 'r5']) L.push(JSON.stringify({ type: 'assistant', requestId: rid, uuid: rid,
+      sessionId: 'ab', cwd: '/w', message: { model: 'm', content: [{ type: 'text', text: 'working through it' }] } }));
+    const f = join(cfgAB, name + '.jsonl');
+    writeFileSync(f, L.join('\n') + '\n');
+    return T.carry(T.parseTranscript(f));
+  };
+
+  const A = session('arm-a', wholeRead, noisy);
+  const B = session('arm-b', cappedRead, trimmedShell);
+  const carried = (p) => p.results.reduce((s, r) => s + r.carried, 0);
+  const cA = carried(A), cB = carried(B);
+  const readShare = A.results.filter(r => r.name === 'Read').reduce((s, r) => s + r.carried, 0) / cA;
+  const saved = (cA - cB) / cA;
+
+  t('the two arms are the same session: six requests, four results, no compaction',
+    A.requests.length === 6 && B.requests.length === 6 && A.results.length === 4 && B.results.length === 4 &&
+    A.compactions.length === 0 && B.compactions.length === 0);
+  t('the fixture is the re-read loop: the repeated Read is most of what arm A carries',
+    readShare > 0.85, `${Math.round(readShare * 100)}%`);
+  t('arm A carries every result at full size through every later request',
+    cA === Math.round(wholeRead.length / 4) * (5 + 4 + 3) + Math.round(noisy.length / 4) * 2, String(cA));
+  t('the guard cuts carried context, and by more than the shell trim alone',
+    cB < cA && cA - cB > Math.round(noisy.length / 4) * 2, `${cA} -> ${cB}`);
+
+  /* The floor. This fixture yields 52% today: 300 lines of a 600-line file is a halving
+     of the Read, and the order of magnitude in the live run came from the behaviour change
+     this fixture deliberately withholds. Pinned under that so retuning headLines or
+     readLimitLines has room, and a regression that halves the saving does not. */
+  const FLOOR = 0.50;
+  t(`carried context falls by at least ${Math.round(FLOOR * 100)}%`,
+    saved >= FLOOR, `${(saved * 100).toFixed(1)}%, ${cA} -> ${cB} token-reads`);
+
+  rmSync(cfgAB, { recursive: true, force: true });
+}
+
 /* ---- 0.2.0 — the plugin manifest and the marketplace ---------------------- */
 {
   const plugin = JSON.parse(readFileSync('./.claude-plugin/plugin.json', 'utf8'));
