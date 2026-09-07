@@ -81,6 +81,46 @@ results tokenbrake trimmed and what that kept out. Sizes are chars/4 estimates; 
 API reported. `--ledger` shows the guard's own record alone, which is also the fallback when no transcript
 can be found.
 
+## Against Claude Code's compaction
+
+Compaction and tokenbrake attack the same quantity from opposite ends. A tool result costs its size times the
+number of requests that re-read it. `/compact` (and auto-compact) cuts the second factor after the fact.
+tokenbrake cuts the first factor before the result ever lands.
+
+| | compaction | tokenbrake |
+|---|---|---|
+| acts | after the tokens are in context | before they enter it |
+| scope | the whole conversation at once | one oversized result at a time |
+| reduces | how many turns you keep paying for a result | what you pay for it per turn |
+| what is kept | whatever the summary happens to preserve | head, tail, and the error-looking lines, with line numbers |
+| recoverable | no, the detail is gone | yes, full text on disk, path named in the trimmed result |
+| costs | a model pass over the entire context | one `node` spawn per tool call (~50-100 ms) |
+
+By the time compaction fires, a 30,000-character test dump has already been re-sent on every request since it
+arrived, and the compaction pass reads it one more time to summarize it. The guard means it was never 30,000
+characters in the first place.
+
+The two also differ in blast radius. Compaction is all or nothing: it resets everything, including the plan and
+the decisions you wanted kept. The guard only touches shell output over `maxChars` and unbounded reads of files
+over `readMaxBytes`; small results pass through untouched, and reads that already carry an `offset`/`limit` are
+never modified.
+
+And the guard changes what the model does next, which compaction cannot. Most of the saving measured in
+`AB-TASK.md` was indirect: a trimmed `cat`, plus a note naming `offset`/`limit` and `Grep`, sent the model to
+bounded `Read` calls instead of Claude Code's own "result too large, saved to a file" path, whose re-reads were
+96% of the untrimmed session's carried context.
+
+They compose rather than compete, and `report` knows it: carried context stops accumulating at a compaction
+boundary, so the ranking already reflects what compaction relieved. With the hooks on, both models ended the
+same audit session holding less context (383k → 338k on Fable 5.1, 331k → 200k on Opus 5), so auto-compact
+fires later and fewer times.
+
+Where each one fails is the honest part. tokenbrake saves nothing when the model bounds its own output, which
+is what both models did on the debugging task in `AB-TASK.md`. Compaction is the only answer to a context
+filled by long back-and-forth, extended thinking, and code the model wrote, none of which the guard touches.
+Claude Code's own ~30,000-character save-to-a-file ceiling is a third mechanism, and it is high enough to be
+the problem rather than the fix: in the audit run the model kept re-reading those persisted files.
+
 ## Configure
 
 Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
