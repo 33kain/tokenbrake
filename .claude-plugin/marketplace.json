@@ -13,7 +13,7 @@
         "repo": "33kain/tokenbrake"
       },
       "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Two hooks, no dependencies.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Mili"
       }

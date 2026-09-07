@@ -501,3 +501,53 @@ So three shapes are measured now. Read-heavy audit that asks for whole files:
 and on two of three shapes Opus lets little in. The `ab-results/real/`
 files in `33kain/contexa` will say which shape ordinary sessions on that
 repository take.
+
+## Persisted outputs — the miss, and the rule for it (0.2.1, 2026-09-07)
+
+One mechanism kept turning up on the wrong side of the guard. When a shell
+result passes Claude Code's own ~30,000-character ceiling, Claude Code writes
+it to `<config>/projects/<cwd>/<session>/tool-results/<id>.txt` and shows a
+note; the guard's own trim does the same into `<config>/tokenbrake/out/`. The
+model then reads that file. Whole. Seen three times, independently:
+
+- the audit A/B: re-reads of persisted files were 96% of the untrimmed arm's
+  carried context;
+- the 40-request session in "The Read cap's trigger": `git log --stat -40`
+  persisted, then read whole, 34 KB;
+- the session that wrote this section, replayed with `scripts/sim-persisted.mjs`:
+
+```
+ced42a1a  /home/user/contexa  486 requests, 534 results
+  reads of persisted outputs: 4 (3 unbounded), 44,130 tokens entered,
+    5,911,014 token-reads carried = 24% of the session's 24,857,131
+  with a 80-line cap on them: 37,205 tokens kept out,
+    4,985,470 token-reads not carried = 20% of the session
+     size    kept   turns    carried  not carried  what
+   15090    1077    134    2022060      1877742  buq52pp79.txt
+   13784    1307    134    1847056      1671918  b5tw2bsvt.txt
+   12850    2135    134    1721900      1435810  blz8ddrye.txt
+    2406    2406    133     319998            0  buq52pp79.txt  (bounded, untouched)
+```
+
+Four reads out of 534 results carried a quarter of the session. They sit at
+30–65 KB, so the 60,000 trigger catches one of three, and the readMaxBytes
+A/B above showed why the trigger cannot simply be lowered: it cuts source
+files the model has to read whole, and the return trips cost more than the
+cap saves.
+
+The rule in 0.2.1 is narrower than a threshold. An unbounded Read of a file
+under `tool-results/` or `tokenbrake/out/` is capped at `persistedLimitLines`
+(default 80, the guard's own head+tail budget) whatever its size, with a note
+that says why: the output was too big to show inline, so it is too big to
+read whole. Source files are not touched; `readMaxBytes` stays at 60,000. A
+bounded read of a persisted file is untouched, so a model that wants a range
+of it gets the range.
+
+What is measured: the replay above, and `test.mjs`. What is not: whether the
+model, sent to `offset`/`limit` on a persisted file, comes back for the rest
+the way it did for source files in the readMaxBytes A/B. The difference in
+kind is that a source file is something the task may need whole; a persisted
+output is a `git log` or a test dump whose head and tail were already judged
+enough once. The `ab-results/real/` files will show the rule firing, or not,
+on ordinary sessions; a live run of the audit shape is the confirmation if
+those files show it firing often.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-09-07
+
+- Read cap on persisted outputs: an unbounded Read of a saved tool output (Claude Code's `tool-results/<id>.txt`,
+  the guard's own `tokenbrake/out/<id>.txt`) is capped at `persistedLimitLines` (default 80) whatever its size,
+  with a note saying why. Reading those whole carried 96% of the untrimmed audit arm's context and 24% of the
+  session that wrote the rule; the general `readMaxBytes` default stays at 60,000, because lowering it was
+  measured and cost more (`AB-TASK.md`).
+- `scripts/sweep-readmax.mjs` and `scripts/sim-persisted.mjs`: the trigger sweep, and the replay that shows what
+  the persisted cap would have kept out of the sessions on this machine.
+- Project-scope install on this repository, pinned to `guard.js` by a test.
+
 ## 0.2.0 — 2026-09-06
 
 - Own repository, `33kain/tokenbrake`, split out of `33kain/contexa` with the history.
