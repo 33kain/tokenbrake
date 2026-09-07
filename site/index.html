@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tokenbrake — brakes for your Claude Code context window</title>
+<meta name="description" content="Two Claude Code hooks that trim oversized shell output and cap unbounded file reads before they reach the model, and a report of what ate a session's tokens. Zero dependencies, Node 18+, Windows-friendly.">
+<link rel="canonical" href="https://tokenbrake.site/">
+<meta property="og:title" content="tokenbrake">
+<meta property="og:description" content="Brakes for your Claude Code context window. Trim oversized tool output, cap unbounded reads, see what ate your tokens.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokenbrake.site/">
+<meta name="theme-color" content="#0f0f10" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23e5484d'/%3E%3Cpath d='M9 22V10h7.5a3.5 3.5 0 0 1 1.6 6.6A3.8 3.8 0 0 1 17 22z' fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round'/%3E%3Cpath d='M9 16h8' stroke='%23fff' stroke-width='2.4'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <a class="brand" href="#"><span class="mark" aria-hidden="true"></span>tokenbrake</a>
+  <nav aria-label="Sections">
+    <a href="#install">Install</a>
+    <a href="#what">What it does</a>
+    <a href="#report">Report</a>
+    <a href="#measured">Measured</a>
+    <a href="https://github.com/33kain/tokenbrake" rel="noopener">GitHub</a>
+    <a href="https://www.npmjs.com/package/tokenbrake" rel="noopener">npm</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <p class="eyebrow">Claude Code hooks · v0.2.0 · MIT</p>
+  <h1>Brakes for your Claude Code context window.</h1>
+  <p class="lede">Tool results are the bulk of what a session spends, and shell output is the worst offender.
+  tokenbrake trims oversized output and caps unbounded file reads <em>before</em> they reach the model,
+  then tells you afterwards what ate your tokens.</p>
+  <div class="facts" aria-label="At a glance">
+    <span>Zero dependencies</span>
+    <span>Node 18+</span>
+    <span>No Python, no Rust, no Git Bash</span>
+    <span>Works on Windows</span>
+    <span>Nothing leaves your machine</span>
+  </div>
+</section>
+
+<section id="install" class="install">
+  <div class="install-col">
+    <h2>As a plugin</h2>
+    <pre><code><span class="p">$</span> claude plugin marketplace add 33kain/tokenbrake
+<span class="p">$</span> claude plugin install tokenbrake@tokenbrake</code></pre>
+    <p>Installs without touching a settings file.</p>
+  </div>
+  <div class="install-col">
+    <h2>Or with npx</h2>
+    <pre><code><span class="p">$</span> npx tokenbrake init            <span class="c"># every project (~/.claude/settings.json)</span>
+<span class="p">$</span> npx tokenbrake init --project  <span class="c"># this project only, commit to share</span></code></pre>
+    <p>Writes the two hooks into a settings file you own. Pick one method, not both.</p>
+  </div>
+  <p class="install-note">Restart Claude Code, then <code>npx tokenbrake status</code> shows what is installed and spawns each hook once,
+  exactly as Claude Code does. If it prints <code>FAILED to start</code>, that is the hook Claude Code would also fail to start, silently.</p>
+</section>
+
+<section class="why">
+  <div class="why-text">
+    <h2>A tool result is not paid for once.</h2>
+    <p>Every tool result is re-sent as context on every later request until the session compacts.
+    A 30k-token test dump at request 3 of 60 is read 57 times. Its cost is its size <strong>times</strong> the
+    requests it is carried through, and that product, not the size alone, says which single
+    <code>cat</code>, <code>Read</code> or test run should never have been let in.</p>
+    <p>Claude Code's own ceiling for a Bash result is about 30,000 characters inline, roughly 7,500 tokens.
+    tokenbrake lowers that ceiling to something sane and keeps the parts that matter.</p>
+  </div>
+  <figure class="carry" aria-labelledby="carry-caption">
+    <svg viewBox="0 0 520 240" role="img" aria-describedby="carry-caption">
+      <g class="axis">
+        <text x="8" y="16">request</text>
+        <text x="8" y="232">context re-read per request</text>
+      </g>
+      <g class="bars">
+        <!-- request rows: base context grows a little each turn; the big result appears at request 3 and rides along -->
+        <g transform="translate(70,28)">
+          <text x="-10" y="11" class="lbl">1</text><rect x="0" y="2" width="60" height="12"/>
+          <text x="-10" y="31" class="lbl">2</text><rect x="0" y="22" width="72" height="12"/>
+          <text x="-10" y="51" class="lbl">3</text><rect x="0" y="42" width="84" height="12"/><rect class="big" x="84" y="42" width="180" height="12"/>
+          <text x="-10" y="71" class="lbl">4</text><rect x="0" y="62" width="96" height="12"/><rect class="big" x="96" y="62" width="180" height="12"/>
+          <text x="-10" y="91" class="lbl">5</text><rect x="0" y="82" width="108" height="12"/><rect class="big" x="108" y="82" width="180" height="12"/>
+          <text x="-10" y="111" class="lbl">6</text><rect x="0" y="102" width="120" height="12"/><rect class="big" x="120" y="102" width="180" height="12"/>
+          <text x="-10" y="131" class="lbl">7</text><rect x="0" y="122" width="132" height="12"/><rect class="big" x="132" y="122" width="180" height="12"/>
+          <text x="-10" y="151" class="lbl">…</text>
+          <text x="-14" y="171" class="lbl">60</text><rect x="0" y="162" width="250" height="12"/><rect class="big" x="250" y="162" width="180" height="12"/>
+        </g>
+      </g>
+      <g class="callout" transform="translate(268,58)">
+        <text x="0" y="-8">one 30k result, carried 57 more times</text>
+        <path d="M2 -4 L2 8" />
+      </g>
+    </svg>
+    <figcaption id="carry-caption">Cost of a result = size × the requests it is carried through.</figcaption>
+  </figure>
+</section>
+
+<section id="what" class="what">
+  <h2>What it does</h2>
+  <div class="cards">
+    <article>
+      <h3>Shell output trim</h3>
+      <p class="hook">PostToolUse · Bash, PowerShell</p>
+      <p>Output over 6,000 characters is replaced by the first 40 lines, the last 40, and up to 20 lines from
+      the middle that look like errors or warnings, each with its line number. The full output is saved to
+      <code>~/.claude/tokenbrake/out/</code> and the trimmed result names the path, so Claude can <code>Grep</code>
+      or <code>Read</code> it if it needs more.</p>
+      <p>Nothing is rewritten or "compressed". What Claude sees is a predictable head/tail excerpt of the real output.</p>
+    </article>
+    <article>
+      <h3>Large-read cap</h3>
+      <p class="hook">PreToolUse · Read</p>
+      <p>A <code>Read</code> with no <code>offset</code> or <code>limit</code> on a file over 60 KB is rewritten to
+      <code>limit: 300</code>, and Claude is told the file's real size and how to page through it or <code>Grep</code> first.</p>
+      <p>Reads that already specify a range are untouched. Images, PDFs and notebooks are skipped.</p>
+    </article>
+    <article>
+      <h3>Ledger</h3>
+      <p class="hook">Every tool result</p>
+      <p>The size of each result is appended to <code>~/.claude/tokenbrake/ledger.jsonl</code>, with the tool-use id
+      that joins it to the session transcript. This is what the report reads.</p>
+      <p>It is a local file. Nothing is sent anywhere.</p>
+    </article>
+  </div>
+</section>
+
+<section class="sample">
+  <h2>What Claude sees instead of 412 lines</h2>
+  <p>A test run that used to arrive as 11,441 characters, trimmed by the guard. The failing test in the middle is kept; the passing noise around it is not.</p>
+  <pre class="term"><code>  ✔ router › case 1 (3 ms)
+  ✔ auth › case 2 (6 ms)
+  ✔ db › case 3 (9 ms)
+  <span class="dim">… 37 more lines of head …</span>
+
+<span class="tb">[tokenbrake] 332 lines omitted here (11,441 chars total). Full output saved to ~/.claude/tokenbrake/out/a1f4c9e2-toolu_01Hx.txt — Read or Grep it if you need more.</span>
+<span class="tb">[tokenbrake] error/warning-looking lines from the omitted region:</span>
+<span class="err">  L203:   ✖ auth › refresh token rotates on use (312 ms)</span>
+<span class="err">  L204:     Error: expected 401, got 200</span>
+
+  ✔ db › case 373 (52 ms)
+  ✔ cli › case 374 (55 ms)
+  <span class="dim">… 36 more lines of tail …</span>
+  ✔ router › case 411 (69 ms)
+  ✔ auth › case 412 (72 ms)</code></pre>
+</section>
+
+<section id="report" class="sample">
+  <h2>What ate your tokens</h2>
+  <pre><code><span class="p">$</span> npx tokenbrake report                     <span class="c"># last session</span>
+<span class="p">$</span> npx tokenbrake report --all               <span class="c"># one line per session on disk</span>
+<span class="p">$</span> npx tokenbrake report --session=&lt;prefix&gt;  <span class="c"># a particular one</span>
+<span class="p">$</span> npx tokenbrake report --top=25            <span class="c"># widen the ranking</span></code></pre>
+  <p><code>report</code> reads the Claude Code session transcript, every tool result exactly as the model saw it and the API's
+  usage per request, and ranks results by <strong>size × the requests they were carried through</strong>. It also shows what the
+  session processed in total, how much came from cache, what the context holds right now, and which results tokenbrake trimmed.</p>
+  <pre class="term"><code>Session a1f4c9e2…  /home/mili/app
+  22 requests, 8 tool results
+  Context processed: 1.6M tokens across 22 requests (95% read from cache); output 6k
+  Context now: ≈ 114k tokens — what the next request re-reads
+  Tool results entered ≈ 65k tokens of context, carried through later requests ≈ 1.3M token-reads
+
+What ate it — by tokens carried (size × later requests), top 6:
+     size   carried   turns  tool               what
+<span class="hl">      30k      620k     21  Bash               npm test</span>
+      23k      460k     20  Read               /home/mili/app/package-lock.json
+       7k      128k     19  Bash               git log --stat -40
+       4k       63k     18  Read               /home/mili/app/src/server.js
+       2k       23k     15  Read               /home/mili/app/CHANGELOG.md
+      600       10k     16  Bash               node build.mjs
+
+By tool (share of tokens carried):
+  Bash                  4 calls      37k entered      760k carried   58%
+  Read                  3 calls      28k entered      546k carried   42%
+  Grep                  1 calls      225 entered        4k carried    0%
+
+<span class="tb">One result to have brakes on: Bash "npm test" — ≈ 30k tokens carried 21 times. The tokenbrake guard would have trimmed it to its head, tail and error lines.</span>
+
+Sizes are chars/4 estimates; the usage line is what the API reported.</code></pre>
+</section>
+
+<section id="measured" class="measured">
+  <h2>Measured, not promised</h2>
+  <p>The same read-only audit task on the same repository, run as a Cowork session without the hooks and with them, on two
+  models. Then a five-fault debugging task, twice. Every answer was identical between arms, and the five-hour usage limit moved with the cost.</p>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Task · model</th><th>API cost</th><th>Cache-read tokens</th><th>Saved</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Audit · Fable 5.1</td><td>$8.40 → $7.02</td><td>4.62M → 2.72M</td><td class="num good">−16%</td></tr>
+      <tr><td>Audit · Opus 5</td><td>$5.97 → $3.77</td><td>5.77M → 3.99M</td><td class="num good">−37%</td></tr>
+      <tr><td>Debugging · Opus 5</td><td colspan="2">guard never fired; the model bounded its own reads</td><td class="num">≈ 0%</td></tr>
+      <tr><td>Debugging · Fable 5.1</td><td colspan="2">three 2k outputs trimmed against 1.7M cache reads</td><td class="num">≈ 1%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>The saving is whatever the model would otherwise have let in: 0% to 37% across these runs. On the debugging task both
+  models already piped through <code>tail -80</code> and <code>grep</code>, so there was nothing to trim. The report's
+  "Tool results entered" line says which end of that range a session was on.
+  The protocol and every number are in <a href="https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md" rel="noopener">AB-TASK.md</a>.</p>
+</section>
+
+<section class="configure">
+  <h2>Configure</h2>
+  <p>Optional <code>~/.claude/tokenbrake.json</code> (or under <code>CLAUDE_CONFIG_DIR</code>). These are the defaults.</p>
+  <pre><code>{
+  <span class="k">"maxChars"</span>: 6000,
+  <span class="k">"headLines"</span>: 40,
+  <span class="k">"tailLines"</span>: 40,
+  <span class="k">"keepErrorLines"</span>: 20,
+  <span class="k">"readMaxBytes"</span>: 60000,
+  <span class="k">"readLimitLines"</span>: 300,
+  <span class="k">"logAllTools"</span>: true,
+  <span class="k">"enabled"</span>: true
+}</code></pre>
+  <p><code>enabled: false</code> turns the guard off without uninstalling. <code>logAllTools: false</code> records only trimmed and capped events.</p>
+  <pre><code><span class="p">$</span> npx tokenbrake uninstall [--project]
+<span class="p">$</span> npx tokenbrake clean --days=7   <span class="c"># delete saved full outputs older than 7 days</span></code></pre>
+</section>
+
+<section class="limits">
+  <h2>Notes and limits</h2>
+  <ul>
+    <li>Rewriting a tool result needs <code>updatedToolOutput</code> support in PostToolUse, which Claude Code added for built-in tools in the v2.1.12x line. On older versions the hook runs but changes nothing.</li>
+    <li>Only successful tool calls pass through PostToolUse. A failing command already arrives as a ~10,000-character head/tail excerpt from Claude Code itself; tokenbrake doesn't touch it.</li>
+    <li>The guard fails open. Any error exits 0 with no output and Claude Code proceeds unchanged.</li>
+    <li>One <code>node</code> process per tool call, about 50–100 ms. Set the PostToolUse matcher to <code>Bash|PowerShell|Read</code> if you want it lighter and don't need the full ledger.</li>
+    <li>Reads capped by tokenbrake are partial views. <code>Edit</code> still requires an exact string match, so a capped read can't cause a wrong edit; Claude reads the section it needs first.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  <p><a href="https://github.com/33kain/tokenbrake" rel="noopener">33kain/tokenbrake</a> · <a href="https://www.npmjs.com/package/tokenbrake" rel="noopener">npm</a> · MIT license · by <a href="https://github.com/33kain" rel="noopener">Mili</a></p>
+  <p>Every existing tool in this space is a meter. This is a brake.</p>
+</footer>
+
+</body>
+</html>
