@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `report` prints a "Repeat reads" line: same-shape reads (a Read of one path and range, or a single-file
+  `cat`/`sed -n`/`head`/`tail`) that returned a file already in context in the same compaction window,
+  with the tokens re-entered and carried. Measured, not acted on.
+- `LANDSCAPE.md`: the other tools in the space, how each measures itself, and where tokenbrake is behind
+  or ahead.
+
 ## 0.2.1 — 2026-09-07
 
 - Read cap on persisted outputs: an unbounded Read of a saved tool output (Claude Code's `tool-results/<id>.txt`,

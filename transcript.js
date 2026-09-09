@@ -51,6 +51,19 @@ function describe(name, input) {
   return s;
 }
 
+/* The identity of a read, for the repeat-reads line: a Read of one path and range, or a shell command that
+   only prints one file (cat, sed -n, head, tail). Two results with the same key in the same compaction
+   window put the same text into context twice. Anything else has no key and is never called a repeat. */
+function readKey(name, input) {
+  const i = input || {};
+  if (name === 'Read' && i.file_path) return `Read ${i.file_path} ${i.offset || 0} ${i.limit || 0}`;
+  if (name === 'Bash' && typeof i.command === 'string') {
+    const m = /^\s*(?:cat(?: -n)?|sed -n\s+'?[0-9,]+p'?|head(?: -n?\s*\d+)?|tail(?: -n?\s*\d+)?)\s+(\S+)\s*$/.exec(i.command);
+    if (m) return `Bash ${i.command.trim().replace(/\s+/g, ' ')}`;
+  }
+  return null;
+}
+
 /* Parse one transcript into: the ordered list of API requests (deduped by requestId, usage taken from the
    first entry that carries it), the tool results in order with the request index they landed after, and the
    compaction boundaries. Only the main chain: sidechain entries (subagents) run in their own context and
@@ -100,6 +113,7 @@ function parseTranscript(file) {
           id: b.tool_use_id || null,
           name: use.name,
           what: describe(use.name, use.input),
+          key: readKey(use.name, use.input),
           chars: text.length,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
@@ -132,6 +146,26 @@ function carry(parsed) {
     r.carried = r.tokens * r.carriedTurns;
   }
   return parsed;
+}
+
+/* Repeat reads: a result whose key already appeared in the same compaction window. The earlier text is
+   still in context when the repeat lands, so the repeat is pure duplication until a compaction removes
+   the first copy; a re-read after a compaction is not a repeat, the original is gone. This is measured,
+   not acted on: the guard does nothing about repeats until the real-session files say they are common. */
+function repeatReads(parsed) {
+  const windowOf = (r) => parsed.compactions.filter(c => c <= r.afterReq).length;
+  const seen = new Map();
+  const out = { sameShape: 0, repeats: 0, tokens: 0, carried: 0, rows: [] };
+  for (const r of parsed.results) {
+    if (!r.key) continue;
+    out.sameShape++;
+    const k = windowOf(r) + '|' + r.key;
+    if (seen.has(k)) {
+      out.repeats++; out.tokens += r.tokens; out.carried += r.carried || 0;
+      out.rows.push({ what: r.what, tokens: r.tokens, first: seen.get(k), again: r.afterReq });
+    } else seen.set(k, r.afterReq);
+  }
+  return out;
 }
 
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
@@ -218,6 +252,13 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
 
+  const rep = repeatReads(parsed);
+  if (rep.sameShape) {
+    lines.push(rep.repeats
+      ? `  Repeat reads: ${rep.repeats} of ${rep.sameShape} same-shape reads returned a file already in context — ≈ ${kfmt(rep.tokens)} tokens re-entered, ≈ ${kfmt(rep.carried)} token-reads carried`
+      : `  Repeat reads: none — ${rep.sameShape} same-shape reads, each of a file not already in context`);
+  }
+
   lines.push('');
   lines.push(`What ate it — by tokens carried (size × later requests), top ${top}:`);
   lines.push(`     size   carried   turns  tool               what`);
@@ -257,4 +298,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, usageTotals, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, readKey, usageTotals, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

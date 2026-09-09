@@ -399,6 +399,46 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfgAB, { recursive: true, force: true });
 }
 
+/* ---- the repeat-reads line ------------------------------------------------
+   Measured, not acted on. A Read of the same path and range twice in one compaction window is a
+   repeat; the same Read after a compaction is not, because the first copy left the context. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-rep-'));
+  const L = [];
+  let n = 0;
+  const call = (id, tool, input, text) => {
+    n++;
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'r' + n, uuid: 'r' + n, sessionId: 'rep', cwd: '/w',
+      message: { model: 'm', content: [{ type: 'tool_use', id, name: tool, input }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: 'rep',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }));
+  };
+  const body = 'x'.repeat(4000);
+  call('a1', 'Read', { file_path: '/w/big.js' }, body);                       // first read
+  call('a2', 'Bash', { command: 'sed -n 10,40p /w/big.js' }, body.slice(0, 400)); // a different range: not a repeat
+  call('a3', 'Read', { file_path: '/w/big.js' }, body);                       // repeat, same window
+  call('a4', 'Bash', { command: 'cat /w/big.js' }, body);                     // a different shape (cat vs Read): not a repeat
+  call('a5', 'Bash', { command: 'cat /w/big.js' }, body);                     // repeat of the cat
+  L.push(JSON.stringify({ type: 'user', uuid: 'c1', sessionId: 'rep', isCompactSummary: true, message: { role: 'user', content: 'summary' } }));
+  call('a6', 'Read', { file_path: '/w/big.js' }, body);                       // after the compaction: not a repeat
+  call('a7', 'Bash', { command: 'npm test' }, body);                          // no key at all
+  const f = join(dir, 'rep.jsonl');
+  writeFileSync(f, L.join('\n') + '\n');
+  const parsed = T.carry(T.parseTranscript(f));
+  const rep = T.repeatReads(parsed);
+  console.log('\n-- repeat reads');
+  t('readKey: a Read, and a single-file cat/sed/head/tail, get a key; other commands do not',
+    T.readKey('Read', { file_path: '/a' }) === 'Read /a 0 0' && !!T.readKey('Bash', { command: 'sed -n 1,5p /a' }) && !!T.readKey('Bash', { command: 'cat -n /a' }) && T.readKey('Bash', { command: 'npm test' }) === null && T.readKey('Bash', { command: 'cat a b' }) === null);
+  t('six same-shape reads, two repeats: the second Read and the second cat', rep.sameShape === 6 && rep.repeats === 2, JSON.stringify(rep.rows));
+  t('a re-read after the compaction is not a repeat', !rep.rows.some(r => r.again >= 6));
+  t('the repeat tokens are the two duplicated bodies', rep.tokens === 2 * Math.round(body.length / 4), String(rep.tokens));
+  const text = T.renderReport(parsed, []);
+  t('the report carries the line', /Repeat reads: 2 of 6 same-shape reads/.test(text), text.split('\n').find(l => /Repeat reads/.test(l)));
+  rmSync(dir, { recursive: true, force: true });
+}
+
 /* ---- 0.2.0 — the plugin manifest and the marketplace ---------------------- */
 {
   const plugin = JSON.parse(readFileSync('./.claude-plugin/plugin.json', 'utf8'));
