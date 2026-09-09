@@ -451,7 +451,7 @@ Nothing to build before then. The task is collection and one table, then publish
    note has to say the second even if the first is fixed.
 
 7. **ab7, the rtk head-to-head, is written and waiting for a keyboard.** `AB-TASK.md` ends with its
-   pre-registration and a self-contained Windows runbook: three arms on one clone of `33kain/contexa`, one
+   pre-registration; the runbook itself is `AB7-RUNBOOK.md`. Three arms on one clone of `33kain/contexa`, one
    model, one message each, exactly one tool installed per arm and verified rather than assumed, the paste
    text, the commands, and the table to fill in. It is pre-registered on **Sonnet 5**, which buys two
    things at once — the rtk comparison next to JetBrains' own number, and the Sonnet baseline the cloud
