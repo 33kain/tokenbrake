@@ -12,7 +12,7 @@ ahead. Written from source and documentation, not from live runs of the others. 
 | **squeez** | Pre- and PostToolUse: Bash compression, Read/Grep limit injection, cross-call dedup, verbatim stash retrievable over MCP | Bash, Read, Grep; five hosts | 91% on 46 fixtures, tokenizer-verified on the fixtures, not on sessions | 200, Apache 2.0 |
 | **claude-context-optimizer** | advisory plugin: blocks re-reads of unchanged files, heatmaps, budget alerts | Read | "30–50% wasted", from a read-but-never-edited heuristic | 110, MIT |
 | **shunt** (Spotify Portal) | blocks Reads over 350 lines and routes them to a cheaper model | Read | about 90% on bulk reads of one Java monorepo | not fully open |
-| **tokenbrake** | PostToolUse generic trim over 6,000 chars, Read cap, persisted-output cap, `report` | Bash, Read | session billing records, A/B with the nulls kept: −16% / −37% on a read-heavy audit, ≈ 0 on debugging, ≈ 0 on a small feature (`AB-TASK.md`) | 0 humans, MIT |
+| **tokenbrake** | PostToolUse generic trim over 6,000 chars, Read cap, persisted-output cap, `report` | Bash, Read | session billing records, A/B with the nulls kept: on a read-heavy audit the range is −37% to +100% across eight runs on two models and four guard versions, with nothing that repeats; ≈ 0 on debugging, ≈ 0 on a small feature (`AB-TASK.md`) | 0 humans, MIT |
 
 ## What the JetBrains benchmark means
 
@@ -22,8 +22,12 @@ re-reads, and each return trip is a request that re-reads the whole context; cac
 bill and sit beyond a hook's reach; and rtk counted raw output as its counterfactual while ignoring Claude
 Code's own truncation and cache pricing. The readMaxBytes A/B lost money the same way and is recorded as a
 loss. The category's claims are output reductions. The bill is a different quantity, and on the bill the
-honest range so far is 0 to 37%, workload-dependent, with the model's own habit of bounding its reads
-deciding which end a session lands on.
+honest range so far is 0 to 37% at best and worse than nothing at worst, workload-dependent, with the
+model's own habit of bounding its reads deciding which end a session lands on. Since ab5 there is a second
+caveat: the two models do not spend alike. On Opus 5 cache reads carry the bill and a hook's lever is the
+carry multiplier; on Fable 5.1, where writes cost eighty times reads, cache writes were three quarters of
+both arms' cost and the lever is how much new text enters at all. A claim measured on one model does not
+transfer to the other, and this table's own row is the first thing that has to say so.
 
 ## Behind
 

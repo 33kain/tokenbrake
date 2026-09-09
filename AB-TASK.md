@@ -886,3 +886,72 @@ and the answers matter more than the bill: a cheaper wrong audit is not a saving
 line, the model, the Claude Code version, the commit, and the date, into a new section on this page. Nulls
 and losses go in with the same care as wins; that is the only reason anything on this page can be cited.
 
+### The result — ab5, run 2026-09-09, Fable 5.1 both arms, Claude Code 2.1.266
+
+Sessions `da261739…` (off) and `80c5d8cf…` (on), from `claude/ab5-off` and `claude/ab5-tb`, trees identical
+but for `.claude/settings.json`. Cost, cache and output from the session records; requests, entered,
+carried and trimmed from each arm's own step-12 report, both taken at the same point in the protocol.
+
+| | off | on (0.2.3) | change |
+|---|---|---|---|
+| API cost | $6.4787 | $5.5331 | **−14.6%** |
+| requests | 26 | 29 | **+12%** |
+| cache-read tokens | 4,739,441 | 5,345,262 | +13% |
+| cache-write tokens | 243,059 | 187,626 | −23% |
+| output tokens | 8,480 | 8,686 | +2% |
+| tool results entered | 97k | 95k | |
+| tool results carried | 1.5M | 1.6M | +7% |
+| Read calls | 9 | 12 | |
+| trimmed by the guard | 0 | 1 applied (≈ 6k kept out), 1 offered and not applied | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**By the rule written before the run, the −16% does not survive.** The on arm ran more requests than the
+off arm, which was the branch that says so. The cost did fall 14.6%, but 14.6% is inside the 21% band two
+identical arms have already produced on this page, so it is not a saving either. Two runs on Fable, on two
+guards, one −16% and one −14.6%-inside-noise with requests up: the honest reading is a null, and the
+README's Fable line loses its headline the same way the Opus line did. What can still be said is what the
+answers say — 12 of 12 identical, on both arms, on both models, in every round so far.
+
+**What the arms actually spent their money on, and it is not what Opus spent it on.** On Fable 5.1 the
+list rates are $0.25 per million cache reads and $20 per million cache writes, an eighty-fold gap; on
+Opus 5 it is $0.50 against $10, twenty-fold. So on this round cache *writes* were 75% of the off arm's
+bill and 68% of the on arm's, while cache reads were 18% and 24%. The guard's effect on the bill ran
+through the write column: 243k written against 188k, −23%, worth about $1.11 of the $0.95 the arm saved
+in total — the read column moved the other way and gave part of it back. Every earlier round on this page
+is an Opus round, where cache reads dominate and the guard's lever is the carry multiplier. On Fable the
+lever is how much *new* text enters at all, which is closer to what the whole category claims to do, and
+it still did not clear the noise band. The cost formula in `transcript.js` reproduces both arms' records
+exactly ($6.478700 and $5.533075 against $6.47870025 and $5.5330755), so the split is the API's, not an
+estimate.
+
+**A mechanism the round did make visible.** With no hooks, the off arm read the five large source files
+unbounded; Claude Code passed its own ceiling, wrote each result to
+`<config>/projects/<cwd>/<session>/tool-results/<id>.txt`, and the model read those files back whole.
+Its report's top eight carried results are all such files — 94% of everything it carried was Reads of
+Claude Code's own persisted outputs, not of the repository. The on arm's top eight are
+`extension/content.js`, `worker/src/index.js`, `extension/background.js` and `worker/test.mjs` by name:
+the Read cap fired first, so nothing was ever persisted to be re-read. This is the 0.2.1 rule's mechanism
+reproduced on a second model, and it is the clearest thing the guard did in this round. It is also worth
+noticing that it bought almost nothing: 1.5M carried against 1.6M. Keeping the model reading the file
+instead of a copy of the file is the right shape and was not, here, a saving.
+
+**Recorded against the instrument, not the result.** Two things about the report itself, found in these
+files and both cosmetic:
+
+- The `what` column truncates a path at about fifty characters, which on a persisted output cuts it off
+  inside the session id — `…/projects/-home-user-contexa/da261739-50c5-` — exactly before the
+  `tool-results/<id>.txt` that says what kind of file it is. The off arm's report is therefore readable
+  only by someone who already knows the path shape. Worth eliding the middle rather than the tail before
+  Saturday's table is built from these files.
+- Each arm's report was run at step 12 and so priced the session as it stood then: $6.13 and $5.13 against
+  the $6.4787 and $5.5331 the records ended at. The gap is the file write, commit and push that follow,
+  the same on both arms. The report has always been a snapshot of the session that runs it; the
+  `ab-results/real/` files inherit that and the Saturday table should say so.
+
+**A protocol wrinkle to fix before the Sonnet round.** Step 11 is `cat ~/.claude/settings.json`, there to
+prove the arm carried no user-scope hooks. On both arms the permission classifier refused the `cat`, and
+both arms fell back to `ls` and to the Read tool, which agreed the file does not exist. The step did its
+job, but by accident and not identically on the two arms, and a step whose command is refused is a step
+that measures the classifier. Replace it with `ls -la ~/.claude/` for the Sonnet round, which is not
+refused, answers the same question, and costs the same one call.
+

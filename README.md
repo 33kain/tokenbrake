@@ -8,18 +8,22 @@ that gets re-sent with every turn until you `/compact`. tokenbrake lowers that c
 keeps the parts that matter, and tells you afterwards what ate your tokens.
 
 **Measured (2026-09-06 to 2026-09-09).** The same read-only audit task on the same repository, run as Cowork sessions
-without the hooks and with them, cost taken from the session records, identical answers on every run. Fable 5.1, one
-run: $8.40 → $7.02 (−16%). Opus 5, four hooks-on runs against four hooks-off runs: off between $4.60 and $5.97, on
-between $3.77 and $9.63. The best on-run is −37% and is in an earlier version of this paragraph; the worst is +100%,
-a guard version that trimmed `sed -n` excerpts of source files and taught the model to read in 80-line ranges, 91
-requests for one audit. That is fixed (an excerpt of one file is now read like a Read), and the run after the fix
-still came out 30% over the off arm. On Opus 5, on this task, the hook has not shown a saving that survives
+without the hooks and with them, cost taken from the session records, identical answers on every run. Fable 5.1, two
+runs on two guard versions: $8.40 → $7.02 (−16%) on 0.2.0, and $6.48 → $5.53 (−15%) on 0.2.3 with requests going the
+wrong way, 26 → 29. Both are inside the 21% band two identically configured arms have already produced here, so the
+Fable reading is a null, not a saving. Opus 5, four hooks-on runs against four hooks-off runs: off between $4.60 and
+$5.97, on between $3.77 and $9.63. The best on-run is −37% and is in an earlier version of this paragraph; the worst
+is +100%, a guard version that trimmed `sed -n` excerpts of source files and taught the model to read in 80-line
+ranges, 91 requests for one audit. That is fixed (an excerpt of one file is now read like a Read), and the run after
+the fix still came out 30% over the off arm. On Opus 5, on this task, the hook has not shown a saving that survives
 repetition; what moves the bill by a factor of two is how the model chooses to read, and the guard's job is not to
-push it toward small ranges. Two debugging rounds and a small-feature round on Opus 5 saved nothing attributable:
-the model bounded its own reads and let 10–14k tokens of tool results in. The saving is whatever the model would
-otherwise have let in, and on the runs so far that is 0 to 37% at best and worse than nothing at worst; the report's
-"Tool results entered" line says which end a session was on. The protocol and every number, the losses included, are in
-[`AB-TASK.md`](AB-TASK.md).
+push it toward small ranges. The two models do not even spend alike: on Opus 5 cache reads dominate the bill, on Fable
+5.1 cache writes are three quarters of it, so the same hook is pulling a different lever on each. Two debugging rounds
+and a small-feature round on Opus 5 saved nothing attributable: the model bounded its own reads and let 10–14k tokens
+of tool results in. The saving is whatever the model would otherwise have let in, and on the runs so far that is 0 to
+37% at best and worse than nothing at worst, with no result on either model that survives being run twice; the
+report's "Tool results entered" line says which end a session was on. The protocol and every number, the losses
+included, are in [`AB-TASK.md`](AB-TASK.md).
 
 ## Install
 
