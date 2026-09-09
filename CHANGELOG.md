@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `report --compare <A> <B>`: two sessions side by side, the `AB-TASK.md` table as one command. Every report
+  also carries "At list price": the session's cost computed per request at its model's list price, cache
+  writes at the 1h rate; reproduces the Opus 5 A/B arms' session records to the sixth decimal.
 - `report` prints a "Repeat reads" line: same-shape reads (a Read of one path and range, or a single-file
   `cat`/`sed -n`/`head`/`tail`) that returned a file already in context in the same compaction window,
   with the tokens re-entered and carried. Measured, not acted on.

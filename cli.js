@@ -150,6 +150,18 @@ function report() {
   const ledger = loadLedger();
   let file = opt('--transcript');
   const found = transcript.findTranscripts(CFG_DIR);
+  if (flag('--compare')) {
+    /* report --compare A B: the AB-TASK.md table for two sessions, each a session-id prefix or a transcript path. */
+    const pick = (x) => fs.existsSync(x) ? x : (found.find(f => f.session.startsWith(x)) || {}).file;
+    const want = args.filter(x => !x.startsWith('--') && x !== 'report');
+    if (want.length !== 2) { console.log('Usage: tokenbrake report --compare <A> <B>, each a session-id prefix or a transcript path. --all lists sessions.'); return; }
+    const [fa, fb] = want.map(pick);
+    if (!fa || !fb) { console.log('No transcript for ' + (fa ? want[1] : want[0]) + '. tokenbrake report --all lists them.'); return; }
+    let A, B;
+    try { A = transcript.parseTranscript(fa); B = transcript.parseTranscript(fb); } catch (e) { console.log('Could not read: ' + e.message); return; }
+    console.log(transcript.renderCompare(A, B, ledger));
+    return;
+  }
   if (!file) {
     const want = opt('--session');
     if (flag('--all')) {
@@ -247,6 +259,8 @@ function help() {
       --all                           one line per session on disk, newest first
       --session=<prefix>              a particular session;  --transcript=<path> a particular file
       --top=N                         widen the ranking (default 10);  --ledger  the guard's own record only
+      --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
+                                      and was carried, what the guard trimmed — the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
 }
 

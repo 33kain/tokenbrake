@@ -125,6 +125,23 @@ filled by long back-and-forth, extended thinking, and code the model wrote, none
 Claude Code's own ~30,000-character save-to-a-file ceiling is a third mechanism, and it is high enough to be
 the problem rather than the fix: in the audit run the model kept re-reading those persisted files.
 
+## Compare two sessions
+
+```
+npx tokenbrake report --compare <A> <B>
+```
+
+Each argument is a session-id prefix (`tokenbrake report --all` lists them) or a transcript path. The output is
+the table `AB-TASK.md` built by hand: cost at list price, requests, cache reads and writes, output, what tool
+results entered and were carried, what the guard trimmed, repeat reads, with B's change against A. The cost
+line also appears in every single-session report; it is computed per request at that request's model's list
+price, cache writes at the one-hour rate Claude Code uses, and it reproduces the Opus 5 A/B arms' session
+records to the sixth decimal. A model without a listed price is reported as unpriced, not guessed.
+
+Two sessions differ by more than their configuration. On one task, identical arms came out 21% apart in cost on
+nothing but how the model planned; the table says what happened, the protocol in `AB-TASK.md` says what it
+means.
+
 ## Configure
 
 Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
