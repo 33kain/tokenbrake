@@ -387,6 +387,44 @@ five by tests and reading. Cost $2.83 → $2.12, but the guard trimmed three 2k 
 reads: about 1% attributable, the rest planning variance (17 requests against 24). The closed flaw did not move the result.
 Measurements on this repository are complete: audit 16% / 37%, debugging ≈ 0% / ≈ 1%, identical answers everywhere.
 
+**Twenty-eighth card (2026-09-07 to 09-09): the second week, in one place.** Released 0.2.1 (cap on persisted
+outputs: Claude Code's `tool-results/` and our `out/`, 80 lines whatever the size; 24% of the writing session's carry)
+and 0.2.2 (`PostToolUseFailure` registered; context after flagged lines; pass markers never flagged; the trim budgeted
+context-first). Report gained: cost at list price (matches session records to six decimals on Opus 5), `--compare A B`,
+"Repeat reads", "Under the trim threshold", and credit only for trims the model saw. Measured and recorded in
+`AB-TASK.md`: readMaxBytes 60k→25k cost +10% (return trips), feature round ≈ 0 with noise measured at 21% between
+identical arms, errctx v2/v3 nulls by construction. Found and recorded: Claude Code ignores `updatedToolOutput` on
+`PostToolUseFailure` (2.1.261, 2.1.266; debug log says "unrecognized keys"), so no hook can trim a failing test run;
+outputs over its ~30,000-char ceiling reach the hook truncated and the model as a 2 KB preview. `LANDSCAPE.md`: rtk,
+chop, squeez, claude-context-optimizer, shunt, against the JetBrains benchmark (rtk +7.6% on the bill). First Windows
+run: everything works. Project-scope hooks on both repositories; every session leaves `ab-results/real/<date>-<id>.txt`
+on its branch in `33kain/contexa`.
+
+## Next session — Saturday 2026-09-13, the distribution table and the post
+
+Nothing to build before then. The task is collection and one table, then publishing. Steps:
+
+1. In a checkout of `33kain/contexa`, run the loop in `ab-results/real/README.md` (fetch every `claude/…` branch,
+   copy each `ab-results/real/*.txt`, dedupe by name). Expect one file per session since 2026-09-06; the writing
+   session's own file is `2026-09-06-ced42a1a.txt` and a second one dated 09-09.
+2. Per file, read off: requests; "Tool results entered ≈ N"; "carried through later requests ≈ N"; "tokenbrake
+   trimmed N of them: ≈ N tokens kept out, ≈ N token-reads not carried" (files from before 0.2.2's report may
+   over-credit, see the Windows section of `AB-TASK.md`; note which version wrote each); "Under the trim threshold"
+   and "Repeat reads" where present (reports from 0.2.2+ only); "At list price" where present.
+3. The table: one row per session, then median / min / max per column, plus kept-out as a share of entered and
+   not-carried as a share of carried. Put it in `AB-TASK.md` under a new heading "Real sessions, one week", and the
+   median row into README's "Measured" paragraph as the third number after the audit and debugging figures.
+4. The post: the draft is in this repository's owner's scratch (sent to them as `tokenbrake-post.md` on 09-09), with a
+   `[TABLE: …]` slot; fill it from step 3, commit the post as `POST.md`, and publish in this order: Show HN, then
+   r/ClaudeCode, then X. Lead with the bill and the nulls; cite the JetBrains benchmark; do not claim more than the
+   table shows.
+5. Only if the table says small results dominate (the "Under the trim threshold" share is high across sessions):
+   shape filters for small output become the next build, A/B'd with the protocol before default-on. Only if
+   "Repeat reads" is common: repeat-read suppression, compaction-aware. Otherwise neither.
+
+Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
+feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`.
+
 ## Launch vehicle
 
 A "Does September 14 hit you?" calculator: plan tier in, current weekly usage in, projected shortfall out.
