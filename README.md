@@ -49,9 +49,11 @@ Claude Code would also fail to start — silently, with every result going throu
 
 ## What it does
 
-**Shell output trim** (PostToolUse on `Bash` / `PowerShell`). Output over 6,000 chars is replaced by the first
-40 lines, the last 40 lines, and up to 20 lines from the middle that look like errors or warnings, each with
-its line number. The full output is saved to `~/.claude/tokenbrake/out/` and the trimmed result names the path,
+**Shell output trim** (PostToolUse on `Bash` / `PowerShell`). Output over 6,000 chars is replaced by up to 20
+lines from the middle that look like errors or warnings, each with up to 3 lines after it (the assertion, the
+expected/actual pair, the first stack frame) and its line number, plus the first and last lines of the output,
+up to 40 each, as many as fit in the 6,000. A line that opens with a pass marker (`ok`, `PASS`, `✓`) is never
+taken for an error, whatever its name says. The full output is saved to `~/.claude/tokenbrake/out/` and the trimmed result names the path,
 so Claude can `Grep` or `Read` it if it needs more. Nothing is rewritten or "compressed" — what Claude sees is a
 predictable head/tail excerpt of the real output.
 
@@ -152,6 +154,7 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
   "headLines": 40,
   "tailLines": 40,
   "keepErrorLines": 20,
+  "errorContextLines": 3,
   "readMaxBytes": 60000,
   "readLimitLines": 300,
   "persistedLimitLines": 80,

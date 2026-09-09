@@ -56,7 +56,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('every key of the incoming tool_response survives',
     !!u && ['stdout', 'stderr', 'interrupted', 'isImage', 'noOutputExpected'].every(k => k in u));
   t('trimmed text is in stdout and is much shorter', !!u && u.stdout.length < noisy.length / 3, u && `${noisy.length} -> ${u.stdout.length}`);
-  t('stdout carries the tokenbrake marker with the omitted count', !!u && /\[tokenbrake\] 320 lines omitted here/.test(u.stdout));
+  t('stdout carries the tokenbrake marker with the omitted count, and the count matches what is shown',
+    !!u && (() => { const m = /\[tokenbrake\] (\d+) lines omitted here/.exec(u.stdout); if (!m) return false;
+      const shown = u.stdout.split('\n').filter(l => /^line \d+ filler/.test(l)).length; return Number(m[1]) + shown === 400; })(),
+    u && (u.stdout.match(/\[tokenbrake\] \d+ lines omitted/) || [''])[0]);
   t('head and tail are the real first and last lines', !!u && u.stdout.startsWith('line 1 filler') && u.stdout.trimEnd().endsWith('line 400 filler text to make the output long enough to trip the guard'));
   t('all three seeded lines from the omitted middle are kept, numbered',
     !!u && /L150: ERROR: seeded failure alpha/.test(u.stdout) && /L220: warning: seeded warning beta/.test(u.stdout) && /L301: Exception: seeded gamma/.test(u.stdout));
@@ -397,6 +400,77 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     saved >= FLOOR, `${(saved * 100).toFixed(1)}%, ${cA} -> ${cB} token-reads`);
 
   rmSync(cfgAB, { recursive: true, force: true });
+}
+
+/* ---- context after flagged lines ------------------------------------------
+   A FAIL line alone names the test. The lines after it carry the assertion and the first frame, and a
+   model that gets only the name comes back for the rest with a whole extra request. */
+{
+  console.log('\n-- PostToolUse: context after flagged lines');
+  const lines = Array.from({ length: 400 }, (_, i) => `line ${i + 1} filler text to make the output long enough to trip the guard`);
+  lines[149] = 'FAIL  src/app.test.js > renders the total';
+  lines[150] = 'AssertionError: expected 41 to equal 42';
+  lines[151] = '    at Object.<anonymous> (src/app.test.js:88:5)';
+  lines[152] = '    at Promise.then.completed (node_modules/jest-circus/build/utils.js:298:28)';
+  lines[153] = '    at new Promise (<anonymous>)';              // 4th line after: beyond the default of 3
+  lines[219] = 'warning: deprecated call at line 220';
+  lines[220] = '';                                             // a blank line ends the window
+  lines[221] = 'this line follows the blank and must not be kept';
+  lines[300] = 'Exception: seeded gamma at line 301';
+  lines[301] = 'Error: the next line is flagged too';           // flagged inside a window: still one block
+  const text = lines.join('\n');
+  const run = (cfgExtra) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-ctx-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify({ session_id: 'ctx', tool_use_id: 'toolu_ctx', tool_name: 'Bash',
+      tool_input: { command: 'npm test' }, tool_response: bashResp(text) }), encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    rmSync(dir, { recursive: true, force: true });
+    const o = parse(r.stdout); return o && o.hookSpecificOutput.updatedToolOutput.stdout;
+  };
+  const out = run(null);
+  t('the FAIL line is kept with the assertion and two frames after it',
+    /L150: FAIL/.test(out) && /L151: AssertionError: expected 41 to equal 42/.test(out) && /L152: +at Object/.test(out) && /L153: +at Promise/.test(out), (out.match(/L15\d: .*/g) || []).join(' | '));
+  t('the fourth line after is not kept at the default of 3', !/L154:/.test(out));
+  t('a blank line ends the window', /L220: warning/.test(out) && !/L222:/.test(out) && !/must not be kept/.test(out));
+  t('a flagged line inside a window makes one block, not two', /L301: Exception[^\n]*\n  L302: Error/.test(out));
+  t('gaps between blocks are shown as one … line', (out.match(/\n  …\n/g) || []).length === 2);
+  t('the header says how many lines follow each', /each with up to 3 lines after it/.test(out));
+  const zero = run({ errorContextLines: 0 });
+  t('errorContextLines 0 keeps the flagged lines alone, as before', /L150: FAIL/.test(zero) && !/L151:/.test(zero) && !/lines after it/.test(zero));
+  t('the result stays within maxChars: head and tail yield to the context, not the other way round', out.length <= 6000, `out=${out.length}`);
+
+  /* The real contexa suite: test names mention errors, so "  ok   error render call passes resp through"
+     matched ERR, twenty such lines filled the budget, and the two real FAIL lines further down never made
+     the cut. A pass marker at the start of a line wins over anything in its name. */
+  const suite = Array.from({ length: 400 }, (_, i) => {
+    const n = i + 1;
+    if (n > 60 && n < 200 && n % 4 === 0) return `  ok   error ${n} render call passes the failure through`;
+    if (n === 214) return '  FAIL turn one is pinned through the trim  first=81';
+    if (n === 215) return '  expected 1, got 81';
+    if (n === 218) return '  FAIL and turn one still survives that trim';
+    return `  ok   check ${n} passes`;
+  }).join('\n');
+  const rr = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify({ session_id: 'ctx2', tool_use_id: 'toolu_ctx2', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, tool_response: bashResp(suite) }), encoding: 'utf8', env });
+  const so = parse(rr.stdout).hookSpecificOutput.updatedToolOutput.stdout;
+  t('passing lines whose names mention errors are not flagged', !/L\d+:   ok   error/.test(so));
+  t('so the real FAIL lines make the cut, with the line after them', /L214:   FAIL turn one/.test(so) && /L215:   expected 1, got 81/.test(so) && /L218:   FAIL and turn one/.test(so));
+  t('and that result is within maxChars too', so.length <= 6000, `out=${so.length}`);
+
+  /* The budget. Context that would take more than half of maxChars on its own is dropped and the flagged
+     lines stand alone; head and tail then shrink to fit, down to ten lines each. */
+  const wide = Array.from({ length: 400 }, (_, i) => {
+    const n = i + 1;
+    if (n > 60 && n < 340 && n % 6 === 0) return `Error: seeded ${n} ` + 'x'.repeat(150);
+    if (n > 60 && n < 340 && n % 6 !== 0) return `frame ${n} ` + 'y'.repeat(150);
+    return `line ${n}`;
+  }).join('\n');
+  const rw = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify({ session_id: 'ctx3', tool_use_id: 'toolu_ctx3', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, tool_response: bashResp(wide) }), encoding: 'utf8', env });
+  const wo = parse(rw.stdout).hookSpecificOutput.updatedToolOutput.stdout;
+  t('when the context alone would take over half of maxChars, it is dropped and the flagged lines stay',
+    !/lines after it/.test(wo) && /L66: Error: seeded 66/.test(wo) && !/L67: frame/.test(wo), `out=${wo.length}`);
+  t('head and tail never shrink below ten lines each', /^line 1\n/.test(wo) && /\nline 10\n/.test(wo) && /\nline 391\n/.test(wo) && /\nline 400$/.test(wo));
 }
 
 /* ---- the repeat-reads line ------------------------------------------------

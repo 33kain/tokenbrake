@@ -22,6 +22,7 @@ const DEFAULTS = {
   headLines: 40,
   tailLines: 40,
   keepErrorLines: 20,    // lines from the middle that look like errors/warnings are kept
+  errorContextLines: 3,  // and this many lines after each, up to a blank line: the assertion, the expected/actual, the first frame
   readMaxBytes: 60000,   // Read without offset/limit on a file bigger than this gets capped
   readLimitLines: 300,
   persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
@@ -35,6 +36,10 @@ const DEFAULTS = {
    too big to read whole, whatever readMaxBytes says. */
 const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
 
+/* A line that opens with a pass marker is a passing test whatever its name says: "ok   error render call
+   passes resp through" is not an error. Without this, a suite whose test names mention errors fills the
+   keepErrorLines budget with green lines and the real FAIL further down never makes the cut. */
+const PASS = /^\s*(?:ok|pass(?:ed)?|✓|✔|√)\b/i;
 const ERR = /\b(error|err!|fail(ed|ure|ing)?|exception|traceback|panic|fatal|warn(ing)?|not found|cannot|denied|refused)\b|✗|✖/i;
 
 function loadConfig() {
@@ -61,21 +66,54 @@ function trimText(text, cfg, savedPath) {
   let out;
 
   if (lines.length > cfg.headLines + cfg.tailLines + 5) {
-    const head = lines.slice(0, cfg.headLines);
-    const tail = lines.slice(-cfg.tailLines);
-    const midStart = cfg.headLines, midEnd = lines.length - cfg.tailLines;
-    const flagged = [];
-    for (let i = midStart; i < midEnd && flagged.length < cfg.keepErrorLines; i++) {
-      if (ERR.test(lines[i])) flagged.push(`  L${i + 1}: ${short(lines[i], 200)}`);
-    }
-    const omitted = midEnd - midStart;
-    const marker = [
+    /* Flagged lines from the middle, each with the lines that follow it up to a blank line or
+       errorContextLines, whichever comes first. A FAIL line alone names the test; the assertion, the
+       expected/actual pair and the first stack frame are the lines after it, and a model that gets only
+       the name comes back for the rest: a whole extra request that re-reads everything. Windows that
+       touch are merged; a gap between windows is shown as one "…" line. */
+    const chars = (arr) => arr.reduce((n, l) => n + l.length + 1, 0);
+    let headN = cfg.headLines, tailN = cfg.tailLines;
+    let ctx = Math.max(0, Number(cfg.errorContextLines) || 0);
+    const flaggedLines = (ctx) => {
+      const midStart = headN, midEnd = lines.length - tailN;
+      const keep = new Map();
+      let flaggedCount = 0;
+      for (let i = midStart; i < midEnd && flaggedCount < cfg.keepErrorLines; i++) {
+        if (PASS.test(lines[i]) || !ERR.test(lines[i])) continue;
+        flaggedCount++;
+        keep.set(i, true);
+        for (let j = i + 1; j <= i + ctx && j < midEnd; j++) {
+          if (!lines[j].trim()) break;
+          keep.set(j, true);
+        }
+      }
+      const out = [];
+      let prev = null;
+      for (const i of [...keep.keys()].sort((a, b) => a - b)) {
+        if (prev != null && i !== prev + 1) out.push('  …');
+        out.push(`  L${i + 1}: ${short(lines[i], 200)}`);
+        prev = i;
+      }
+      return out;
+    };
+    const marker = (flagged) => [
       '',
-      `[tokenbrake] ${omitted} lines omitted here (${text.length.toLocaleString()} chars total).${note}`,
-      ...(flagged.length ? [`[tokenbrake] error/warning-looking lines from the omitted region:`, ...flagged] : []),
+      `[tokenbrake] ${lines.length - tailN - headN} lines omitted here (${text.length.toLocaleString()} chars total).${note}`,
+      ...(flagged.length ? [`[tokenbrake] error/warning-looking lines from the omitted region${ctx ? `, each with up to ${ctx} lines after it` : ''}:`, ...flagged] : []),
       ''
     ];
-    out = [...head, ...marker, ...tail].join('\n');
+    /* Budget, in this order: the flagged lines and their context first, since they are what the model
+       would otherwise come back for; then head and tail fill what is left of maxChars, down to a floor
+       of ten lines each. Context that would take more than half the budget on its own is dropped and the
+       flagged lines stand alone, as before 0.2.2. */
+    let flagged = flaggedLines(ctx);
+    if (ctx && chars(flagged) > cfg.maxChars / 2) { ctx = 0; flagged = flaggedLines(0); }
+    const total = () => chars(lines.slice(0, headN)) + chars(marker(flagged)) + chars(lines.slice(lines.length - tailN));
+    while (total() > cfg.maxChars && (headN > 10 || tailN > 10)) {
+      if (headN >= tailN && headN > 10) headN--; else if (tailN > 10) tailN--; else headN--;
+    }
+    if (headN !== cfg.headLines || tailN !== cfg.tailLines) flagged = flaggedLines(ctx);   // the middle grew: scan it once more
+    out = [...lines.slice(0, headN), ...marker(flagged), ...lines.slice(lines.length - tailN)].join('\n');
   } else {
     // Few lines but huge (minified output, one giant line): cut by characters.
     const half = Math.floor(cfg.maxChars / 2);
