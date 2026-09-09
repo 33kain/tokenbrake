@@ -1094,3 +1094,21 @@ machine. Nothing here says anything about how tokenbrake performs on Sonnet, and
 that it does. The JetBrains comparison stays what it has always been on this page — their measurement of
 their tool on their model, cited as theirs.
 
+### ab6 — closed unmeasured, by decision
+
+Not retried a third time. The two ways past the block were a second message confirming the first, which
+breaks the one-message invariant every other round on this page was run under, or a person typing the
+prompt on a real machine. The owner chose neither: Sonnet 5 comes out of the cloud protocol, and this page
+carries no tokenbrake number for it.
+
+What that means for anything written from this file. The audit shape has been measured on Opus 5 (four
+runs each way) and Fable 5.1 (two runs each way). It has not been measured on Sonnet 5, and no sentence
+anywhere may imply otherwise — not by omission, not by "on Claude models", not by putting a tokenbrake
+figure in the same table as the JetBrains figure without a column that says which model each is. The
+JetBrains benchmark stays cited as what it is: their measurement, of their tool, on a model this page has
+no reading for. The comparison the launch post wanted, one task, two tools, one model, does not exist
+yet and the honest thing is to say so.
+
+The `claude/ab6-off` and `claude/ab6-tb` branches on `33kain/contexa` stay where they are, carrying the
+arm configuration and no results. If Sonnet is ever run by hand on a real machine, they are the arms.
+
