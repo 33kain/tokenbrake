@@ -641,6 +641,61 @@ The run also produced two findings, one of them a fault in the report:
   and the user had just installed user scope too, so the guard ran twice. Harmless, doubled spawn cost;
   `status` now says so.
 
+## Three arms: off, rtk, tokenbrake — run 2026-09-09, Opus 5, Claude Code 2.1.266
+
+The head-to-head the launch post wanted: the same twelve-step audit, three Cowork sessions from the same
+commit of `33kain/contexa`, differing only in what sat in front of the tools. One message each. The
+expectations were written down before the run: rtk reduces output and stays within the 21% noise on the
+bill; tokenbrake around −30% on this shape, where it had measured −37% and −16% before.
+
+| | off | rtk | tokenbrake 0.2.2 |
+|---|---|---|---|
+| API cost | $4.82 | $5.34 (void) | **$9.63** |
+| requests | 24 | 33 | **91** |
+| cache-read tokens | 4,551,872 | 6,553,719 | 14,929,639 |
+| output tokens | 8,126 | 11,328 | 16,289 |
+| tool results entered (report) | 93k | 90k | 84k |
+| tool results carried | 1.1M | 1.5M | 3.9M |
+| Read calls | 8 | 0 | 0 |
+| Bash calls | 15 | 32 | 90 |
+| trimmed by the guard | 0 | 0 | 4 |
+| answers | 12 of 12 | 12 of 12, identical | 12 of 12, identical |
+
+**The rtk arm is void.** The permission classifier refused `curl … | sh`, and refused `sh /tmp/rtk-install.sh`
+after the session had fetched the script; no binary, no hook. In a Cowork auto-mode container rtk cannot be
+installed by the session, so a cloud head-to-head is not available with this protocol. The arm ran on
+without any hook and is a second no-hook reading: $5.34 against $4.82, 33 requests against 24, the model
+this time reading files as large `sed -n` ranges instead of whole Reads. The rtk comparison, if it happens,
+happens on a machine where rtk is already installed.
+
+**The tokenbrake arm cost twice the off arm, and the mechanism is the one JetBrains described for rtk.**
+The model never used Read. It read the files with `sed -n`, and after its first excerpt,
+`sed -n '1,120p' extension/content.js`, was trimmed (2k tokens to 1k), every excerpt that followed was 80
+lines: `120,200p`, `200,280p`, `280,360p`, on through all of `content.js`, `index.js`, `background.js`,
+`test.mjs` and `capture.mjs`. Eighty lines of this source is about 5,000 characters, under the 6,000 the
+trim fires at. The model learned the threshold from one trimmed result and sized every read to stay under
+it: 68 same-shape reads, 91 requests, each one re-reading the whole context, 14.9M cache reads against 4.6M.
+Same answers, twice the bill.
+
+Two earlier hooks-on runs of this shape did not do this: 2026-09-06, Opus 5, $3.77 with bounded Reads and
+Grep; 2026-09-07, the readMaxBytes arm A, $5.13, 25 requests, `content.js` in six Read chunks of 300 lines.
+So the hooks-on range on this one shape is now $3.77 to $9.63 with the off arm at $4.82 to $5.97, and the
+model's reading strategy, not the hook, decides which. The −37% in the README is one of three runs, and the
+post has to say so.
+
+**What the run points at.** The trim treats every shell result the same, and a `sed -n` excerpt of a source
+file is not test noise: it is a read, the same act as the Read tool, which the guard leaves whole up to
+60 KB. The guard therefore does two inconsistent things to the same file: a Read of 40 KB passes, a
+`sed -n 1,400p` of 20 KB is cut to head, tail and error-looking lines, which for source is the wrong
+three things to keep. A model that meets that once has every reason to stay under 6,000 characters, and
+80-line chunks are what that looks like. The candidate fix is to treat a single-file `cat`/`sed -n`/`head`/
+`tail` the way Read is treated: untouched up to `readMaxBytes`, capped above it. `readKey` in
+`transcript.js` already recognises the shape. That is a guard change and gets the same A/B as everything
+else before it ships: off against on, this task, two arms, the `requests` column deciding.
+
+Until that runs, the honest sentence about this shape is: on a read-heavy audit the hook has saved 37%,
+16%, and cost 100%, on the same task, depending on how the model chose to read.
+
 ### The fix, measured — ab4, 2026-09-09, Opus 5, Claude Code 2.1.266
 
 Same audit, same commit of `33kain/contexa`, off against the "file excerpts are reads" guard. Decision rule
