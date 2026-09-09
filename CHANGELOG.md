@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The shell trim keeps up to `errorContextLines` (default 3) lines after each error-looking line from the
+  omitted middle, stopping at a blank line: the assertion, the expected/actual pair, the first stack frame.
+  A `FAIL` line alone names the test, and a model that gets only the name comes back for the rest with a
+  whole extra request. Touching windows merge; gaps show as one `…` line. Set it to 0 for the old behaviour.
+  The budget runs in that order too: flagged lines and context first, then head and tail fill what is left
+  of `maxChars` (down to ten lines each), so a trimmed result now stays within `maxChars` instead of near it.
+  Context that would take more than half the budget on its own is dropped and the flagged lines stand alone.
+- A line that opens with a pass marker (`ok`, `PASS`, `✓`) is never flagged as error-looking, whatever its
+  test name says. Found on the CONTEXA suite: "ok   error render call passes resp through" had been filling
+  the `keepErrorLines` budget and the real `FAIL` lines further down never made the cut.
 - `report --compare <A> <B>`: two sessions side by side, the `AB-TASK.md` table as one command. Every report
   also carries "At list price": the session's cost computed per request at its model's list price, cache
   writes at the 1h rate; reproduces the Opus 5 A/B arms' session records to the sixth decimal.
