@@ -49,7 +49,7 @@ Claude Code would also fail to start — silently, with every result going throu
 
 ## What it does
 
-**Shell output trim** (PostToolUse on `Bash` / `PowerShell`). Output over 6,000 chars is replaced by up to 20
+**Shell output trim** (PostToolUse and PostToolUseFailure on `Bash` / `PowerShell`; a command that exits non-zero is a different hook event, and until 0.2.2 the guard never saw one). Output over 6,000 chars is replaced by up to 20
 lines from the middle that look like errors or warnings, each with up to 3 lines after it (the assertion, the
 expected/actual pair, the first stack frame) and its line number, plus the first and last lines of the output,
 up to 40 each, as many as fit in the 6,000. A line that opens with a pass marker (`ok`, `PASS`, `✓`) is never
