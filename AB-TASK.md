@@ -1112,3 +1112,22 @@ yet and the honest thing is to say so.
 The `claude/ab6-off` and `claude/ab6-tb` branches on `33kain/contexa` stay where they are, carrying the
 arm configuration and no results. If Sonnet is ever run by hand on a real machine, they are the arms.
 
+## Small results, two readings — for Saturday's step 5
+
+The Saturday plan makes shape filters for small output conditional on the real-session files showing that
+small results dominate carried context. Two reports written today, both from ordinary working sessions on
+`33kain/tokenbrake` rather than from A/B arms, already point the same way:
+
+| session | shell results at or under `maxChars` | tokens entered | carried | share of all carried |
+|---|---|---|---|---|
+| `c5ad7352` (this one, 104 requests) | 79 of 81 | ≈ 18k | ≈ 1.1M | **57%** |
+| the same session at 58 requests | 49 of 51 | ≈ 12k | ≈ 376k | **54%** |
+
+So on a long working session, the guard's threshold leaves about 97% of shell results untouched and those
+untouched results carry more than half of everything carried. That is the gap the whole rest of the
+category aims at, and it is not small. It is also exactly where rtk lost money: these results are small
+because the model bounded them, and compressing what a model deliberately kept short is how a hook earns
+return trips. Two readings from one repository decide nothing; they are here so Saturday's table is read
+against a number that already exists rather than in the abstract, and so the decision rule for that build
+is written knowing the share will probably be high.
+
