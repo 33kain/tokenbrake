@@ -748,3 +748,72 @@ guard (HANDOFF.md, "Next session", step 1).
 
 The rtk comparison stays out of reach in the cloud and moves to the owner's machine, where it now has a
 tokenbrake arm that at least does no harm on this shape.
+
+## The twelve-step audit — the task as it has been pasted since the split
+
+The eleven-step block at the top of this file is the original, and its step 10 reads `tokenbrake/HANDOFF.md`,
+a path that stopped existing when the package was split out of `33kain/contexa` on 2026-09-06. Every audit
+round since — the three-arm ab3 and the fix's ab4 — pasted a twelve-step version instead, which was never
+written down here. It is written down now, so a later round measures the same workload and not a
+reconstruction of it. Only step 12's version pin moves between rounds, to whatever guard is under test.
+
+```
+Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write twelve lines, one per step, then paste the output of steps 11 and 12 verbatim.
+
+1. Run `npm test` and report the number of checks that passed and failed.
+2. Run `node build.mjs` and report the zip name it prints.
+3. Read extension/content.js in full and name the function that decides which line, if any, the label row carries.
+4. Read worker/src/index.js in full and name the constant that caps the brief's length.
+5. Read extension/background.js in full and say how long a staged brief lives before it expires.
+6. Read worker/test.mjs in full and count the lines that begin with two spaces followed by `t(`.
+7. Read scripts/screenshots/capture.mjs in full and name the Playwright call that opens the browser.
+8. Run `git log --stat -40` and name the file that appears most often in it.
+9. Run `grep -rn "Start fresh" publishing/` and count the matching lines.
+10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
+11. Run `cat ~/.claude/settings.json` and paste its output.
+12. Run `npx --yes tokenbrake@<version> report --top=8` and paste its full output.
+```
+
+Step 11 exists to prove the arm carried no user-scope hooks: configuration differences go on the branch,
+never into `~/.claude`, because the permission classifier refuses writes there about one time in four. On
+every run so far the file has not existed, and "No such file or directory" is the passing answer.
+
+## The audit on Fable 5.1 with the excerpt guard — ab5, written 2026-09-09, before the run
+
+The one unrepeated reading in the README is Fable 5.1's −16% on this shape, measured 2026-09-06 against
+guard 0.2.0 — the guard that has since been shown to teach Opus eighty-line `sed` ranges and cost twice the
+no-hook bill (ab3), and that 0.2.3 replaced. So the Fable figure was measured with a guard nobody would
+ship today, and it is the number the launch post would lead with. This round re-measures it against the
+guard that actually ships.
+
+**Setup.** Two Cowork sessions on `33kain/contexa`, Fable 5.1 both arms, one message each, the twelve-step
+audit above with step 12 pinned to `tokenbrake@0.2.3`. Both arms branch from the same commit, the 0.2.3
+repin (`claude/tokenbrake-0.2.3`); the trees are identical but for `.claude/settings.json`, which is
+`{"hooks": {}}` on the off arm and the project install on the on arm. Results to
+`ab-results/ab5-off.txt` and `ab-results/ab5-tb.txt` on `claude/ab5-off` and `claude/ab5-tb`.
+
+**One difference from ab4 to keep in view.** Step 12 runs the 0.2.3 report, which credits a trim only when
+the model saw it; ab3 and ab4 ran the 0.2.2 report, which credited every offered trim. So ab5's
+"tokens kept out" is comparable to nothing before it, and is the more honest of the two. Cost, requests
+and cache reads come from `get_session` either way and are unaffected.
+
+**Expectation, fixed before the run.** The on arm's requests at or below the off arm's. The reasoning: on
+this task the guard's only remaining action on the large source files is nothing at all — 0.2.3 leaves a
+`sed -n '1,400p'` untouched up to `readMaxBytes` — so what it trims is `npm test`, the build, `git log
+--stat` and the greps, none of which the model needs to come back for. If it still drives requests up, the
+mechanism is the same return-trip effect that cost rtk 7.6% at JetBrains, arriving through some door this
+guard was not supposed to leave open, and that is worth knowing on a second model.
+
+**Decision rule, fixed before the run.** Nothing ships or unships on this run; 0.2.3 is already released.
+What the run decides is what the README and the post may say about Fable:
+
+- On-arm requests at or below off-arm, and cost not worse than the off arm by more than the 21% noise
+  band: the −16% survives its guard change, and the README keeps a Fable saving, stated as two runs on
+  two guards.
+- On-arm requests above off-arm: the −16% does not survive, and the README's Fable line gets the same
+  treatment the Opus line already got — the best of N runs, not the number — with both readings printed.
+- Cost apart by less than 21% with requests level: a null, recorded as one, and the Fable claim comes out
+  of the README's headline and stays only in this file.
+
+Answers must be identical across the arms in every case; a difference there voids the round.
+
