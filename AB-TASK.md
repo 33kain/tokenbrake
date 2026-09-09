@@ -24,6 +24,10 @@ between the two readings of an arm.
 4. Copy the session's final answer (ten lines plus the report block) into the
    chat with Claude that runs the comparison.
 
+The one-message seeded protocol works on Opus 5 and Fable 5.1; Sonnet 5 in auto mode asks for human
+confirmation before it will execute, so Sonnet is outside the protocol — a limit of the protocol, not a
+result (`ab6`).
+
 ## The task (paste verbatim)
 
 ```
