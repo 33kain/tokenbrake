@@ -817,75 +817,6 @@ What the run decides is what the README and the post may say about Fable:
 
 Answers must be identical across the arms in every case; a difference there voids the round.
 
-## The rtk head-to-head — the procedure, for the owner's Windows machine
-
-Written 2026-09-09, not run. The cloud container cannot install rtk: ab3's rtk arm was void because the
-permission classifier refused `curl … | sh` and then refused `sh /tmp/rtk-install.sh` after the session had
-already fetched the script, so the arm ran with no binary and no hook and became a second no-hook reading.
-That is not rtk's fault and it is not a result about rtk. A real comparison needs a machine where rtk is
-installed by a person before any session starts, which means the owner's Windows box. Everything below is
-for a person to run by hand; nothing in it should be handed to a session to do for itself, because the
-thing being measured is what the tooling does to a session that does not know it is being measured.
-
-**What it answers.** JetBrains measured rtk at +7.6% on the bill on Sonnet 5 across 425 trials. This
-repository has measured tokenbrake on one audit shape at between −37% and +100% on Opus 5 depending on the
-guard and the run. Neither number says how the two compare on the same task, same machine, same day. Three
-arms on one workload does not settle that either — it is three sessions, not 425 — but it is the first
-reading where both tools face the same twelve steps, and if the two land on opposite sides of the off arm
-that is worth knowing before the post claims anything about the category.
-
-**Before you start.** A clone of `33kain/contexa` at a commit you write down, `npm install` already done
-so no arm pays for it, Node and Git on PATH, and `claude --version` recorded. Close every other Claude Code
-session: the five-hour window is shared and a background session moves the numbers. Budget about an hour
-and roughly $15 at list price; the three arms have cost $4.60 to $9.63 each on Opus 5.
-
-**The invariants, the same ones every round on this page has held to.** One model for all three arms, named
-in the record. One message per arm, the twelve-step audit above pasted verbatim, step 12 pinned to the
-tokenbrake version under test. No answering follow-up questions, no second message, no matter how the
-session asks. A fresh session per arm, never `/clear` in the same one, because the cost comes from the
-session record and a cleared session keeps its old requests. And exactly one tool installed at a time:
-verify it, do not assume the previous arm's uninstall worked.
-
-**Arm 1, off.** Neither tool installed.
-
-```
-rtk init -g --uninstall          # even if you think it is not installed
-npx --yes tokenbrake uninstall   # user scope
-npx --yes tokenbrake uninstall --project    # in the contexa clone, if it has project hooks
-```
-
-The contexa clone carries project-scope tokenbrake hooks in `.claude/settings.json` on `main`, so for this
-arm either uninstall them there or check out a branch whose `.claude/settings.json` is `{"hooks": {}}` —
-`claude/ab5-off` is exactly that. Confirm with `npx tokenbrake status`: it should report nothing installed
-at either scope. Then start Claude Code in the clone, paste the audit, and let it finish.
-
-**Arm 2, rtk.** `rtk init -g`, and confirm rtk's own status command reports the hook. tokenbrake stays
-uninstalled at both scopes — `npx tokenbrake status` again, because a leftover project hook is the easiest
-way to void this arm. Fresh session, same paste.
-
-**Arm 3, tokenbrake.** `rtk init -g --uninstall`, then `npx tokenbrake init`, then `npx tokenbrake status`,
-which spawns each hook once and will say if the node path is wrong. Fresh session, same paste.
-
-**Reading the result.** Each arm's cost, requests, cache reads and output come from its session record;
-`npx tokenbrake report --all` lists the sessions on disk newest first, and
-`npx tokenbrake report --compare <A> <B>` prints two of them side by side with the change column, which is
-this file's table. Run it twice, off against rtk and off against tokenbrake. The arms' own reports give
-entered, carried and trimmed. Note that on the rtk arm tokenbrake's report still works — it reads the
-transcript, not its own ledger — so it will say what entered under rtk, which is the number rtk's own
-claims are about.
-
-**The rule for reading it, and it is the one that has voided results here before.** The requests column
-decides, not the cost column. Two identical arms on this page came out 21% apart in cost on nothing but how
-the model planned its reads, so any cost difference inside that band is a null and gets recorded as one.
-A tool that lowers what enters and raises requests has lost, whatever its output-reduction number says;
-that is the mechanism JetBrains found and the one that cost tokenbrake 0.2.2 twice the no-hook bill on
-this exact task. And if the three arms give different answers to any of the twelve steps, the round is void
-and the answers matter more than the bill: a cheaper wrong audit is not a saving.
-
-**Recording it.** Three cost/requests/cache/output rows, three entered/carried/trimmed rows, the answers
-line, the model, the Claude Code version, the commit, and the date, into a new section on this page. Nulls
-and losses go in with the same care as wins; that is the only reason anything on this page can be cited.
-
 ### The result — ab5, run 2026-09-09, Fable 5.1 both arms, Claude Code 2.1.266
 
 Sessions `da261739…` (off) and `80c5d8cf…` (on), from `claude/ab5-off` and `claude/ab5-tb`, trees identical
@@ -1131,3 +1062,241 @@ return trips. Two readings from one repository decide nothing; they are here so 
 against a number that already exists rather than in the abstract, and so the decision rule for that build
 is written knowing the share will probably be high.
 
+## The rtk head-to-head — the procedure, for the owner's Windows machine
+
+Written 2026-09-09, not run. The cloud container cannot install rtk: ab3's rtk arm was void because the
+permission classifier refused `curl … | sh` and then refused `sh /tmp/rtk-install.sh` after the session had
+already fetched the script, so the arm ran with no binary and no hook and became a second no-hook reading.
+That is not rtk's fault and it is not a result about rtk. A real comparison needs a machine where rtk is
+installed by a person before any session starts, which means the owner's Windows box. Everything below is
+for a person to run by hand; nothing in it should be handed to a session to do for itself, because the
+thing being measured is what the tooling does to a session that does not know it is being measured.
+
+**What it answers.** JetBrains measured rtk at +7.6% on the bill on Sonnet 5 across 425 trials. This
+repository has measured tokenbrake on one audit shape at between −37% and +100% on Opus 5 depending on the
+guard and the run. Neither number says how the two compare on the same task, same machine, same day. Three
+arms on one workload does not settle that either — it is three sessions, not 425 — but it is the first
+reading where both tools face the same twelve steps, and if the two land on opposite sides of the off arm
+that is worth knowing before the post claims anything about the category.
+
+**Before you start.** A clone of `33kain/contexa` at a commit you write down, `npm install` already done
+so no arm pays for it, Node and Git on PATH, and `claude --version` recorded. Close every other Claude Code
+session: the five-hour window is shared and a background session moves the numbers. Budget about an hour
+and roughly $15 at list price; the three arms have cost $4.60 to $9.63 each on Opus 5.
+
+**The invariants, the same ones every round on this page has held to.** One model for all three arms, named
+in the record. One message per arm, the twelve-step audit above pasted verbatim, step 12 pinned to the
+tokenbrake version under test. No answering follow-up questions, no second message, no matter how the
+session asks. A fresh session per arm, never `/clear` in the same one, because the cost comes from the
+session record and a cleared session keeps its old requests. And exactly one tool installed at a time:
+verify it, do not assume the previous arm's uninstall worked.
+
+**Arm 1, off.** Neither tool installed.
+
+```
+rtk init -g --uninstall          # even if you think it is not installed
+npx --yes tokenbrake uninstall   # user scope
+npx --yes tokenbrake uninstall --project    # in the contexa clone, if it has project hooks
+```
+
+The contexa clone carries project-scope tokenbrake hooks in `.claude/settings.json` on `main`, so for this
+arm either uninstall them there or check out a branch whose `.claude/settings.json` is `{"hooks": {}}` —
+`claude/ab5-off` is exactly that. Confirm with `npx tokenbrake status`: it should report nothing installed
+at either scope. Then start Claude Code in the clone, paste the audit, and let it finish.
+
+**Arm 2, rtk.** `rtk init -g`, and confirm rtk's own status command reports the hook. tokenbrake stays
+uninstalled at both scopes — `npx tokenbrake status` again, because a leftover project hook is the easiest
+way to void this arm. Fresh session, same paste.
+
+**Arm 3, tokenbrake.** `rtk init -g --uninstall`, then `npx tokenbrake init`, then `npx tokenbrake status`,
+which spawns each hook once and will say if the node path is wrong. Fresh session, same paste.
+
+**Reading the result.** Each arm's cost, requests, cache reads and output come from its session record;
+`npx tokenbrake report --all` lists the sessions on disk newest first, and
+`npx tokenbrake report --compare <A> <B>` prints two of them side by side with the change column, which is
+this file's table. Run it twice, off against rtk and off against tokenbrake. The arms' own reports give
+entered, carried and trimmed. Note that on the rtk arm tokenbrake's report still works — it reads the
+transcript, not its own ledger — so it will say what entered under rtk, which is the number rtk's own
+claims are about.
+
+**The rule for reading it, and it is the one that has voided results here before.** The requests column
+decides, not the cost column. Two identical arms on this page came out 21% apart in cost on nothing but how
+the model planned its reads, so any cost difference inside that band is a null and gets recorded as one.
+A tool that lowers what enters and raises requests has lost, whatever its output-reduction number says;
+that is the mechanism JetBrains found and the one that cost tokenbrake 0.2.2 twice the no-hook bill on
+this exact task. And if the three arms give different answers to any of the twelve steps, the round is void
+and the answers matter more than the bill: a cheaper wrong audit is not a saving.
+
+**Recording it.** Three cost/requests/cache/output rows, three entered/carried/trimmed rows, the answers
+line, the model, the Claude Code version, the commit, and the date, into a new section on this page. Nulls
+and losses go in with the same care as wins; that is the only reason anything on this page can be cited.
+
+### ab7 — the pre-registration, written 2026-09-09, before anything is installed
+
+The procedure above says how to run the three arms. This is the part the protocol will not let a round
+skip: what is expected and what the numbers decide, both fixed before the first session opens.
+
+**The model, and it is a real choice.** The round runs on **Sonnet 5**, all three arms. The alternative was
+Opus 5, where four off readings already exist to compare against, and the trade is worth stating: on Opus
+the round would sit inside this page's existing series, while on Sonnet it stands alone. Sonnet wins
+anyway, for two reasons that only apply once. It is the model JetBrains measured rtk on, so the rtk arm is
+the first thing on this page that can be read next to somebody else's number instead of against nothing.
+And it is the model the cloud protocol cannot reach at all — ab6 died twice on it — so a person at a
+keyboard is the only way this page ever gets a Sonnet reading, and the three-arm design carries its own off
+arm, which is exactly the baseline that is missing. One session buys the comparison and the missing
+baseline together. If the round is run on Opus instead, that is a legitimate choice and the only thing it
+costs is the JetBrains comparison; write down which model was used before starting, either way.
+
+**Expectation, fixed before the run.**
+
+- *rtk against off:* at or slightly above the off arm on cost, with more requests. This is not a guess, it
+  is the JetBrains result restated — +7.6% at low effort, +14% turns, +14% cache reads — and the mechanism
+  behind it is the one this page reproduced from the other side with `readMaxBytes` at 25,000 and again
+  with 0.2.2's excerpt trimming: compressed output sends the model back, and each return trip re-reads the
+  whole context. If rtk lands well below the off arm on this workload, that contradicts the only
+  independent measurement in the field and would need a second run before anyone writes it down.
+- *tokenbrake against off:* a null, cost inside the 21% band and requests within three. On the audit shape
+  0.2.3 has one reading on each of two models and neither cleared the band. There is no reason to expect
+  Sonnet to behave differently in kind, and the honest prior after ab4 and ab5 is that this guard does not
+  save money on this task on any model.
+- *answers:* 12 of 12 on all three arms, identical.
+
+**Decision rule, fixed before the run.** The requests column decides; cost differences inside 21% are
+nulls. Beyond that:
+
+- **Both tools null against off.** The most likely outcome and the most useful one for the post: two hooks
+  from opposite ends of the category, on the same task and machine and day, neither of which moved the
+  bill. That is the paragraph the post is actually for.
+- **rtk above off and tokenbrake null.** Consistent with JetBrains, stated as one run of three sessions
+  agreeing with 425 billed trials, never as a replication.
+- **tokenbrake below off and rtk not.** The first result on this page that would survive the requests rule
+  on this workload, and it does not get written outside this file until a second run on a different day
+  reproduces it. One run does not become a claim; that rule has already retired two numbers here.
+- **tokenbrake above off.** A loss, recorded as one, and the post says the hook has cost money on a third
+  model.
+- **Any arm's answers differ.** The round is void, and the answers matter more than the bill. A cheaper
+  wrong audit is not a saving.
+
+The round is `ab7`, and nulls go in with the same care as anything else.
+
+### ab7 — the runbook, for the keyboard
+
+Self-contained; nothing above needs to be open while running it. Windows, PowerShell. Costs roughly $10 to
+$20 at list price depending on model and is about an hour with the waiting.
+
+**Before anything.** Close every other Claude Code session; the five-hour window is shared. Then, once:
+
+```powershell
+cd $HOME\Desktop
+git clone https://github.com/33kain/contexa
+cd contexa
+npm install
+git rev-parse --short HEAD      # write this down; all three arms run from it
+claude --version                # write this down
+node --version                  # and this
+```
+
+**One thing that is different on Windows, and it bears on this round.** The first Windows run
+(2026-09-09, recorded above) found `npm test` on this repository printing 49.4 KB, against 27 KB on Linux.
+That is past Claude Code's own ~30,000-character ceiling, so on step 1 the hook receives a truncated result
+and the model receives a 2 KB persisted-output preview whatever any hook does. Step 1 is therefore not a
+step any of the three tools can win, on this machine, and if the arms differ there the difference is not
+theirs. Note in the record what step 1 looked like on each arm.
+
+**Arm 1, off.** Neither tool installed.
+
+```powershell
+rtk init -g --uninstall            # even if you think it is not installed
+npx --yes tokenbrake@0.2.3 uninstall
+npx --yes tokenbrake@0.2.3 uninstall --project
+npx --yes tokenbrake@0.2.3 status
+```
+
+`status` should print `missing` against all three hooks and against the guard file, and must not print the
+"also installed at project scope" line — that line means the guard would run on this arm and voids it.
+The clone carries project-scope tokenbrake hooks on `main`, which the third command removes. Do not skip the
+`status`; a leftover project hook is the easiest way to void an arm, and it also spawn-tests the node path,
+which on Windows contains a space (`C:\Program Files\nodejs\node.exe`) and has broken installs before.
+
+Then `claude` in the clone, paste the task below, send nothing else, and let it finish.
+
+**Arm 2, rtk.**
+
+```powershell
+rtk init -g                        # then rtk's own status command: confirm the hook is registered
+npx --yes tokenbrake@0.2.3 status  # again: three `missing` lines, no project-scope line
+```
+
+Fresh `claude` session — not `/clear` in the previous one, which keeps its requests and its cost. Same
+paste.
+
+**Arm 3, tokenbrake.**
+
+```powershell
+rtk init -g --uninstall            # then rtk's status: confirm it is gone
+npx --yes tokenbrake@0.2.3 init
+npx --yes tokenbrake@0.2.3 status  # PostToolUse, PostToolUseFailure and PreToolUse Read cap all present
+```
+
+Fresh session, same paste. (The rtk commands here are the owner's; this page has never run rtk and does not
+verify its CLI. Whatever rtk's install, uninstall and status commands actually are, the requirement is only
+that exactly one tool is installed per arm and that you confirmed it rather than assumed it.)
+
+**The task, pasted verbatim, identical on all three arms.**
+
+```
+Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write twelve lines, one per step, then paste the output of steps 11 and 12 verbatim.
+
+1. Run `npm test` and report the number of checks that passed and failed.
+2. Run `node build.mjs` and report the zip name it prints.
+3. Read extension/content.js in full and name the function that decides which line, if any, the label row carries.
+4. Read worker/src/index.js in full and name the constant that caps the brief's length.
+5. Read extension/background.js in full and say how long a staged brief lives before it expires.
+6. Read worker/test.mjs in full and count the lines that begin with two spaces followed by `t(`.
+7. Read scripts/screenshots/capture.mjs in full and name the Playwright call that opens the browser.
+8. Run `git log --stat -40` and name the file that appears most often in it.
+9. Run `grep -rn "Start fresh" publishing/` and count the matching lines.
+10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
+11. Run `npx --yes tokenbrake@0.2.3 status` and paste its output.
+12. Run `npx --yes tokenbrake@0.2.3 report --top=8` and paste its full output.
+```
+
+Step 10 has no file to read on arms 1 and 2, since the guard is uninstalled there; "the file does not
+exist" is the correct answer and the arms should say so rather than hunting for it. Step 11 reports which
+arm this was, from the tool's own status, which is why it is that command and not a look at `~/.claude` —
+see "ab6, first attempt" above for what that cost. Step 12 is the measuring instrument and works on all
+three arms: it reads the Claude Code transcript, not tokenbrake's ledger, so on the rtk arm it still says
+what entered and what was carried, which is the quantity rtk's own claims are about.
+
+**After the third arm.**
+
+```powershell
+npx --yes tokenbrake@0.2.3 report --all                    # session ids, newest first
+npx --yes tokenbrake@0.2.3 report --compare <off> <rtk>
+npx --yes tokenbrake@0.2.3 report --compare <off> <tokenbrake>
+```
+
+**The record to fill in.** Paste this filled out into a new `### ab7 — the result` section here.
+
+```
+ab7 — <date>, <model>, Claude Code <version>, Node <version>, commit <sha>, Windows
+
+                              off        rtk        tokenbrake 0.2.3
+API cost
+requests
+cache-read tokens
+cache-write tokens
+output tokens
+tool results entered
+tool results carried
+Read calls / Bash calls
+trimmed by the guard
+step 1 (npm test) as delivered
+answers                       __ of 12   __ of 12   __ of 12
+```
+
+Then the verdict against the decision rule above, in its own words, including which branch of it fired.
+If any arm was void — a tool that would not install, an arm that refused the task, a second message sent —
+say so and say what it cost, the way the rtk arm of ab3 and both arms of ab6 are recorded. An arm that did
+not run is not a zero; it is a hole, and a hole that is written down is worth more than a number that is
+not.

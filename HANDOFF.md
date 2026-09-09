@@ -450,11 +450,19 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
+7. **ab7, the rtk head-to-head, is written and waiting for a keyboard.** `AB-TASK.md` ends with its
+   pre-registration and a self-contained Windows runbook: three arms on one clone of `33kain/contexa`, one
+   model, one message each, exactly one tool installed per arm and verified rather than assumed, the paste
+   text, the commands, and the table to fill in. It is pre-registered on **Sonnet 5**, which buys two
+   things at once — the rtk comparison next to JetBrains' own number, and the Sonnet baseline the cloud
+   protocol could not reach — and the trade against running it on Opus is stated there. It does not depend
+   on the Saturday table and can be run before or after it. Nothing else in this plan needs the owner's
+   machine.
+
 Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
-feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; merge
-`33kain/contexa` PR #61, the 0.2.3 repin; and, if the Sonnet reading is still wanted, it has to be typed by hand —
-`claude/ab6-off` and `claude/ab6-tb` are cut and waiting, and the rtk procedure in `AB-TASK.md` is the same machine
-and the same twelve steps.
+feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; and ab7
+itself, above. `33kain/contexa` PR #61, the 0.2.3 repin, is merged. The `claude/ab6-off` and `claude/ab6-tb` branches
+are cut and waiting if a two-arm Sonnet round is ever preferred to ab7's three-arm one.
 
 ## Launch vehicle
 
