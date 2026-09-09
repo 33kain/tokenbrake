@@ -748,3 +748,386 @@ guard (HANDOFF.md, "Next session", step 1).
 
 The rtk comparison stays out of reach in the cloud and moves to the owner's machine, where it now has a
 tokenbrake arm that at least does no harm on this shape.
+
+## The twelve-step audit — the task as it has been pasted since the split
+
+The eleven-step block at the top of this file is the original, and its step 10 reads `tokenbrake/HANDOFF.md`,
+a path that stopped existing when the package was split out of `33kain/contexa` on 2026-09-06. Every audit
+round since — the three-arm ab3 and the fix's ab4 — pasted a twelve-step version instead, which was never
+written down here. It is written down now, so a later round measures the same workload and not a
+reconstruction of it. Only step 12's version pin moves between rounds, to whatever guard is under test.
+
+```
+Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write twelve lines, one per step, then paste the output of steps 11 and 12 verbatim.
+
+1. Run `npm test` and report the number of checks that passed and failed.
+2. Run `node build.mjs` and report the zip name it prints.
+3. Read extension/content.js in full and name the function that decides which line, if any, the label row carries.
+4. Read worker/src/index.js in full and name the constant that caps the brief's length.
+5. Read extension/background.js in full and say how long a staged brief lives before it expires.
+6. Read worker/test.mjs in full and count the lines that begin with two spaces followed by `t(`.
+7. Read scripts/screenshots/capture.mjs in full and name the Playwright call that opens the browser.
+8. Run `git log --stat -40` and name the file that appears most often in it.
+9. Run `grep -rn "Start fresh" publishing/` and count the matching lines.
+10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
+11. Run `cat ~/.claude/settings.json` and paste its output.
+12. Run `npx --yes tokenbrake@<version> report --top=8` and paste its full output.
+```
+
+Step 11 exists to prove the arm carried no user-scope hooks: configuration differences go on the branch,
+never into `~/.claude`, because the permission classifier refuses writes there about one time in four. On
+every run so far the file has not existed, and "No such file or directory" is the passing answer.
+
+## The audit on Fable 5.1 with the excerpt guard — ab5, written 2026-09-09, before the run
+
+The one unrepeated reading in the README is Fable 5.1's −16% on this shape, measured 2026-09-06 against
+guard 0.2.0 — the guard that has since been shown to teach Opus eighty-line `sed` ranges and cost twice the
+no-hook bill (ab3), and that 0.2.3 replaced. So the Fable figure was measured with a guard nobody would
+ship today, and it is the number the launch post would lead with. This round re-measures it against the
+guard that actually ships.
+
+**Setup.** Two Cowork sessions on `33kain/contexa`, Fable 5.1 both arms, one message each, the twelve-step
+audit above with step 12 pinned to `tokenbrake@0.2.3`. Both arms branch from the same commit, the 0.2.3
+repin (`claude/tokenbrake-0.2.3`); the trees are identical but for `.claude/settings.json`, which is
+`{"hooks": {}}` on the off arm and the project install on the on arm. Results to
+`ab-results/ab5-off.txt` and `ab-results/ab5-tb.txt` on `claude/ab5-off` and `claude/ab5-tb`.
+
+**One difference from ab4 to keep in view.** Step 12 runs the 0.2.3 report, which credits a trim only when
+the model saw it; ab3 and ab4 ran the 0.2.2 report, which credited every offered trim. So ab5's
+"tokens kept out" is comparable to nothing before it, and is the more honest of the two. Cost, requests
+and cache reads come from `get_session` either way and are unaffected.
+
+**Expectation, fixed before the run.** The on arm's requests at or below the off arm's. The reasoning: on
+this task the guard's only remaining action on the large source files is nothing at all — 0.2.3 leaves a
+`sed -n '1,400p'` untouched up to `readMaxBytes` — so what it trims is `npm test`, the build, `git log
+--stat` and the greps, none of which the model needs to come back for. If it still drives requests up, the
+mechanism is the same return-trip effect that cost rtk 7.6% at JetBrains, arriving through some door this
+guard was not supposed to leave open, and that is worth knowing on a second model.
+
+**Decision rule, fixed before the run.** Nothing ships or unships on this run; 0.2.3 is already released.
+What the run decides is what the README and the post may say about Fable:
+
+- On-arm requests at or below off-arm, and cost not worse than the off arm by more than the 21% noise
+  band: the −16% survives its guard change, and the README keeps a Fable saving, stated as two runs on
+  two guards.
+- On-arm requests above off-arm: the −16% does not survive, and the README's Fable line gets the same
+  treatment the Opus line already got — the best of N runs, not the number — with both readings printed.
+- Cost apart by less than 21% with requests level: a null, recorded as one, and the Fable claim comes out
+  of the README's headline and stays only in this file.
+
+Answers must be identical across the arms in every case; a difference there voids the round.
+
+## The rtk head-to-head — the procedure, for the owner's Windows machine
+
+Written 2026-09-09, not run. The cloud container cannot install rtk: ab3's rtk arm was void because the
+permission classifier refused `curl … | sh` and then refused `sh /tmp/rtk-install.sh` after the session had
+already fetched the script, so the arm ran with no binary and no hook and became a second no-hook reading.
+That is not rtk's fault and it is not a result about rtk. A real comparison needs a machine where rtk is
+installed by a person before any session starts, which means the owner's Windows box. Everything below is
+for a person to run by hand; nothing in it should be handed to a session to do for itself, because the
+thing being measured is what the tooling does to a session that does not know it is being measured.
+
+**What it answers.** JetBrains measured rtk at +7.6% on the bill on Sonnet 5 across 425 trials. This
+repository has measured tokenbrake on one audit shape at between −37% and +100% on Opus 5 depending on the
+guard and the run. Neither number says how the two compare on the same task, same machine, same day. Three
+arms on one workload does not settle that either — it is three sessions, not 425 — but it is the first
+reading where both tools face the same twelve steps, and if the two land on opposite sides of the off arm
+that is worth knowing before the post claims anything about the category.
+
+**Before you start.** A clone of `33kain/contexa` at a commit you write down, `npm install` already done
+so no arm pays for it, Node and Git on PATH, and `claude --version` recorded. Close every other Claude Code
+session: the five-hour window is shared and a background session moves the numbers. Budget about an hour
+and roughly $15 at list price; the three arms have cost $4.60 to $9.63 each on Opus 5.
+
+**The invariants, the same ones every round on this page has held to.** One model for all three arms, named
+in the record. One message per arm, the twelve-step audit above pasted verbatim, step 12 pinned to the
+tokenbrake version under test. No answering follow-up questions, no second message, no matter how the
+session asks. A fresh session per arm, never `/clear` in the same one, because the cost comes from the
+session record and a cleared session keeps its old requests. And exactly one tool installed at a time:
+verify it, do not assume the previous arm's uninstall worked.
+
+**Arm 1, off.** Neither tool installed.
+
+```
+rtk init -g --uninstall          # even if you think it is not installed
+npx --yes tokenbrake uninstall   # user scope
+npx --yes tokenbrake uninstall --project    # in the contexa clone, if it has project hooks
+```
+
+The contexa clone carries project-scope tokenbrake hooks in `.claude/settings.json` on `main`, so for this
+arm either uninstall them there or check out a branch whose `.claude/settings.json` is `{"hooks": {}}` —
+`claude/ab5-off` is exactly that. Confirm with `npx tokenbrake status`: it should report nothing installed
+at either scope. Then start Claude Code in the clone, paste the audit, and let it finish.
+
+**Arm 2, rtk.** `rtk init -g`, and confirm rtk's own status command reports the hook. tokenbrake stays
+uninstalled at both scopes — `npx tokenbrake status` again, because a leftover project hook is the easiest
+way to void this arm. Fresh session, same paste.
+
+**Arm 3, tokenbrake.** `rtk init -g --uninstall`, then `npx tokenbrake init`, then `npx tokenbrake status`,
+which spawns each hook once and will say if the node path is wrong. Fresh session, same paste.
+
+**Reading the result.** Each arm's cost, requests, cache reads and output come from its session record;
+`npx tokenbrake report --all` lists the sessions on disk newest first, and
+`npx tokenbrake report --compare <A> <B>` prints two of them side by side with the change column, which is
+this file's table. Run it twice, off against rtk and off against tokenbrake. The arms' own reports give
+entered, carried and trimmed. Note that on the rtk arm tokenbrake's report still works — it reads the
+transcript, not its own ledger — so it will say what entered under rtk, which is the number rtk's own
+claims are about.
+
+**The rule for reading it, and it is the one that has voided results here before.** The requests column
+decides, not the cost column. Two identical arms on this page came out 21% apart in cost on nothing but how
+the model planned its reads, so any cost difference inside that band is a null and gets recorded as one.
+A tool that lowers what enters and raises requests has lost, whatever its output-reduction number says;
+that is the mechanism JetBrains found and the one that cost tokenbrake 0.2.2 twice the no-hook bill on
+this exact task. And if the three arms give different answers to any of the twelve steps, the round is void
+and the answers matter more than the bill: a cheaper wrong audit is not a saving.
+
+**Recording it.** Three cost/requests/cache/output rows, three entered/carried/trimmed rows, the answers
+line, the model, the Claude Code version, the commit, and the date, into a new section on this page. Nulls
+and losses go in with the same care as wins; that is the only reason anything on this page can be cited.
+
+### The result — ab5, run 2026-09-09, Fable 5.1 both arms, Claude Code 2.1.266
+
+Sessions `da261739…` (off) and `80c5d8cf…` (on), from `claude/ab5-off` and `claude/ab5-tb`, trees identical
+but for `.claude/settings.json`. Cost, cache and output from the session records; requests, entered,
+carried and trimmed from each arm's own step-12 report, both taken at the same point in the protocol.
+
+| | off | on (0.2.3) | change |
+|---|---|---|---|
+| API cost | $6.4787 | $5.5331 | **−14.6%** |
+| requests | 26 | 29 | **+12%** |
+| cache-read tokens | 4,739,441 | 5,345,262 | +13% |
+| cache-write tokens | 243,059 | 187,626 | −23% |
+| output tokens | 8,480 | 8,686 | +2% |
+| tool results entered | 97k | 95k | |
+| tool results carried | 1.5M | 1.6M | +7% |
+| Read calls | 9 | 12 | |
+| trimmed by the guard | 0 | 1 applied (≈ 6k kept out), 1 offered and not applied | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**By the rule written before the run, the −16% does not survive.** The on arm ran more requests than the
+off arm, which was the branch that says so. The cost did fall 14.6%, but 14.6% is inside the 21% band two
+identical arms have already produced on this page, so it is not a saving either. Two runs on Fable, on two
+guards, one −16% and one −14.6%-inside-noise with requests up: the honest reading is a null, and the
+README's Fable line loses its headline the same way the Opus line did. What can still be said is what the
+answers say — 12 of 12 identical, on both arms, on both models, in every round so far.
+
+**What the arms actually spent their money on, and it is not what Opus spent it on.** On Fable 5.1 the
+list rates are $0.25 per million cache reads and $20 per million cache writes, an eighty-fold gap; on
+Opus 5 it is $0.50 against $10, twenty-fold. So on this round cache *writes* were 75% of the off arm's
+bill and 68% of the on arm's, while cache reads were 18% and 24%. The guard's effect on the bill ran
+through the write column: 243k written against 188k, −23%, worth about $1.11 of the $0.95 the arm saved
+in total — the read column moved the other way and gave part of it back. Every earlier round on this page
+is an Opus round, where cache reads dominate and the guard's lever is the carry multiplier. On Fable the
+lever is how much *new* text enters at all, which is closer to what the whole category claims to do, and
+it still did not clear the noise band. The cost formula in `transcript.js` reproduces both arms' records
+exactly ($6.478700 and $5.533075 against $6.47870025 and $5.5330755), so the split is the API's, not an
+estimate.
+
+**A mechanism the round did make visible.** With no hooks, the off arm read the five large source files
+unbounded; Claude Code passed its own ceiling, wrote each result to
+`<config>/projects/<cwd>/<session>/tool-results/<id>.txt`, and the model read those files back whole.
+Its report's top eight carried results are all such files — 94% of everything it carried was Reads of
+Claude Code's own persisted outputs, not of the repository. The on arm's top eight are
+`extension/content.js`, `worker/src/index.js`, `extension/background.js` and `worker/test.mjs` by name:
+the Read cap fired first, so nothing was ever persisted to be re-read. This is the 0.2.1 rule's mechanism
+reproduced on a second model, and it is the clearest thing the guard did in this round. It is also worth
+noticing that it bought almost nothing: 1.5M carried against 1.6M. Keeping the model reading the file
+instead of a copy of the file is the right shape and was not, here, a saving.
+
+**Recorded against the instrument, not the result.** Two things about the report itself, found in these
+files and both cosmetic:
+
+- The `what` column truncates a path at about fifty characters, which on a persisted output cuts it off
+  inside the session id — `…/projects/-home-user-contexa/da261739-50c5-` — exactly before the
+  `tool-results/<id>.txt` that says what kind of file it is. The off arm's report is therefore readable
+  only by someone who already knows the path shape. Worth eliding the middle rather than the tail before
+  Saturday's table is built from these files.
+- Each arm's report was run at step 12 and so priced the session as it stood then: $6.13 and $5.13 against
+  the $6.4787 and $5.5331 the records ended at. The gap is the file write, commit and push that follow,
+  the same on both arms. The report has always been a snapshot of the session that runs it; the
+  `ab-results/real/` files inherit that and the Saturday table should say so.
+
+**A protocol wrinkle to fix before the Sonnet round.** Step 11 is `cat ~/.claude/settings.json`, there to
+prove the arm carried no user-scope hooks. On both arms the permission classifier refused the `cat`, and
+both arms fell back to `ls` and to the Read tool, which agreed the file does not exist. The step did its
+job, but by accident and not identically on the two arms, and a step whose command is refused is a step
+that measures the classifier. Replace it with `ls -la ~/.claude/` for the Sonnet round, which is not
+refused, answers the same question, and costs the same one call.
+
+## The audit on Sonnet 5 — ab6, written 2026-09-09, before the run
+
+Sonnet 5 is the model JetBrains ran their 425 trials of rtk on, and the only model in this space with an
+independent billing-based number attached to it (+7.6% at low effort, flat at high). Everything on this
+page is Opus 5 or Fable 5.1. So this is the first reading on the one model where somebody else's result
+exists to be read next to it, and that is the whole reason to spend the round.
+
+**Setup.** Identical to ab5 in every respect but the model: two Cowork sessions on `33kain/contexa`,
+Sonnet 5 both arms, one message each, branches `claude/ab6-off` and `claude/ab6-tb` cut from the same
+0.2.3 repin commit, differing only in `.claude/settings.json`. Results to `ab-results/ab6-off.txt` and
+`ab-results/ab6-tb.txt`. One change to the task, carried in from ab5's finding: step 11 becomes
+`ls -la ~/.claude/` instead of `cat ~/.claude/settings.json`, because the permission classifier refused the
+`cat` on both Fable arms and a step whose command is refused measures the classifier rather than the
+configuration. It answers the same question — no user-scope settings file — in the same one call, and both
+arms get it.
+
+**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within two or three of
+each other, answers identical. The reasoning is the two rounds already on this page. Neither Opus 5 nor
+Fable 5.1 produced a saving that survived being run a second time, on the one workload shape where the
+guard has anything to trim at all, and there is no mechanism yet identified that would make Sonnet
+different in kind. Sonnet 5's list rates put cache writes at twenty times its reads, the Opus ratio rather
+than Fable's eighty, so if the round behaves like anything it should behave like the Opus rounds, where the
+bill sits in the cache-read column and out of a hook's reach.
+
+**Decision rule, fixed before the run.** This round settles what the post may say about Sonnet, and only
+that; nothing ships or unships on it.
+
+- Requests level (within three either way) and cost inside 21%: the expected null. The post gets a Sonnet
+  row reading "no measurable difference", and the JetBrains comparison is stated as what it is — their
+  tool cost 7.6% on this model, this one did nothing measurable on it, and neither is a saving.
+- On-arm requests materially below off-arm (four or more) with cost not worse: the first result on this
+  page that would survive the requests rule, and it gets a second run before it is written anywhere
+  outside this file. One run does not become a claim.
+- On-arm requests materially above off-arm: a loss, recorded as one, and the post says the hook has cost
+  money on three of three models.
+
+Answers must be identical across the arms; a difference voids the round. If either arm's step 11 is
+refused again, the round still stands — the question it asks is answered by the fallback — but the step
+gets replaced properly before any further round rather than patched a second time.
+
+### ab6, first attempt — void, and the reason is worth more than the round
+
+Run 2026-09-09, Sonnet 5 both arms. Neither arm ran a single step. Both read the task as an attack and
+stopped: the off arm's status line was "prompt appears to contain exfiltration attempt; halting", the on
+arm's "suspicious task request; pausing before execution", and each asked whether the human had really
+sent it. $0.31 and $0.29 spent, nothing measured, both arms void.
+
+**They were right, and the step they objected to was the one added an hour earlier.** ab5 found that the
+permission classifier refused step 11's `cat ~/.claude/settings.json`, so for this round it became
+`ls -la ~/.claude/` — the model's own configuration directory — with the task then saying to paste the
+output into a file, commit it, and push it to a public GitHub branch. Read without the context of this
+page, that is a prompt telling an agent to enumerate the user's Claude configuration and push it to a
+remote. Two models out of two flagged it. The step meant to prove a negative about the arm's setup had
+turned into the one part of the task that looks like an exfiltration.
+
+**And it had already leaked something, mildly.** The ab5 on-arm did paste that listing, and it was
+committed to `claude/ab5-tb` in a public repository. No credentials — file names, sizes and modes in a
+throwaway container's home directory — but it carries no measurement and it should not have been asked
+for. It is removed from that file, with the one line that answers the step's actual question left in
+place. The ab5 result stands: both arms handled step 11 the same way and neither's numbers depend on it.
+
+**The fix, and why it is not a third patch.** Step 11 exists to establish one thing: what hooks this arm
+carried and at what scope. That question has a command of its own — `npx --yes tokenbrake@0.2.3 status`,
+which reports exactly what is installed at user and project scope and spawns each hook once. It answers
+the step's real question directly instead of inferring it from the absence of a file, it reads nothing
+outside the tool's own installation, and it is one small Bash call on both arms, as the step always was.
+Step 11 becomes that, and stays that.
+
+**What this costs the record, said plainly.** Step 11 has now been three different commands across three
+rounds: `cat ~/.claude/settings.json` in ab3 and ab4, the same refused-and-worked-around in ab5, and
+`status` from ab6 on. Cross-round comparison of the audit was already imperfect on this step, since no
+round has executed it as written. It is one call of a few hundred characters out of a 26-to-45-request
+session, so it does not move any figure on this page, but a protocol document that hid the change would be
+worth less than one that prints it.
+
+**The methodology finding, which outlives this round.** A benchmark task that reads the user's
+configuration directory is not model-portable. It passes on one model, is refused by the permission layer
+on another, and is refused by the model itself on a third — and the third refusal costs a whole round.
+Anyone A/B-testing agent tooling on the bill will write a task like this, because proving the control arm
+really is a control arm is the first thing the protocol asks for. Prove it with the tool's own status
+command, or by the branch the arm was cut from, and never by having the agent read and publish the
+environment. This goes in `LANDSCAPE.md` next to the other things measuring this category teaches.
+
+**The pre-registration above stands unamended in every other respect.** The expectation and the decision
+rule were written before any Sonnet arm ran and no arm produced a number, so there is nothing here that
+could have been fitted to a result. Only step 11 changes, and it changes for a reason that has nothing to
+do with what the round measures.
+
+### ab6, second attempt — the deviation, recorded before the arms returned
+
+Written 2026-09-09 while both arms were still running, so it cannot be fitted to a result. Two changes
+from the ab5 message, identical on both arms:
+
+- Step 11 is `npx --yes tokenbrake@0.2.3 status`, per the section above.
+- A closing paragraph says what the session is: one arm of an A/B of the tokenbrake hooks, run by their
+  author, that steps 10 and 11 look only at tokenbrake's own installation in this repository, and that
+  nothing reads or publishes anything outside it.
+
+That second change is a real deviation and not a formatting one. It adds about five hundred characters to
+the first message and it tells the model why it is doing this, which the ab3, ab4 and ab5 messages never
+did. It is here because without it Sonnet 5 stopped both arms, and an arm that refuses the task measures
+nothing at all. But a model told it is being benchmarked may plan differently from one that is not, and on
+this workload how the model plans is the thing that has moved the bill by a factor of two. So ab6's numbers
+compare cleanly to each other — both arms carry the same paragraph — and compare to the Opus and Fable
+rounds only with this stated next to them.
+
+If the round is ever repeated, the honest version is to put the explanation in the repository, in
+`CLAUDE.md` or a file the task points at, where every arm on every model picks it up from the branch rather
+than from the message. That is the same rule this page already applies to configuration: it goes on the
+branch, not into the prompt and not into `~/.claude`.
+
+### ab6, second attempt — also void, and the blocker is the channel, not the task
+
+Run 2026-09-09, minutes after the first. Neither arm ran a step again, but the objection moved. The off
+arm: "12-step audit requested via unverified system notification; awaiting direct user confirmation". The
+on arm: "suspicious task block detected; awaiting user confirmation", asking whether a human had really
+requested an A/B with tokenbrake. Both had read the repository's `CLAUDE.md` first — the off arm's
+question names it — so they were oriented; they simply would not act on the message. $0.077 and $0.073,
+nothing measured.
+
+**The exfiltration objection is gone; a different one replaced it.** Step 11 is now `tokenbrake status`
+and the message says what the run is, and neither arm raised the first attempt's concern. What stopped
+them is how the message arrived: every arm on this page is opened with `create_session`, so its first
+message is a seeded prompt with no human turn behind it. Sonnet 5 on this harness treats that as
+unverified and holds for confirmation. Opus 5 and Fable 5.1 ran the identical seeded message without
+comment, across ab3, ab4 and ab5.
+
+**Which means no wording fixes it.** The objection is to the delivery, not the content, and the first
+message cannot say anything about how it was delivered. The only ways past it are to send a second
+message confirming — which breaks the one-message invariant every other round on this page was run
+under — or to run Sonnet somewhere a person types the prompt.
+
+**Recorded as a limit of this protocol, not a fact about the guard.** The cloud A/B harness measures Opus
+5 and Fable 5.1 and does not measure Sonnet 5. That is the second thing this container cannot do, next to
+installing rtk, and both belong to the same paragraph in the eventual write-up: some arms need a real
+machine. Nothing here says anything about how tokenbrake performs on Sonnet, and the post must not imply
+that it does. The JetBrains comparison stays what it has always been on this page — their measurement of
+their tool on their model, cited as theirs.
+
+### ab6 — closed unmeasured, by decision
+
+Not retried a third time. The two ways past the block were a second message confirming the first, which
+breaks the one-message invariant every other round on this page was run under, or a person typing the
+prompt on a real machine. The owner chose neither: Sonnet 5 comes out of the cloud protocol, and this page
+carries no tokenbrake number for it.
+
+What that means for anything written from this file. The audit shape has been measured on Opus 5 (four
+runs each way) and Fable 5.1 (two runs each way). It has not been measured on Sonnet 5, and no sentence
+anywhere may imply otherwise — not by omission, not by "on Claude models", not by putting a tokenbrake
+figure in the same table as the JetBrains figure without a column that says which model each is. The
+JetBrains benchmark stays cited as what it is: their measurement, of their tool, on a model this page has
+no reading for. The comparison the launch post wanted, one task, two tools, one model, does not exist
+yet and the honest thing is to say so.
+
+The `claude/ab6-off` and `claude/ab6-tb` branches on `33kain/contexa` stay where they are, carrying the
+arm configuration and no results. If Sonnet is ever run by hand on a real machine, they are the arms.
+
+## Small results, two readings — for Saturday's step 5
+
+The Saturday plan makes shape filters for small output conditional on the real-session files showing that
+small results dominate carried context. Two reports written today, both from ordinary working sessions on
+`33kain/tokenbrake` rather than from A/B arms, already point the same way:
+
+| session | shell results at or under `maxChars` | tokens entered | carried | share of all carried |
+|---|---|---|---|---|
+| `c5ad7352` (this one, 104 requests) | 79 of 81 | ≈ 18k | ≈ 1.1M | **57%** |
+| the same session at 58 requests | 49 of 51 | ≈ 12k | ≈ 376k | **54%** |
+
+So on a long working session, the guard's threshold leaves about 97% of shell results untouched and those
+untouched results carry more than half of everything carried. That is the gap the whole rest of the
+category aims at, and it is not small. It is also exactly where rtk lost money: these results are small
+because the model bounded them, and compressing what a model deliberately kept short is how a hook earns
+return trips. Two readings from one repository decide nothing; they are here so Saturday's table is read
+against a number that already exists rather than in the abstract, and so the decision rule for that build
+is written knowing the share will probably be high.
+

@@ -400,6 +400,28 @@ chop, squeez, claude-context-optimizer, shunt, against the JetBrains benchmark (
 run: everything works. Project-scope hooks on both repositories; every session leaves `ab-results/real/<date>-<id>.txt`
 on its branch in `33kain/contexa`.
 
+**Twenty-ninth card (2026-09-09, evening): 0.2.3 released, the Fable number retired, Sonnet out of reach.**
+Released 0.2.3 (the excerpt rule from #15, the report's trim-credit fix, `status`'s double-install warning,
+"Under the trim threshold"); `33kain/contexa` repinned to it in an open PR. Ran ab5, the audit on Fable 5.1,
+off against 0.2.3: $6.4787 → $5.5331 (−14.6%) but 26 → 29 requests, so by the rule written before the run
+the README's −16% does not survive its guard change. Both Fable readings are inside the 21% noise band; the
+Fable line is now a null in README and LANDSCAPE, as the Opus line already was. Answers 12 of 12 identical,
+as in every round. Two mechanisms came out of it: **the models do not spend alike** — Fable lists cache
+writes at eighty times reads against Opus's twenty, so writes were 75% of the off arm's bill where every
+Opus round is read-dominated, which means a saving measured on one model is not evidence about another —
+and **the persisted-output leak reproduced**, 94% of the off arm's carried context being Reads of Claude
+Code's own `tool-results/` files rather than of the repository, though it bought almost nothing on the bill.
+The cost formula in `transcript.js` reproduces both Fable records exactly, so those splits are the API's.
+ab6, the Sonnet 5 round, is **void twice and closed unmeasured by the owner's decision**: the first attempt
+was refused by both arms as an exfiltration attempt, over a step 11 (`ls -la ~/.claude/`) added an hour
+earlier that told the arm to publish the user's config directory to a public branch — the ab5 arm had
+already done so, and that listing is now removed from `claude/ab5-tb`; the second attempt, with step 11
+replaced by `tokenbrake status`, was refused again because a `create_session` seed is not a human turn on
+Sonnet. No wording fixes the second. The audit is measured on Opus 5 and Fable 5.1 and on no other model,
+and nothing written from `AB-TASK.md` may imply otherwise. Also written: the rtk head-to-head as a
+procedure for the owner's Windows machine, and the twelve-step audit task itself, which three rounds had
+used without ever recording it.
+
 ## Next session — Saturday 2026-09-13, the distribution table and the post
 
 Nothing to build before then. The task is collection and one table, then publishing. Steps:
@@ -422,8 +444,17 @@ Nothing to build before then. The task is collection and one table, then publish
    shape filters for small output become the next build, A/B'd with the protocol before default-on. Only if
    "Repeat reads" is common: repeat-read suppression, compaction-aware. Otherwise neither.
 
+6. Two report fixes that Saturday's table wants and that are display-only, no guard change and so no A/B:
+   the `what` column truncates a persisted path before the `tool-results/<id>.txt` that identifies it
+   (elide the middle, not the tail), and every report prices the session as it stood when it ran, which
+   for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
+   note has to say the second even if the first is fixed.
+
 Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
-feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`.
+feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; merge
+`33kain/contexa` PR #61, the 0.2.3 repin; and, if the Sonnet reading is still wanted, it has to be typed by hand —
+`claude/ab6-off` and `claude/ab6-tb` are cut and waiting, and the rtk procedure in `AB-TASK.md` is the same machine
+and the same twelve steps.
 
 ## Launch vehicle
 
