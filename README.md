@@ -29,7 +29,8 @@ or with npx, which writes the two hooks into a settings file you own:
 
 ```
 npx tokenbrake init            # user scope: ~/.claude/settings.json, applies to every project
-npx tokenbrake init --project  # this project only: .claude/settings.json (commit it to share with a team)
+npx tokenbrake init --project  # this project only: .claude/settings.json (commit it to share with a team). One scope per
+                               # machine: with both, the guard runs twice per call, and `status` says so
 ```
 
 One or the other. With both, every result runs through the guard twice: the second pass is a no-op on an already

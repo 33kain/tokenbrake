@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `report` credits a trim only when the model saw it. A ledger row means the guard offered a replacement;
+  above Claude Code's own ~30,000-character ceiling the model gets a 2 KB persisted-output preview instead,
+  and on `PostToolUseFailure` the replacement is ignored. Those now read "offered and not applied", with
+  the tokens that entered as Claude Code delivered them, never as savings. Found on the first Windows run,
+  where the report had credited tokenbrake with 6k tokens Claude Code kept out.
+- `status` warns when the guard is installed at both user and project scope: it runs twice per call there.
 - `report` prints "Under the trim threshold": shell results at or under `maxChars`, with their tokens and
   carried cost as a share of everything carried. The share the guard does not touch, measured, so the
   real-session files can say whether shape filters for small output are worth building.

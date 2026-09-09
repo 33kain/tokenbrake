@@ -130,6 +130,13 @@ function status() {
     if (!isOurs({ hooks: [h] })) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
   }
+  /* Both scopes at once means two guards per tool call: Claude Code runs the user-scope hooks and the
+     project-scope hooks, each spawns node, each writes the same ledger row. Harmless, wasteful, and the
+     ledger shows it as duplicate rows; say so. */
+  const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
+  const other = readJson(otherPath, null);
+  const otherHas = !!(other && other.hooks && ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'].some(ev => (other.hooks[ev] || []).some(isOurs)));
+  if (otherHas) console.log(`  also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
   const cfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), null);
   console.log(`  config: ${cfg ? JSON.stringify(cfg) : 'defaults'}`);
   const n = fs.existsSync(LEDGER) ? fs.readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).length : 0;
