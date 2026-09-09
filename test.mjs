@@ -434,6 +434,35 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('when the docs shape arrives instead (short error, output in tool_response), the output is what gets trimmed', !!h && h.updatedToolOutput.startsWith('Exit code 1\n') && /\[tokenbrake\]/.test(h.updatedToolOutput));
 }
 
+/* ---- the small-results line -------------------------------------------------
+   Shell results under the trim threshold, with their carried cost: the share of a session the guard
+   does not touch, so the real-session files can say whether shape filters for small output are worth it. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const dir = join(CFG, 'projects', '-w-small'); mkdirSync(dir, { recursive: true });
+  const L = []; let n = 0;
+  const call = (id, tool, input, text) => {
+    n++;
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'r' + n, uuid: 'r' + n, sessionId: 'small', cwd: '/w',
+      message: { model: 'claude-opus-5', usage: { input_tokens: 1, cache_read_input_tokens: 100, cache_creation_input_tokens: 1, output_tokens: 1 }, content: [{ type: 'tool_use', id, name: tool, input }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: 'small', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }));
+  };
+  call('s1', 'Bash', { command: 'sed -n 1,40p a.js' }, 'x'.repeat(2000));   // small, carried 3
+  call('s2', 'Bash', { command: 'npm test' }, 'y'.repeat(9000));            // over the threshold: not counted
+  call('s3', 'Read', { file_path: '/w/a.js' }, 'z'.repeat(2000));            // not a shell result
+  call('s4', 'Bash', { command: 'git status' }, 'w'.repeat(400));           // small, carried 0
+  const f = join(dir, 'small.jsonl');
+  writeFileSync(f, L.join('\n') + '\n');
+  const parsed = T.carry(T.parseTranscript(f));
+  const sm = T.smallResults(parsed);
+  console.log('\n-- the small-results line');
+  t('counts shell results at or under the threshold only', sm.shell === 3 && sm.n === 2, JSON.stringify(sm));
+  t('with their tokens and carried cost', sm.tokens === 500 + 100 && sm.carried === 500 * 3 + 100 * 0, JSON.stringify(sm));
+  const text = T.renderReport(parsed, []);
+  t('the report carries the line with the share of all carried', /Under the trim threshold: 2 of 3 shell results/.test(text) && /% of all carried\)/.test(text), text.split('\n').find(l => /Under the trim/.test(l)));
+}
+
 /* ---- context after flagged lines ------------------------------------------
    A FAIL line alone names the test. The lines after it carry the assertion and the first frame, and a
    model that gets only the name comes back for the rest with a whole extra request. */

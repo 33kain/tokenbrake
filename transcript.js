@@ -197,6 +197,21 @@ function costOf(parsed) {
   return { usd, byModel, unpriced: [...unpriced] };
 }
 
+/* Shell results the guard leaves alone: Bash and PowerShell results at or under TRIM_CHARS characters, the
+   guard's default maxChars. Counted with their carried cost so the untouched share of a session is a
+   number, not a guess. */
+const TRIM_CHARS = 6000;
+function smallResults(parsed) {
+  const out = { shell: 0, n: 0, tokens: 0, carried: 0 };
+  for (const r of parsed.results) {
+    if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
+    out.shell++;
+    if (r.chars > TRIM_CHARS) continue;
+    out.n++; out.tokens += r.tokens; out.carried += r.carried || 0;
+  }
+  return out;
+}
+
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
    cache reads + cache writes), so summing those is the total the session has actually processed, and the
    LAST request's figure is roughly what the context holds right now. cacheRead over the total is how much
@@ -285,6 +300,13 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
 
+  /* What the trim does not touch: shell results under the threshold. Small excerpts carried through a long
+     session were 79% of one real audit session's carried context (LANDSCAPE.md); this line says what they
+     are here, so a week of real sessions can say whether shape filters for small output are worth building. */
+  const small = smallResults(parsed);
+  if (small.shell) {
+    lines.push(`  Under the trim threshold: ${small.n} of ${small.shell} shell results (≈ ${kfmt(small.tokens)} tokens entered, ≈ ${kfmt(small.carried)} token-reads carried, ${carried ? Math.round(100 * small.carried / carried) : 0}% of all carried)`);
+  }
   const rep = repeatReads(parsed);
   if (rep.sameShape) {
     lines.push(rep.repeats
@@ -388,4 +410,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, readKey, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, readKey, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
