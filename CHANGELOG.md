@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `report` prints "Under the trim threshold": shell results at or under `maxChars`, with their tokens and
+  carried cost as a share of everything carried. The share the guard does not touch, measured, so the
+  real-session files can say whether shape filters for small output are worth building.
+
 ## 0.2.2 — 2026-09-09
 
 - **The guard now sees failing commands, and Claude Code does not let it act.** For Bash, `PostToolUse`
