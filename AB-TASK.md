@@ -955,3 +955,43 @@ job, but by accident and not identically on the two arms, and a step whose comma
 that measures the classifier. Replace it with `ls -la ~/.claude/` for the Sonnet round, which is not
 refused, answers the same question, and costs the same one call.
 
+## The audit on Sonnet 5 — ab6, written 2026-09-09, before the run
+
+Sonnet 5 is the model JetBrains ran their 425 trials of rtk on, and the only model in this space with an
+independent billing-based number attached to it (+7.6% at low effort, flat at high). Everything on this
+page is Opus 5 or Fable 5.1. So this is the first reading on the one model where somebody else's result
+exists to be read next to it, and that is the whole reason to spend the round.
+
+**Setup.** Identical to ab5 in every respect but the model: two Cowork sessions on `33kain/contexa`,
+Sonnet 5 both arms, one message each, branches `claude/ab6-off` and `claude/ab6-tb` cut from the same
+0.2.3 repin commit, differing only in `.claude/settings.json`. Results to `ab-results/ab6-off.txt` and
+`ab-results/ab6-tb.txt`. One change to the task, carried in from ab5's finding: step 11 becomes
+`ls -la ~/.claude/` instead of `cat ~/.claude/settings.json`, because the permission classifier refused the
+`cat` on both Fable arms and a step whose command is refused measures the classifier rather than the
+configuration. It answers the same question — no user-scope settings file — in the same one call, and both
+arms get it.
+
+**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within two or three of
+each other, answers identical. The reasoning is the two rounds already on this page. Neither Opus 5 nor
+Fable 5.1 produced a saving that survived being run a second time, on the one workload shape where the
+guard has anything to trim at all, and there is no mechanism yet identified that would make Sonnet
+different in kind. Sonnet 5's list rates put cache writes at twenty times its reads, the Opus ratio rather
+than Fable's eighty, so if the round behaves like anything it should behave like the Opus rounds, where the
+bill sits in the cache-read column and out of a hook's reach.
+
+**Decision rule, fixed before the run.** This round settles what the post may say about Sonnet, and only
+that; nothing ships or unships on it.
+
+- Requests level (within three either way) and cost inside 21%: the expected null. The post gets a Sonnet
+  row reading "no measurable difference", and the JetBrains comparison is stated as what it is — their
+  tool cost 7.6% on this model, this one did nothing measurable on it, and neither is a saving.
+- On-arm requests materially below off-arm (four or more) with cost not worse: the first result on this
+  page that would survive the requests rule, and it gets a second run before it is written anywhere
+  outside this file. One run does not become a claim.
+- On-arm requests materially above off-arm: a loss, recorded as one, and the post says the hook has cost
+  money on three of three models.
+
+Answers must be identical across the arms; a difference voids the round. If either arm's step 11 is
+refused again, the round still stands — the question it asks is answered by the fallback — but the step
+gets replaced properly before any further round rather than patched a second time.
+
