@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 — 2026-09-09
 
 - **A file excerpt is a read.** A shell command that only prints one file (`cat`, `sed -n` with a range,
   `head`, `tail`, no pipe) is treated like the Read tool: untouched up to `readMaxBytes`, capped at the
@@ -18,6 +18,12 @@
 - `report` prints "Under the trim threshold": shell results at or under `maxChars`, with their tokens and
   carried cost as a share of everything carried. The share the guard does not touch, measured, so the
   real-session files can say whether shape filters for small output are worth building.
+- Measured, not claimed: the excerpt rule was A/B'd against no hooks on the same audit before release
+  (`AB-TASK.md`, "The fix, measured"). It removed the pathology it was written for — eighty-line `sed`
+  ranges, 91 requests, twice the bill — but the on arm still ran 45 requests to the off arm's 32 and cost
+  30% more, so by the protocol's own rule this is not a win, only strictly less than 0.2.2 did. On the
+  read-heavy audit shape the honest range across four runs each way is $4.60-$5.97 with hooks off and
+  $3.77-$9.63 with hooks on: the model's reading strategy moves that bill more than the guard does.
 
 ## 0.2.2 — 2026-09-09
 
