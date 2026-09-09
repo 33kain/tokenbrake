@@ -439,6 +439,41 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(dir, { recursive: true, force: true });
 }
 
+/* ---- cost at list price, and report --compare -----------------------------
+   The formula must reproduce a real session record: arm B of the feature round (Opus 5) billed $2.381214
+   for 58 input, 13,902 output, 2,713,808 cache-read and 67,647 cache-write tokens. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const dir = join(CFG, 'projects', '-w-cmp'); mkdirSync(dir, { recursive: true });   // under CFG, so the CLI's --compare can find them by prefix
+  const mk = (name, model, usage, results) => {
+    const L = [];
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'r1', uuid: 'r1', sessionId: name, cwd: '/w',
+      message: { model, usage, content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test' } }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: 't1r', sessionId: name, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x'.repeat(results) }] } }));
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'r2', uuid: 'r2', sessionId: name, cwd: '/w',
+      message: { model, usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: 'text', text: 'done' }] } }));
+    const f = join(dir, name + '.jsonl'); writeFileSync(f, L.join('\n') + '\n'); return f;
+  };
+  const armB = mk('armb0000', 'claude-opus-5', { input_tokens: 58, output_tokens: 13902, cache_read_input_tokens: 2713808, cache_creation_input_tokens: 67647 }, 4000);
+  const armA = mk('arma0000', 'claude-opus-5', { input_tokens: 54, output_tokens: 16022, cache_read_input_tokens: 2614181, cache_creation_input_tokens: 74504 }, 8000);
+  const odd = mk('oddm0000', 'claude-someday-9', { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }, 10);
+  console.log('\n-- cost at list price, and --compare');
+  const cB = T.costOf(T.parseTranscript(armB)), cA = T.costOf(T.parseTranscript(armA));
+  t('the Opus 5 formula reproduces the session record to the sixth decimal', cB.usd.toFixed(6) === '2.381214' && cA.usd.toFixed(6) === '2.452951', `${cB.usd.toFixed(6)} ${cA.usd.toFixed(6)}`);
+  t('the report carries the price line', /At list price: ≈ \$2\.38 \(claude-opus-5; cache writes at the 1h rate\)/.test(T.renderReport(T.parseTranscript(armB), [])));
+  t('an unlisted model is reported as unpriced, not guessed', T.costOf(T.parseTranscript(odd)).usd === 0 && T.costOf(T.parseTranscript(odd)).unpriced.join() === 'claude-someday-9');
+  const cmp = T.renderCompare(T.parseTranscript(armA), T.parseTranscript(armB), []);
+  t('--compare: A and B named, cost row with the change', /A: arma0000…  claude-opus-5/.test(cmp) && /B: armb0000…/.test(cmp) && /API cost, list price\s+\$2\.45\s+\$2\.38\s+−3%/.test(cmp), cmp.split('\n').find(l => /API cost/.test(l)));
+  t('--compare: the rows the A/B rounds compared by hand', ['requests', 'cache-read tokens', 'output tokens', 'tool results entered', 'tool results carried', 'trimmed by the guard', 'repeat reads'].every(k => cmp.includes(k)));
+  t('--compare: tool results entered halves, and the column says so', /tool results entered\s+2k\s+1k\s+−50%/.test(cmp), cmp.split('\n').find(l => /entered/.test(l)));
+  const r = cli(['report', '--compare', 'arma0000', 'armb0000'], PROJ);
+  t('cli: report --compare resolves session prefixes', r.status === 0 && /Change is B against A/.test(r.stdout), (r.stdout + r.stderr).slice(0, 200));
+  const r2 = cli(['report', '--compare', 'arma0000'], PROJ);
+  t('cli: one argument is a usage line, not a crash', r2.status === 0 && /Usage: tokenbrake report --compare/.test(r2.stdout));
+  rmSync(dir, { recursive: true, force: true });
+}
+
 /* ---- 0.2.0 — the plugin manifest and the marketplace ---------------------- */
 {
   const plugin = JSON.parse(readFileSync('./.claude-plugin/plugin.json', 'utf8'));

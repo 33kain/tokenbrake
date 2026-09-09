@@ -1,5 +1,10 @@
 # The A/B run: does brake 1 move the usage limit?
 
+> Since 0.2.2 the comparison table below is one command: `tokenbrake report --compare <A> <B>` on the two
+> arms' transcripts prints cost, requests, cache reads, entered, carried, trimmed and repeat reads with the
+> change column. The protocol on this page, one message, one config difference, the decision rule fixed
+> before the run, is what makes the table mean something.
+
 Two Cowork sessions on this repository, the same one-message task, the usage
 page read before and after each. Arm A runs on `main` before `.claude/settings.json`
 is merged (no hooks). Arm B runs after the merge (hooks on: shell output over

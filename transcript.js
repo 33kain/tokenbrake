@@ -168,21 +168,50 @@ function repeatReads(parsed) {
   return out;
 }
 
+/* List prices, USD per million tokens, first-party Claude API. Cache writes are priced for the one-hour TTL
+   Claude Code uses (2× input; the five-minute TTL would be 1.25×). Checked against the session records of the
+   A/B arms: on the Opus 5 feature arms the formula reproduces $2.381214 and $2.452951 to the sixth decimal.
+   Prices change; a model not listed here is reported as unpriced rather than guessed. */
+const PRICES = [
+  [/^claude-fable-5-1/, { in: 10, out: 50, read: 0.25, write: 20 }],
+  [/^claude-fable-5/, { in: 10, out: 50, read: 1, write: 20 }],
+  [/^claude-opus-5/, { in: 5, out: 25, read: 0.5, write: 10 }],
+  [/^claude-opus-4-[678]/, { in: 5, out: 25, read: 0.5, write: 10 }],
+  [/^claude-sonnet-5/, { in: 2, out: 10, read: 0.2, write: 4 }],
+  [/^claude-sonnet-4-6/, { in: 3, out: 15, read: 0.3, write: 6 }],
+  [/^claude-haiku-4-5/, { in: 1, out: 5, read: 0.1, write: 2 }],
+];
+function priceOf(model) { for (const [re, p] of PRICES) if (re.test(String(model || ''))) return p; return null; }
+
+/* The session at list price, request by request, each at its own model's rate. */
+function costOf(parsed) {
+  let usd = 0; const byModel = {}; const unpriced = new Set();
+  for (const q of parsed.requests) {
+    const u = q.usage; if (!u) continue;
+    const p = priceOf(q.model);
+    if (!p) { unpriced.add(q.model || '?'); continue; }
+    const c = ((u.input_tokens || 0) * p.in + (u.output_tokens || 0) * p.out
+      + (u.cache_read_input_tokens || 0) * p.read + (u.cache_creation_input_tokens || 0) * p.write) / 1e6;
+    usd += c; byModel[q.model] = (byModel[q.model] || 0) + c;
+  }
+  return { usd, byModel, unpriced: [...unpriced] };
+}
+
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
    cache reads + cache writes), so summing those is the total the session has actually processed, and the
    LAST request's figure is roughly what the context holds right now. cacheRead over the total is how much
    of that was served at the cached rate. Missing counters read as 0 here because this is a sum — the
    per-call null-vs-0 distinction the extension keeps does not survive addition. */
 function usageTotals(parsed) {
-  let processed = 0, cacheRead = 0, cacheWrite = 0, out = 0, requestsWithUsage = 0, last = 0;
+  let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0;
   for (const q of parsed.requests) {
     const u = q.usage; if (!u) continue;
     requestsWithUsage++;
     const inp = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
-    processed += inp + cr + cw; cacheRead += cr; cacheWrite += cw; out += u.output_tokens || 0;
+    processed += inp + cr + cw; cacheRead += cr; cacheWrite += cw; input += inp; out += u.output_tokens || 0;
     last = inp + cr + cw;
   }
-  return { processed, cacheRead, cacheWrite, out, requestsWithUsage, contextNow: last };
+  return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last };
 }
 
 /* Which results the guard trimmed, from the ledger: keyed by tool_use_id where the ledger has one (0.1.0
@@ -236,6 +265,10 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
     const pct = u.processed ? Math.round(100 * u.cacheRead / u.processed) : 0;
     lines.push(`  Context processed: ${kfmt(u.processed)} tokens across ${fmt(u.requestsWithUsage)} requests (${pct}% read from cache); output ${kfmt(u.out)}`);
     lines.push(`  Context now: ≈ ${kfmt(u.contextNow)} tokens — what the next request re-reads`);
+    const c = costOf(parsed);
+    const models = Object.keys(c.byModel);
+    if (models.length) lines.push(`  At list price: ≈ $${c.usd.toFixed(2)} (${models.join(', ')}; cache writes at the 1h rate)`
+      + (c.unpriced.length ? ` — ${c.unpriced.join(', ')} unpriced` : ''));
   }
   const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
@@ -289,6 +322,63 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   return lines.join('\n');
 }
 
+/* The measurement protocol of AB-TASK.md as one table: two sessions, the same rows, a change column. The rows
+   are the ones the A/B rounds compared by hand — cost, requests, cache reads, output, what tool results
+   entered and carried, what the guard trimmed, repeat reads. Nothing here says which arm is which or why
+   they differ; that is the caller's protocol. The change column is B against A. */
+function sessionFacts(parsed, ledger) {
+  carry(parsed);
+  const u = usageTotals(parsed), c = costOf(parsed), rep = repeatReads(parsed);
+  const idx = ledgerIndex(ledger || [], parsed.sessionId);
+  let trimmed = 0, keptOut = 0;
+  for (const r of parsed.results) {
+    const l = (r.id && idx.byId.get(r.id)) || idx.byWhat.get(r.what);
+    if (l && l.kept != null && l.chars != null && l.kept < l.chars) { trimmed++; keptOut += Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }
+  }
+  return {
+    session: String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8),
+    model: Object.keys(c.byModel).join('+') || (parsed.requests.find(q => q.model) || {}).model || '?',
+    cost: c.usd, unpriced: c.unpriced.length > 0,
+    requests: parsed.requests.length, results: parsed.results.length, compactions: parsed.compactions.length,
+    processed: u.processed, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, input: u.input, out: u.out,
+    entered: parsed.results.reduce((s, r) => s + r.tokens, 0),
+    carried: parsed.results.reduce((s, r) => s + r.carried, 0),
+    trimmed, keptOut, repeats: rep.repeats, repeatTokens: rep.tokens
+  };
+}
+
+function renderCompare(A, B, ledger) {
+  const a = sessionFacts(A, ledger), b = sessionFacts(B, ledger);
+  const money = (x, f) => f.unpriced ? '$' + x.toFixed(2) + '*' : '$' + x.toFixed(2);
+  const rows = [
+    ['API cost, list price', money(a.cost, a), money(b.cost, b), a.cost, b.cost],
+    ['requests', fmt(a.requests), fmt(b.requests), a.requests, b.requests],
+    ['context processed', kfmt(a.processed), kfmt(b.processed), a.processed, b.processed],
+    ['cache-read tokens', kfmt(a.cacheRead), kfmt(b.cacheRead), a.cacheRead, b.cacheRead],
+    ['cache-write tokens', kfmt(a.cacheWrite), kfmt(b.cacheWrite), a.cacheWrite, b.cacheWrite],
+    ['uncached input tokens', kfmt(a.input), kfmt(b.input), a.input, b.input],
+    ['output tokens', kfmt(a.out), kfmt(b.out), a.out, b.out],
+    ['tool results', fmt(a.results), fmt(b.results), a.results, b.results],
+    ['tool results entered', kfmt(a.entered), kfmt(b.entered), a.entered, b.entered],
+    ['tool results carried', kfmt(a.carried), kfmt(b.carried), a.carried, b.carried],
+    ['trimmed by the guard', `${a.trimmed} (≈ ${kfmt(a.keptOut)} kept out)`, `${b.trimmed} (≈ ${kfmt(b.keptOut)} kept out)`, null, null],
+    ['repeat reads', `${a.repeats} (≈ ${kfmt(a.repeatTokens)})`, `${b.repeats} (≈ ${kfmt(b.repeatTokens)})`, null, null],
+    ['compactions', fmt(a.compactions), fmt(b.compactions), null, null],
+  ];
+  const change = (x, y) => (x == null || y == null || !x) ? '' : ((y - x) / x * 100).toFixed(0).replace(/^(-?)/, (m, s) => s === '-' ? '−' : '+') + '%';
+  const w0 = 24, w1 = Math.max(14, ...rows.map(r => r[1].length)), w2 = Math.max(14, ...rows.map(r => r[2].length));
+  const lines = [];
+  lines.push(`A: ${a.session}…  ${a.model}  ${A.cwd || ''}`);
+  lines.push(`B: ${b.session}…  ${b.model}  ${B.cwd || ''}`);
+  lines.push('');
+  lines.push(`${''.padEnd(w0)}  ${'A'.padStart(w1)}  ${'B'.padStart(w2)}  change`);
+  for (const r of rows) lines.push(`${r[0].padEnd(w0)}  ${r[1].padStart(w1)}  ${r[2].padStart(w2)}  ${change(r[3], r[4])}`);
+  lines.push('');
+  lines.push('Change is B against A. Cost is list price, cache writes at the 1h rate' + ((a.unpriced || b.unpriced) ? '; * a model without a listed price was left out' : '') + '.');
+  lines.push('Two sessions differ by more than their configuration: on one task, identical arms came out 21% apart in cost (AB-TASK.md).');
+  return lines.join('\n');
+}
+
 /* One line per session, for --all: enough to pick the one worth opening. */
 function renderSummaryLine(parsed) {
   carry(parsed);
@@ -298,4 +388,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, readKey, usageTotals, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, readKey, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
