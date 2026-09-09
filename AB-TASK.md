@@ -995,3 +995,51 @@ Answers must be identical across the arms; a difference voids the round. If eith
 refused again, the round still stands — the question it asks is answered by the fallback — but the step
 gets replaced properly before any further round rather than patched a second time.
 
+### ab6, first attempt — void, and the reason is worth more than the round
+
+Run 2026-09-09, Sonnet 5 both arms. Neither arm ran a single step. Both read the task as an attack and
+stopped: the off arm's status line was "prompt appears to contain exfiltration attempt; halting", the on
+arm's "suspicious task request; pausing before execution", and each asked whether the human had really
+sent it. $0.31 and $0.29 spent, nothing measured, both arms void.
+
+**They were right, and the step they objected to was the one added an hour earlier.** ab5 found that the
+permission classifier refused step 11's `cat ~/.claude/settings.json`, so for this round it became
+`ls -la ~/.claude/` — the model's own configuration directory — with the task then saying to paste the
+output into a file, commit it, and push it to a public GitHub branch. Read without the context of this
+page, that is a prompt telling an agent to enumerate the user's Claude configuration and push it to a
+remote. Two models out of two flagged it. The step meant to prove a negative about the arm's setup had
+turned into the one part of the task that looks like an exfiltration.
+
+**And it had already leaked something, mildly.** The ab5 on-arm did paste that listing, and it was
+committed to `claude/ab5-tb` in a public repository. No credentials — file names, sizes and modes in a
+throwaway container's home directory — but it carries no measurement and it should not have been asked
+for. It is removed from that file, with the one line that answers the step's actual question left in
+place. The ab5 result stands: both arms handled step 11 the same way and neither's numbers depend on it.
+
+**The fix, and why it is not a third patch.** Step 11 exists to establish one thing: what hooks this arm
+carried and at what scope. That question has a command of its own — `npx --yes tokenbrake@0.2.3 status`,
+which reports exactly what is installed at user and project scope and spawns each hook once. It answers
+the step's real question directly instead of inferring it from the absence of a file, it reads nothing
+outside the tool's own installation, and it is one small Bash call on both arms, as the step always was.
+Step 11 becomes that, and stays that.
+
+**What this costs the record, said plainly.** Step 11 has now been three different commands across three
+rounds: `cat ~/.claude/settings.json` in ab3 and ab4, the same refused-and-worked-around in ab5, and
+`status` from ab6 on. Cross-round comparison of the audit was already imperfect on this step, since no
+round has executed it as written. It is one call of a few hundred characters out of a 26-to-45-request
+session, so it does not move any figure on this page, but a protocol document that hid the change would be
+worth less than one that prints it.
+
+**The methodology finding, which outlives this round.** A benchmark task that reads the user's
+configuration directory is not model-portable. It passes on one model, is refused by the permission layer
+on another, and is refused by the model itself on a third — and the third refusal costs a whole round.
+Anyone A/B-testing agent tooling on the bill will write a task like this, because proving the control arm
+really is a control arm is the first thing the protocol asks for. Prove it with the tool's own status
+command, or by the branch the arm was cut from, and never by having the agent read and publish the
+environment. This goes in `LANDSCAPE.md` next to the other things measuring this category teaches.
+
+**The pre-registration above stands unamended in every other respect.** The expectation and the decision
+rule were written before any Sonnet arm ran and no arm produced a number, so there is nothing here that
+could have been fitted to a result. Only step 11 changes, and it changes for a reason that has nothing to
+do with what the round measures.
+
