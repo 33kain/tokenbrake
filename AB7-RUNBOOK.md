@@ -8,6 +8,29 @@ price.
 Everything needed is on this page. `AB-TASK.md` holds the reasoning and the pre-registered decision rule,
 and is where the filled-in result goes back; you do not need it open while running.
 
+## Who runs what — read this first
+
+**This page is for your hands, not for an agent.** Do not hand the runbook to a Claude session and ask it
+to carry the round out. The three Claude Code sessions here are the thing being measured, not the operator
+doing the measuring, and a session that installs or uninstalls a hook is measuring itself. That is how the
+round gets silently voided: every number would come from a session that had already spent requests on
+setup, and the arm would no longer be the arm.
+
+The split, exactly:
+
+| what | who |
+|---|---|
+| Clone, `npm install`, write down commit and versions | you, in PowerShell, outside Claude Code |
+| Install / uninstall rtk and tokenbrake, and every `status` check | you, in PowerShell, outside Claude Code |
+| The audit text | pasted into each of three **fresh** Claude Code sessions, as the only message, then left alone |
+| `report --all` and the two `report --compare` calls | you, in PowerShell, after the third arm |
+| Filling in the table and writing the result into `AB-TASK.md` | an agent, afterwards — that part is record-keeping and touches nothing measured |
+
+So: one code block on this page goes into a Claude session, the one under "The task". Everything else you
+type yourself. And within each arm, paste the task and send nothing else — no answers to questions, no
+follow-ups. An arm that took a second message is recorded as such and is not comparable to one that did
+not; see ab6 in `AB-TASK.md` for what that already cost once.
+
 ## Decide one thing first: the model
 
 Write it down before you start. All three arms run on the same one.
