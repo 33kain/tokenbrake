@@ -29,6 +29,31 @@ carry multiplier; on Fable 5.1, where writes cost eighty times reads, cache writ
 both arms' cost and the lever is how much new text enters at all. A claim measured on one model does not
 transfer to the other, and this table's own row is the first thing that has to say so.
 
+## What measuring this category costs you, before it tells you anything
+
+Three things this repository learned by running the A/B rather than by reading about it. They are in
+`AB-TASK.md` with the rounds that produced them; they are here because anyone comparing tools in this
+space hits all three, and none is about any tool's design.
+
+1. **The control arm is the hard part, and proving it is a control arm is harder.** The protocol's first
+   requirement is that the no-hooks arm really carries no hooks, and the obvious way to show it is to have
+   the session read its own configuration and paste the result. Do not. It passed on one model, the
+   permission layer refused it on a second, and on a third the model itself read "enumerate the user's
+   Claude configuration, commit it, push it to a public branch" as an exfiltration attempt and halted both
+   arms before step one. Prove the arm from its branch, or from the tool's own status command. A benchmark
+   task that touches the user's environment is not portable across models.
+2. **A seeded prompt is not a prompt on every model.** Arms opened programmatically arrive with no human
+   turn behind them. Opus 5 and Fable 5.1 ran them without comment; Sonnet 5 held for confirmation and
+   would not start. No wording fixes that, because the objection is to the delivery. Whichever models a
+   comparison names, some of them may need a person at a keyboard, and that is a scheduling fact before it
+   is a methodology one.
+3. **The bill is not made of the same thing on every model.** Fable 5.1 lists cache writes at eighty times
+   its cache reads; Opus 5 at twenty. In the Fable round cache writes were three quarters of both arms'
+   cost, where every Opus round on this page is dominated by reads. A hook that works on the read side and
+   a hook that works on the write side are different products, and a saving measured on one model is not
+   evidence about another. The category's habit of quoting one percentage, model-free, is the thing to
+   stop doing first.
+
 ## Behind
 
 1. **Small outputs.** rtk, chop and squeez compress `git status`, passing test lines, `ls`, `docker ps`,
