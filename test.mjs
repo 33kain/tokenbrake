@@ -153,6 +153,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const ours = (ev) => (s.hooks[ev] || []).filter(g => g.hooks.some(h => (h.args || []).some(a => a.includes('tokenbrake'))));
   t('one PostToolUse group with matcher *', ours('PostToolUse').length === 1 && ours('PostToolUse')[0].matcher === '*');
   t('one PreToolUse group with matcher Read', ours('PreToolUse').length === 1 && ours('PreToolUse')[0].matcher === 'Read');
+  t('one PostToolUseFailure group on the shells, same guard, same mode', ours('PostToolUseFailure').length === 1 && ours('PostToolUseFailure')[0].matcher === 'Bash|PowerShell' && ours('PostToolUseFailure')[0].hooks[0].args[1] === 'post');
   const post = ours('PostToolUse')[0].hooks[0];
   t('exec form: args present, guard path absolute, mode is the second arg', Array.isArray(post.args) && post.args[0] === join(CFG, 'hooks', 'tokenbrake', 'guard.js') && post.args[1] === 'post');
   /* Exec form spawns the command without a shell, so a bare 'node' depends on the
@@ -402,6 +403,37 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfgAB, { recursive: true, force: true });
 }
 
+/* ---- PostToolUseFailure: the failing command -------------------------------
+   For Bash, PostToolUse fires only on exit 0. A non-zero exit is PostToolUseFailure, whose input carries
+   the output in `error` ("Exit code 1", then the text) and no tool_response on Claude Code 2.1.261. Until
+   0.2.2 the guard was not registered for it, so every failing test run entered whole: the one output the
+   trim exists for. Found by the errorContextLines A/B, where four `npm test` failures of 12k chars each
+   sat untrimmed in both arms (AB-TASK.md). */
+{
+  console.log('\n-- PostToolUseFailure: a failing shell command');
+  const err = 'Exit code 1\n' + noisy;
+  let r = guard('post', { session_id: 'sess-f', tool_use_id: 'toolu_fail1', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, error: err, is_interrupt: false });
+  let o = parse(r.stdout); let h = o && o.hookSpecificOutput;
+  t('a failing command over maxChars is trimmed under its own event name', r.status === 0 && !!h && h.hookEventName === 'PostToolUseFailure');
+  t('the replacement is a string, since the error Claude sees is a string', !!h && typeof h.updatedToolOutput === 'string' && h.updatedToolOutput.length < err.length / 3);
+  t('the exit code line survives as the first line', !!h && h.updatedToolOutput.startsWith('Exit code 1\n'));
+  t('the seeded error lines from the middle are kept', !!h && /L151: ERROR: seeded failure alpha/.test(h.updatedToolOutput) && /L302: Exception: seeded gamma/.test(h.updatedToolOutput));
+  const led = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+  const row = led.filter(x => x.id === 'toolu_fail1').pop();
+  t('the ledger row says the command failed', !!row && row.failed === true && row.chars === err.length);
+  r = guard('post', { session_id: 'sess-f', tool_use_id: 'toolu_fail2', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, error: err, is_interrupt: true });
+  t('an interrupted call is left alone', r.status === 0 && r.stdout === '');
+  r = guard('post', { session_id: 'sess-f', tool_use_id: 'toolu_fail3', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+    tool_input: { command: 'false' }, error: 'Exit code 1', is_interrupt: false });
+  t('a short failure passes through untouched', r.status === 0 && r.stdout === '');
+  r = guard('post', { session_id: 'sess-f', tool_use_id: 'toolu_fail4', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+    tool_input: { command: 'npm test' }, error: 'Command exited with code 1', tool_response: err, is_interrupt: false });
+  o = parse(r.stdout); h = o && o.hookSpecificOutput;
+  t('when the docs shape arrives instead (short error, output in tool_response), the output is what gets trimmed', !!h && h.updatedToolOutput.startsWith('Exit code 1\n') && /\[tokenbrake\]/.test(h.updatedToolOutput));
+}
+
 /* ---- context after flagged lines ------------------------------------------
    A FAIL line alone names the test. The lines after it carry the assertion and the first frame, and a
    model that gets only the name comes back for the rest with a whole extra request. */
@@ -555,7 +587,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('plugin: named tokenbrake, same version as the npm package', plugin.name === 'tokenbrake' && plugin.version === pkg.version);
   const hooks = JSON.parse(readFileSync('./hooks/hooks.json', 'utf8')).hooks;
   const post = hooks.PostToolUse && hooks.PostToolUse[0], pre = hooks.PreToolUse && hooks.PreToolUse[0];
-  t('plugin: PostToolUse on every tool, PreToolUse on Read only', post && post.matcher === '*' && pre && pre.matcher === 'Read');
+  const fail = hooks.PostToolUseFailure && hooks.PostToolUseFailure[0];
+  t('plugin: PostToolUse on every tool, PostToolUseFailure on the shells, PreToolUse on Read only', post && post.matcher === '*' && fail && fail.matcher === 'Bash|PowerShell' && pre && pre.matcher === 'Read');
   const ok = h => h && h.type === 'command' && h.command === 'node' && Array.isArray(h.args) && h.args[0] === '${CLAUDE_PLUGIN_ROOT}/guard.js';
   t('plugin: both hooks exec-form, node, the guard from the plugin root', ok(post.hooks[0]) && ok(pre.hooks[0]) && post.hooks[0].args[1] === 'post' && pre.hooks[0].args[1] === 'read-pre');
   const market = JSON.parse(readFileSync('./.claude-plugin/marketplace.json', 'utf8'));
@@ -580,6 +613,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     hook('PostToolUse').args.join(' ') === '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js post' &&
     hook('PreToolUse').args.join(' ') === '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js read-pre' &&
     hook('PostToolUse').command === 'node' && hook('PreToolUse').command === 'node');
+  t('project install: PostToolUseFailure on the shells through the same guard',
+    own.hooks.PostToolUseFailure[0].matcher === 'Bash|PowerShell' && hook('PostToolUseFailure').args[1] === 'post');
 }
 
 rmSync(CFG, { recursive: true, force: true });

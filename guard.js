@@ -4,7 +4,9 @@
 // Zero dependencies. Fails open: any error => exit 0 with no output, Claude Code proceeds unchanged.
 //
 // Modes (argv[2]):
-//   post      PostToolUse (matcher *): trims oversized Bash/PowerShell output, logs every tool result size
+//   post      PostToolUse (matcher *) and PostToolUseFailure (Bash|PowerShell): trims oversized shell output,
+//             logs every tool result size. A command that exits non-zero is a different event, and until 0.2.2
+//             the guard never saw it: every failing test run entered whole.
 //   read-pre  PreToolUse (matcher Read): caps unbounded reads of large files via updatedInput.limit
 
 const fs = require('fs');
@@ -132,12 +134,16 @@ function handlePost(input, cfg) {
   const ti = input.tool_input || {};
   const resp = input.tool_response;
   const isShell = tool === 'Bash' || tool === 'PowerShell';
-
-  let text = '';
-  if (typeof resp === 'string') text = resp;
-  else if (resp && typeof resp === 'object') {
-    text = isShell ? [resp.stdout, resp.stderr].filter(Boolean).join('\n') : JSON.stringify(resp);
-  }
+  /* PostToolUseFailure: for Bash, the command exited non-zero. The output arrives in `error` as one string
+     ("Exit code 1", then stdout and stderr), with no tool_response on the Claude Code line this was written
+     against (2.1.261) and, per the docs, possibly both. Take whichever carries the text. An interrupted
+     call is the user's doing: nothing to trim, nothing to log. */
+  const failed = input.hook_event_name === 'PostToolUseFailure';
+  if (failed && input.is_interrupt) return;
+  const asText = (v) => typeof v === 'string' ? v
+    : (v && typeof v === 'object') ? (isShell ? [v.stdout, v.stderr].filter(Boolean).join('\n') : JSON.stringify(v)) : '';
+  let text = asText(resp);
+  if (failed) { const e = asText(input.error); if (e.length > text.length) text = e; }
 
   /* `id` and `transcript` (0.1.0, for brake 4): the tool_use_id is how a ledger row joins the transcript's
      tool_result exactly, and transcript_path is where that transcript is — Claude Code hands both over on
@@ -146,7 +152,8 @@ function handlePost(input, cfg) {
     ev: 'post', session: input.session_id, tool, chars: text.length,
     what: isShell ? short(ti.command, 120) : (ti.file_path || ti.pattern || ti.url || ti.description || undefined),
     id: input.tool_use_id || undefined,
-    transcript: input.transcript_path || undefined
+    transcript: input.transcript_path || undefined,
+    failed: failed || undefined
   };
 
   if (!isShell || text.length <= cfg.maxChars) {
@@ -169,8 +176,9 @@ function handlePost(input, cfg) {
   // Claude Code validates updatedToolOutput against the tool's own response schema. For Bash that is
   // { stdout, stderr, interrupted, isImage } — a bare string is rejected (silently, in the debug log only)
   // and the original output goes through untouched. Keep the object shape, put the trimmed text in stdout.
-  const updated = (resp && typeof resp === 'object') ? { ...resp, stdout: trimmed, stderr: '' } : trimmed;
-  emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updated } });
+  // On failure the output Claude sees is the error string itself, so the replacement is a string too.
+  const updated = (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: trimmed, stderr: '' } : trimmed;
+  emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: updated } });
 }
 
 function handleReadPre(input, cfg) {

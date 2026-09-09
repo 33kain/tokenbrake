@@ -52,6 +52,11 @@ function init() {
   settings.hooks.PostToolUse = (settings.hooks.PostToolUse || []).filter(g => !isOurs(g));
   settings.hooks.PostToolUse.push({ matcher: '*', hooks: [hook('post')] });
 
+  /* A shell command that exits non-zero fires PostToolUseFailure, not PostToolUse. Without this group the
+     guard never sees a failing test run, which is the output it exists for. */
+  settings.hooks.PostToolUseFailure = (settings.hooks.PostToolUseFailure || []).filter(g => !isOurs(g));
+  settings.hooks.PostToolUseFailure.push({ matcher: 'Bash|PowerShell', hooks: [hook('post')] });
+
   settings.hooks.PreToolUse = (settings.hooks.PreToolUse || []).filter(g => !isOurs(g));
   settings.hooks.PreToolUse.push({ matcher: 'Read', hooks: [hook('read-pre')] });
 
@@ -70,7 +75,7 @@ function init() {
 function uninstall() {
   const settings = readJson(settingsPath, null);
   if (settings && settings.hooks) {
-    for (const ev of ['PostToolUse', 'PreToolUse']) {
+    for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) {
       if (Array.isArray(settings.hooks[ev])) {
         settings.hooks[ev] = settings.hooks[ev].filter(g => !isOurs(g));
         if (!settings.hooks[ev].length) delete settings.hooks[ev];
@@ -118,9 +123,10 @@ function status() {
   const has = (ev) => ours(ev).length > 0;
   console.log(`settings: ${settingsPath}`);
   console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
+  console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
   console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
-  for (const ev of ['PostToolUse', 'PreToolUse']) for (const g of ours(ev)) for (const h of g.hooks) {
+  for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) for (const g of ours(ev)) for (const h of g.hooks) {
     if (!isOurs({ hooks: [h] })) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
   }
