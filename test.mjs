@@ -45,7 +45,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 {
   console.log('\n-- PostToolUse: oversized Bash output');
   const r = guard('post', { session_id: 'sess-1', tool_use_id: 'toolu_01TESTTESTTEST', tool_name: 'Bash',
-    tool_input: { command: 'cat noisy.txt' }, tool_response: bashResp(noisy) });
+    tool_input: { command: 'node test.mjs' }, tool_response: bashResp(noisy) });
   t('exits 0', r.status === 0, `status=${r.status}`);
   const out = parse(r.stdout);
   const u = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedToolOutput;
@@ -206,7 +206,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   /* --ledger since brake 4: plain `report` is the transcript ranking now, and this config dir has no
      transcript, only the guard's own rows. */
   const r = cli(['report', '--ledger', '--all']);
-  t('report --ledger exits 0 and shows the trimmed session', r.status === 0 && /Trimmed by tokenbrake: [1-9]/.test(r.stdout) && /cat noisy\.txt/.test(r.stdout));
+  t('report --ledger exits 0 and shows the trimmed session', r.status === 0 && /Trimmed by tokenbrake: [1-9]/.test(r.stdout) && /node test\.mjs/.test(r.stdout));
 }
 
 {
@@ -406,6 +406,40 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     saved >= FLOOR, `${(saved * 100).toFixed(1)}%, ${cA} -> ${cB} token-reads`);
 
   rmSync(cfgAB, { recursive: true, force: true });
+}
+
+/* ---- a file excerpt is a read ----------------------------------------------
+   sed -n / cat / head / tail of one file, no pipe: untouched up to readMaxBytes like a Read, capped to
+   readLimitLines above it. The three-arm run had a model chunk every file into 80-line sed ranges after
+   one such excerpt was trimmed: 91 requests, twice the bill. */
+{
+  console.log('\n-- a file excerpt is a read');
+  const src = Array.from({ length: 400 }, (_, i) => `  const v${i} = compute(${i}); // a line of source, about sixty characters wide`).join('\n');
+  const post = (command, text) => guard('post', { session_id: 'ex', tool_use_id: 'toolu_ex_' + Math.random().toString(36).slice(2, 8), tool_name: 'Bash',
+    tool_input: { command }, tool_response: bashResp(text) });
+  let r = post("sed -n '1,120p' extension/content.js", src.slice(0, 9000));
+  t('a 9k-char sed range of one file passes untouched', r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
+  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js']) {
+    r = post(c, src.slice(0, 9000));
+    t(`untouched: ${c}`, r.status === 0 && r.stdout === '');
+  }
+  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls"]) {
+    r = post(c, src.slice(0, 9000));
+    const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
+    t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
+  }
+  const big = Array.from({ length: 1200 }, (_, i) => `line ${i + 1} of a big file `.padEnd(70, '.')).join('\n');   // 85 KB, over readMaxBytes
+  r = post("sed -n '1,1200p' big.js", big);
+  let o = parse(r.stdout); let u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
+  t('an excerpt over readMaxBytes is capped at the first readLimitLines lines, not trimmed to head and tail',
+    !!u && u.stdout.startsWith('line 1 of a big file') && u.stdout.split('\n').filter(l => /^line \d+ of/.test(l)).length === 300 && !/lines omitted here/.test(u.stdout));
+  t('and the note says so, with the cost of many small ranges', !!u && /file excerpt capped at the first 300 of 1,200 lines/.test(u.stdout) && /A few large ranges cost less/.test(u.stdout));
+  r = guard('post', { session_id: 'ex', tool_use_id: 'toolu_ex_fail', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+    tool_input: { command: "sed -n '1,120p' missing.js" }, error: 'Exit code 1\n' + noisy, is_interrupt: false });
+  o = parse(r.stdout); u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
+  t('a failing excerpt command is a failure, trimmed like one', typeof u === 'string' && /lines omitted here/.test(u));
+  const led = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+  t('the ledger marks excerpts', led.some(x => x.excerpt === true && /sed -n/.test(x.what)));
 }
 
 /* ---- PostToolUseFailure: the failing command -------------------------------

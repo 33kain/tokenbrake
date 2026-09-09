@@ -54,7 +54,9 @@ Claude Code would also fail to start — silently, with every result going throu
 lines from the middle that look like errors or warnings, each with up to 3 lines after it (the assertion, the
 expected/actual pair, the first stack frame) and its line number, plus the first and last lines of the output,
 up to 40 each, as many as fit in the 6,000. A line that opens with a pass marker (`ok`, `PASS`, `✓`) is never
-taken for an error, whatever its name says. The full output is saved to `~/.claude/tokenbrake/out/` and the trimmed result names the path,
+taken for an error, whatever its name says. A command that only prints one file (`cat`, `sed -n` with a range, `head`,
+`tail`, no pipe) is a read, and is treated like one: untouched up to `readMaxBytes`, capped at `readLimitLines` above
+it, never cut to head and tail. The full output is saved to `~/.claude/tokenbrake/out/` and the trimmed result names the path,
 so Claude can `Grep` or `Read` it if it needs more. Nothing is rewritten or "compressed" — what Claude sees is a
 predictable head/tail excerpt of the real output.
 

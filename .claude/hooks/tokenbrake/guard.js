@@ -42,6 +42,14 @@ const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/
    passes resp through" is not an error. Without this, a suite whose test names mention errors fills the
    keepErrorLines budget with green lines and the real FAIL further down never makes the cut. */
 const PASS = /^\s*(?:ok|pass(?:ed)?|✓|✔|√)\b/i;
+/* A shell command that only prints one file: cat, sed -n with a range, head, tail, with no pipe. That is a read,
+   the same act as the Read tool, and the guard leaves a Read whole up to readMaxBytes. Until 0.2.3 it trimmed
+   the same bytes to head, tail and error-looking lines when they came through sed, which for source is the
+   wrong three things to keep, and a model that met that once sized every read after it to stay under maxChars:
+   eighty-line sed ranges, ninety-one requests, twice the bill (AB-TASK.md, "Three arms"). Same shape as
+   readKey in transcript.js; keep them together. */
+const EXCERPT = /^\s*(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?|tail(?:\s+-n?\s*[0-9]+)?)\s+(['"]?)[^|;&<>'"\s]+\1\s*$/;
+
 const ERR = /\b(error|err!|fail(ed|ure|ing)?|exception|traceback|panic|fatal|warn(ing)?|not found|cannot|denied|refused)\b|✗|✖/i;
 
 function loadConfig() {
@@ -161,6 +169,23 @@ function handlePost(input, cfg) {
     return;
   }
 
+  /* A file excerpt is read like a Read: untouched up to readMaxBytes, and above that capped to the first
+     readLimitLines lines with the same note the Read cap gives, not trimmed to head, tail and error lines. */
+  const excerpt = !failed && EXCERPT.test(String(ti.command || ''));
+  if (excerpt && text.length <= cfg.readMaxBytes) {
+    if (cfg.logAllTools) log({ ...rec, excerpt: true });
+    return;
+  }
+  if (excerpt) {
+    const all = text.split('\n');
+    const kept = all.slice(0, cfg.readLimitLines).join('\n');
+    const trimmedExcerpt = `${kept}\n\n[tokenbrake] file excerpt capped at the first ${cfg.readLimitLines} of ${all.length.toLocaleString()} lines (${text.length.toLocaleString()} chars). A few large ranges cost less than many small ones: each call is a request that re-reads the whole context. Use a narrower range, or Grep to locate the section first.`;
+    log({ ...rec, excerpt: true, kept: trimmedExcerpt.length, saved: null });
+    const updatedExcerpt = (resp && typeof resp === 'object') ? { ...resp, stdout: trimmedExcerpt, stderr: '' } : trimmedExcerpt;
+    emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedExcerpt } });
+    return;
+  }
+
   let saved = null;
   try {
     const outDir = path.join(TB_DIR, 'out');
@@ -209,7 +234,7 @@ function handleReadPre(input, cfg) {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       updatedInput: { ...ti, limit },
-      additionalContext: `${why} Use offset/limit to read the section you need, or Grep to locate it first.`
+      additionalContext: `${why} Use offset/limit to read the section you need, or Grep to locate it first. A few large ranges cost less than many small ones: each call is a request that re-reads the whole context.`
     }
   });
 }
