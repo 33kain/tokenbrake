@@ -1043,3 +1043,26 @@ rule were written before any Sonnet arm ran and no arm produced a number, so the
 could have been fitted to a result. Only step 11 changes, and it changes for a reason that has nothing to
 do with what the round measures.
 
+### ab6, second attempt — the deviation, recorded before the arms returned
+
+Written 2026-09-09 while both arms were still running, so it cannot be fitted to a result. Two changes
+from the ab5 message, identical on both arms:
+
+- Step 11 is `npx --yes tokenbrake@0.2.3 status`, per the section above.
+- A closing paragraph says what the session is: one arm of an A/B of the tokenbrake hooks, run by their
+  author, that steps 10 and 11 look only at tokenbrake's own installation in this repository, and that
+  nothing reads or publishes anything outside it.
+
+That second change is a real deviation and not a formatting one. It adds about five hundred characters to
+the first message and it tells the model why it is doing this, which the ab3, ab4 and ab5 messages never
+did. It is here because without it Sonnet 5 stopped both arms, and an arm that refuses the task measures
+nothing at all. But a model told it is being benchmarked may plan differently from one that is not, and on
+this workload how the model plans is the thing that has moved the bill by a factor of two. So ab6's numbers
+compare cleanly to each other — both arms carry the same paragraph — and compare to the Opus and Fable
+rounds only with this stated next to them.
+
+If the round is ever repeated, the honest version is to put the explanation in the repository, in
+`CLAUDE.md` or a file the task points at, where every arm on every model picks it up from the branch rather
+than from the message. That is the same rule this page already applies to configuration: it goes on the
+branch, not into the prompt and not into `~/.claude`.
+
