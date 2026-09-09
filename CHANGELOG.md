@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A file excerpt is a read.** A shell command that only prints one file (`cat`, `sed -n` with a range,
+  `head`, `tail`, no pipe) is treated like the Read tool: untouched up to `readMaxBytes`, capped at the
+  first `readLimitLines` lines above it with a note. Until now the same bytes through `sed -n` were trimmed
+  to head, tail and error-looking lines, the wrong three things to keep from source, and a model that met
+  that once sized every read after it to stay under `maxChars`: eighty-line `sed` ranges, 91 requests,
+  twice the bill on the three-arm audit (`AB-TASK.md`). The Read cap's note now also says that a few large
+  ranges cost less than many small ones.
 - `report` credits a trim only when the model saw it. A ledger row means the guard offered a replacement;
   above Claude Code's own ~30,000-character ceiling the model gets a 2 KB persisted-output preview instead,
   and on `PostToolUseFailure` the replacement is ignored. Those now read "offered and not applied", with

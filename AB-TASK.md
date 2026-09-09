@@ -695,3 +695,56 @@ else before it ships: off against on, this task, two arms, the `requests` column
 
 Until that runs, the honest sentence about this shape is: on a read-heavy audit the hook has saved 37%,
 16%, and cost 100%, on the same task, depending on how the model chose to read.
+
+### The fix, measured — ab4, 2026-09-09, Opus 5, Claude Code 2.1.266
+
+Same audit, same commit of `33kain/contexa`, off against the "file excerpts are reads" guard. Decision rule
+written before the run: the fix ships as a win only if the on arm's requests are at or below the off arm's
+and cost is not worse.
+
+| | off | on (fix) | change | for comparison: on (0.2.2, ab3) |
+|---|---|---|---|---|
+| API cost | $4.60 | $5.99 | +30% | $9.63 |
+| requests | 32 | 45 | +41% | 91 |
+| cache-read tokens | 5,367,982 | 8,011,611 | +49% | 14,929,639 |
+| output tokens | 8,359 | 11,241 | | 16,289 |
+| tool results entered | 88k | 85k | | 84k |
+| tool results carried | 1.4M | 2.2M | | 3.9M |
+| largest excerpt, untouched | `sed -n '1,330p'`, 7k tokens | `sed -n '1,400p'`, 6k tokens | | `sed -n '120,200p'`, 1k |
+| trimmed by the guard | 0 | 5, none of them an excerpt | | 4 |
+| answers | 12 of 12 | identical | | identical |
+
+**What the fix did.** The pathology is gone: the on arm read `content.js` in five ranges of 400 lines, each
+about 6k tokens, each passed through untouched, where 0.2.2's arm had read it in seventeen ranges of 80. The
+five results the guard did trim were `npm test`, the build, `git log --stat` and two greps: the outputs the
+trim is for. Requests fell from 91 to 45.
+
+**What it did not do.** The on arm still ran 45 requests against the off arm's 32, and cost 30% more. The
+extra requests are more and smaller ranges on `index.js` and `background.js` (`150,270p`, `480,700p`),
+which is how this model read those files this time; the off arm read them in 330-line ranges. That
+difference is inside how the model plans, and it was there in the two no-hook arms of ab3 as well (24
+against 33 requests), but the rule was the rule: by it, the fix is not a win.
+
+**What ships anyway, and why.** The choice for the guard is not "fix or off"; a guard that does nothing to
+excerpts is the fix. The choice is "fix or 0.2.2", and on this task 0.2.2 cost twice the off arm while the
+fix cost 1.3 times. The change also only ever does less than before: it leaves excerpts alone. So it ships
+as 0.2.3, with this table beside it, and without the word "win".
+
+**The honest state of the audit shape on Opus 5.** Every run of it, hooks off and on, this repository:
+
+| date | guard | hooks off | hooks on | on / off |
+|---|---|---|---|---|
+| 2026-09-06 | 0.2.0 | $5.97 | $3.77 | 0.63 |
+| 2026-09-07 | 0.2.1, readMaxBytes 60000 arm | — | $5.13 | — |
+| 2026-09-09 ab3 | 0.2.2 | $4.82 (and $5.34 on the void rtk arm, also no hooks) | $9.63 | 2.00 |
+| 2026-09-09 ab4 | excerpts-are-reads | $4.60 | $5.99 | 1.30 |
+
+Four no-hook readings between $4.60 and $5.97; four hooks-on readings between $3.77 and $9.63. The −37%
+in the README is the best of four, not the number. On Opus 5, on this task, the hook has not shown a
+saving that survives repetition; what survives is that the model's reading strategy, whole files against
+ranges against small ranges, moves the bill by a factor of two, and the guard's job is not to push it
+toward the small ranges. The Fable 5.1 reading (−16%, one run) is unrepeated and gets its rerun with this
+guard (HANDOFF.md, "Next session", step 1).
+
+The rtk comparison stays out of reach in the cloud and moves to the owner's machine, where it now has a
+tokenbrake arm that at least does no harm on this shape.
