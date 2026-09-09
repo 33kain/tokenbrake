@@ -556,3 +556,63 @@ output is a `git log` or a test dump whose head and tail were already judged
 enough once. The `ab-results/real/` files will show the rule firing, or not,
 on ordinary sessions; a live run of the audit shape is the confirmation if
 those files show it firing often.
+
+
+## The failing command — errorContextLines rounds, and the event the guard never saw (2026-09-09)
+
+Two A/B rounds on the fault-injected debugging task, both arms with the hooks on, differing only in
+`errorContextLines` (0 against 3), Opus 5, one message each. Both are nulls by construction, and the
+reason is the finding.
+
+| | v2 A, ctx 0 | v2 B, ctx 3 | v3 A, ctx 0 | v3 B, ctx 3 |
+|---|---|---|---|---|
+| API cost | $2.62 | $1.73 | $2.91 | $4.55 |
+| requests | 16 | 18 | 30 | 50 |
+| `npm test` runs | 3 | 3 | 5 | 5 |
+| faults fixed | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
+| trimmed by the guard | 0 | 0 | 4 small results | 2 small results |
+| the `npm test` failures | piped to `tail -60` | piped | 4 × ≈ 3k tokens, untrimmed | 4 × ≈ 3k tokens, untrimmed |
+
+**v2.** Both arms ran `npm test 2>&1 \| tail -60`, so nothing crossed `maxChars` and the context lines
+had nothing to attach to. Both arms also ran `git show HEAD` and read the planted faults from the
+injector's commit: step 4 of the prompt said "the injector commits the faults", which was as good as a
+map. Protocol flaw, closed in v3 by two rules: `npm test` as the exact command with no pipe or
+redirection, and no git for finding faults. The arm A of v3 had its config write refused by the
+permission classifier and wrote the same file with a shell heredoc; the config was right either way.
+
+**v3.** The suite ran in full and failed in full, four times per arm, about 12,000 characters each, and
+the report shows every one of them `[error]` and none `[trimmed]`. The guard never saw them. For Bash,
+`PostToolUse` fires only when the command exits 0; a non-zero exit fires `PostToolUseFailure`, a
+different event the guard was not registered for. Checked in the session that wrote this: a 300-line
+command exiting 1 arrived whole, with Claude Code's own "12,439 characters truncated" in the middle and
+no `[tokenbrake]` marker, and the ledger gained no row. So in every debugging round on this page, the
+failing test output, the one thing the trim exists for, went past the guard. That is part of why the
+debugging rounds read ≈ 0%.
+
+**0.2.2 registers the guard for `PostToolUseFailure`.** The event's input carries the output in `error`
+as one string, "Exit code 1" then the text, no `tool_response` on 2.1.261. The guard trims it, keeps the
+exit line first, writes the full text to `out/`, and the ledger row says `failed`. And Claude Code ignores
+the replacement. The debug log on 2.1.261: "Hook JSON output had unrecognized keys (ignored):
+hookSpecificOutput.updatedToolOutput." A probe session on 2.1.266, the line the arms ran on: hook ran,
+10,039 characters in, 5,078 offered, and the session received the raw output with Claude Code's own
+elision of about 2,500 characters from the middle, about 7,500 delivered. Both string and Bash-object
+shapes were tried. The hooks reference lists `updatedToolOutput` for this event; the builds do not honor
+it.
+
+What that leaves. A failing command's output is bounded by Claude Code at roughly 10,000 characters, with
+the middle elided to about 7,500, and nothing a PostToolUseFailure hook returns changes it. The only
+route left is a PreToolUse rewrite of the command so that it never exits non-zero from Claude Code's
+point of view, with the exit code printed as the last line and the trim then applied under PostToolUse.
+That is what rtk does to every command, and the JetBrains benchmark is the record of what rewriting
+commands costs when it goes wrong: compound commands, heredocs, background jobs, `set -e`, the exit code
+the model no longer sees as an error. Not a default. It could be an opt-in for suites known to be safe,
+measured with this protocol before anyone relies on it.
+
+The `errorContextLines` question itself stays open: on this task the trim fires on passing runs only,
+and a passing run has no FAIL lines. It will be measurable when either Claude Code honors the field or
+a task produces oversized passing output with flagged lines, which is the shape of a build log rather
+than a test suite.
+
+An issue for `anthropics/claude-code`, if the maintainers want one: "PostToolUseFailure hook:
+`updatedToolOutput` is documented but ignored (2.1.261, 2.1.266)", with the debug-log line above and the
+two-line reproduction in `PROBE.md`'s history on this repository's `claude/post-failure` branch.

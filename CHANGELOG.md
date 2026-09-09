@@ -2,12 +2,18 @@
 
 ## 0.2.2 — 2026-09-09
 
-- **The guard now sees failing commands.** For Bash, `PostToolUse` fires only on exit 0; a non-zero exit is
-  `PostToolUseFailure`, a different event the guard was not registered for. So every failing test run,
-  the one output the trim exists for, entered whole, in every debugging round measured so far. `init`,
-  `init --project` and the plugin now register `PostToolUseFailure` on `Bash|PowerShell` with the same
-  guard; the trimmed error keeps its `Exit code N` first line. Re-run `npx tokenbrake init` (or
-  `init --project`) to pick it up; `status` says "missing" until you do.
+- **The guard now sees failing commands, and Claude Code does not let it act.** For Bash, `PostToolUse`
+  fires only on exit 0; a non-zero exit is `PostToolUseFailure`, a different event the guard was not
+  registered for. So every failing test run, the one output the trim exists for, went past it, in every
+  debugging round measured so far. `init`, `init --project` and the plugin now register
+  `PostToolUseFailure` on `Bash|PowerShell` with the same guard; the ledger row says `failed`, the saved
+  full output is written, and the replacement keeps its `Exit code N` first line. But Claude Code 2.1.261
+  and 2.1.266 ignore that replacement on this event ("Hook JSON output had unrecognized keys (ignored):
+  hookSpecificOutput.updatedToolOutput" in the debug log), against their own hooks reference, so a failing
+  command's output still enters as Claude Code delivers it: capped by its own ~10,000-character error
+  ceiling, middle elided to about 7,500. The registration stays because the docs promise the field and the
+  ledger now records what failures cost; `AB-TASK.md`, "The failing command", has the measurements and the
+  one route that remains. Re-run `npx tokenbrake init` (or `init --project`) to pick the group up.
 - The shell trim keeps up to `errorContextLines` (default 3) lines after each error-looking line from the
   omitted middle, stopping at a blank line: the assertion, the expected/actual pair, the first stack frame.
   A `FAIL` line alone names the test, and a model that gets only the name comes back for the rest with a
