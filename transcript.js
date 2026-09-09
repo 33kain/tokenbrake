@@ -114,6 +114,7 @@ function parseTranscript(file) {
           name: use.name,
           what: describe(use.name, use.input),
           key: readKey(use.name, use.input),
+          marker: /\[tokenbrake\]/.test(text),   // the guard's replacement is what the model saw
           chars: text.length,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
@@ -290,14 +291,25 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   lines.push(`  Tool results entered ≈ ${kfmt(entered)} tokens of context, carried through later requests ≈ ${kfmt(carried)} token-reads`);
 
   const idx = ledgerIndex(ledger, parsed.sessionId);
-  const trimmedOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + r.what.slice(0, 120));
+  /* A ledger row says the guard offered a replacement. Only the transcript says whether the model saw it:
+     above Claude Code's own ~30,000-character ceiling the hook gets a truncated copy and the model gets a
+     2 KB persisted-output preview, and on PostToolUseFailure the replacement is ignored outright. Credit
+     goes only to results whose text carries the guard's marker; the rest are reported as offered and not
+     applied, never as savings. Found on the first Windows run (AB-TASK.md). */
+  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + r.what.slice(0, 120));
+  const trimmedOf = (r) => (r.marker ? offeredOf(r) : null);
   const trimmed = parsed.results.filter(trimmedOf);
+  const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
   const saved = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }, 0);
   if (trimmed.length) {
     const savedCarried = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN) * (r.carriedTurns + 1); }, 0);
     lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ≈ ${kfmt(saved)} tokens kept out, ≈ ${kfmt(savedCarried)} token-reads not carried`);
   } else if (ledger.length) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
+  }
+  if (ignored.length) {
+    const entered = ignored.reduce((s, r) => s + r.tokens, 0);
+    lines.push(`  ${ignored.length} trim${ignored.length === 1 ? '' : 's'} offered and not applied (over Claude Code's own ceiling, or a failing command): ≈ ${kfmt(entered)} tokens entered as Claude Code delivered them`);
   }
 
   /* What the trim does not touch: shell results under the threshold. Small excerpts carried through a long
@@ -320,7 +332,7 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   const ranked = [...parsed.results].sort((a, b) => b.carried - a.carried || b.tokens - a.tokens).slice(0, top);
   for (const r of ranked) {
     const l = trimmedOf(r);
-    const mark = l ? `  [trimmed from ${kfmt(l.chars / CHARS_PER_TOKEN)}]` : (r.isError ? '  [error]' : '');
+    const mark = l ? `  [trimmed from ${kfmt(l.chars / CHARS_PER_TOKEN)}]` : (offeredOf(r) ? '  [trim not applied]' : (r.isError ? '  [error]' : ''));
     lines.push(`  ${kfmt(r.tokens).padStart(7)}  ${kfmt(r.carried).padStart(8)}  ${String(r.carriedTurns).padStart(5)}  ${r.name.padEnd(18).slice(0, 18)} ${r.what.slice(0, 56)}${mark}`);
   }
 

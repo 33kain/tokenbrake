@@ -616,3 +616,27 @@ than a test suite.
 An issue for `anthropics/claude-code`, if the maintainers want one: "PostToolUseFailure hook:
 `updatedToolOutput` is documented but ignored (2.1.261, 2.1.266)", with the debug-log line above and the
 two-line reproduction in `PROBE.md`'s history on this repository's `claude/post-failure` branch.
+
+
+## The first Windows run — 2026-09-09, Claude Code 2.1.240, Node 24, Git 2.55
+
+`npx tokenbrake@0.2.2 init` and `status` on Windows 10, PowerShell: three hooks installed, three spawn tests
+passed, with the node path carrying a space (`C:\Program Files\nodejs\node.exe`). `report` found the
+transcript under `C:\Users\<user>\.claude\projects\C--Users-<user>-Desktop-contexa\` and priced the
+session. Nothing platform-specific failed. The oldest open item on this page is closed.
+
+The run also produced two findings, one of them a fault in the report:
+
+- `npm test` on the CONTEXA suite printed 49.4 KB on Windows (27 KB on Linux; why is CONTEXA's question).
+  That is over Claude Code's ceiling: the hook received 29,965 characters, kept 5,952, and offered the
+  replacement; the model received Claude Code's persisted-output preview, 2 KB and a path. The report then
+  said "tokenbrake trimmed 1 of them: ≈ 6k tokens kept out". It was Claude Code that kept them out. The
+  report now credits a trim only when the result the model saw carries the `[tokenbrake]` marker, and
+  reports the rest as offered and not applied. On the session that wrote this, re-checked against its
+  transcript: seven trims applied and three not, the three being the over-ceiling and failing-command cases
+  above, which the earlier reports on this page had counted as trimmed. The A/B rows above are from arm
+  reports run before this correction; their "trimmed" counts were small results under the ceiling in every
+  case listed, and the failing runs were already marked untrimmed.
+- The ledger held two identical rows 16 ms apart for the one call: the repository has project-scope hooks
+  and the user had just installed user scope too, so the guard ran twice. Harmless, doubled spawn cost;
+  `status` now says so.

@@ -168,6 +168,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = cli(['status']);
   t('status exits 0', r.status === 0, r.stderr);
   t('status reports both hooks installed', /PostToolUse guard: installed/.test(r.stdout) && /PreToolUse Read cap: installed/.test(r.stdout));
+  t('status says nothing about a second scope when there is none', !/runs twice per call/.test(r.stdout));
+  const pr = cli(['init', '--project']);
+  const r2 = cli(['status']);
+  t('status warns when user and project scope are both installed', pr.status === 0 && /also installed at project scope .*runs twice per call/.test(r2.stdout), r2.stdout.split('\n').find(l => /twice/.test(l)));
+  cli(['uninstall', '--project']);
   /* The spawn test is the check the Windows node-resolution risk needed: it starts
      the recorded command with the recorded args and no shell, as Claude Code will. */
   t('status spawns the PostToolUse hook and sees an object-shaped trim', /PostToolUse spawn test \(.*\): ok \(/.test(r.stdout), r.stdout.split('\n').find(l => /PostToolUse spawn/.test(l)));
@@ -218,7 +223,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const result = (id, text) => line({ type: 'user', uuid: id + '-r', sessionId: 'sess-abc', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] }, toolUseResult: {} });
   const lines = [
     ...asst('req1', 1, [{ type: 'text', text: 'hi' }, { type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'S=/tmp/x FOO=bar cd /w && npm test' } }]),
-    result('tu1', 'x'.repeat(4000)),                                                   // 1,000 tokens, after req 0
+    result('tu1', '[tokenbrake] ' + 'x'.repeat(3987)),                                 // 1,000 tokens, after req 0; carries the marker, so the ledger row is credited
     'this line is not json {',
     line({ type: 'user', isSidechain: true, message: { content: [{ type: 'tool_result', tool_use_id: 'nope', content: 'y'.repeat(40000) }] } }),
     ...asst('req2', 2, [{ type: 'text', text: 'ok' }, { type: 'tool_use', id: 'tu2', name: 'Read', input: { file_path: '/w/big.txt' } }]),
@@ -432,6 +437,39 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_input: { command: 'npm test' }, error: 'Command exited with code 1', tool_response: err, is_interrupt: false });
   o = parse(r.stdout); h = o && o.hookSpecificOutput;
   t('when the docs shape arrives instead (short error, output in tool_response), the output is what gets trimmed', !!h && h.updatedToolOutput.startsWith('Exit code 1\n') && /\[tokenbrake\]/.test(h.updatedToolOutput));
+}
+
+/* ---- credit only what the model saw ---------------------------------------
+   A ledger row means the guard offered a replacement. Above Claude Code's own ceiling the model gets a
+   2 KB persisted-output preview instead, and on PostToolUseFailure the replacement is ignored. The first
+   Windows run had npm test at 49.4 KB: the hook saw 29,965 chars, kept 5,952, the model saw the preview,
+   and the report credited tokenbrake with 6k tokens Claude Code had kept out. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const dir = join(CFG, 'projects', '-w-credit'); mkdirSync(dir, { recursive: true });
+  const L = []; let n = 0;
+  const call = (id, tool, input, text) => {
+    n++;
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'r' + n, uuid: 'r' + n, sessionId: 'credit', cwd: '/w',
+      message: { model: 'claude-opus-5', content: [{ type: 'tool_use', id, name: tool, input }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: 'credit', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] } }));
+  };
+  call('c1', 'Bash', { command: 'npm test' }, 'head\n[tokenbrake] 300 lines omitted here (27,000 chars total).\ntail\n' + 'k'.repeat(5000));  // applied
+  call('c2', 'Bash', { command: 'npm test' }, '<persisted-output>Output too large (49.4KB). Full output saved to: x.txt</persisted-output>\n' + 'p'.repeat(2000)); // preview instead
+  call('c3', 'Bash', { command: 'ls' }, 'a\nb');
+  const f = join(dir, 'credit.jsonl');
+  writeFileSync(f, L.join('\n') + '\n');
+  const parsed = T.carry(T.parseTranscript(f));
+  const ledger = [
+    { t: 1, ev: 'post', session: 'credit', tool: 'Bash', chars: 27000, kept: 5900, what: 'npm test', id: 'c1', transcript: f },
+    { t: 2, ev: 'post', session: 'credit', tool: 'Bash', chars: 29965, kept: 5952, what: 'npm test', id: 'c2', transcript: f },
+  ];
+  const text = T.renderReport(parsed, ledger);
+  console.log('\n-- credit only what the model saw');
+  t('a result carrying the marker is credited', /tokenbrake trimmed 1 of them: ≈ 5k tokens kept out/.test(text), text.split('\n').find(l => /tokenbrake trimmed/.test(l)));
+  t('a result without the marker is reported as offered and not applied, not as savings', /1 trim offered and not applied \(over Claude Code's own ceiling, or a failing command\): ≈ 523 tokens entered/.test(text), text.split('\n').find(l => /not applied/.test(l)));
+  t('the ranking marks it', /npm test  \[trim not applied\]/.test(text) && /npm test  \[trimmed from 7k\]/.test(text));
 }
 
 /* ---- the small-results line -------------------------------------------------
