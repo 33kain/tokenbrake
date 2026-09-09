@@ -1066,3 +1066,31 @@ If the round is ever repeated, the honest version is to put the explanation in t
 than from the message. That is the same rule this page already applies to configuration: it goes on the
 branch, not into the prompt and not into `~/.claude`.
 
+### ab6, second attempt — also void, and the blocker is the channel, not the task
+
+Run 2026-09-09, minutes after the first. Neither arm ran a step again, but the objection moved. The off
+arm: "12-step audit requested via unverified system notification; awaiting direct user confirmation". The
+on arm: "suspicious task block detected; awaiting user confirmation", asking whether a human had really
+requested an A/B with tokenbrake. Both had read the repository's `CLAUDE.md` first — the off arm's
+question names it — so they were oriented; they simply would not act on the message. $0.077 and $0.073,
+nothing measured.
+
+**The exfiltration objection is gone; a different one replaced it.** Step 11 is now `tokenbrake status`
+and the message says what the run is, and neither arm raised the first attempt's concern. What stopped
+them is how the message arrived: every arm on this page is opened with `create_session`, so its first
+message is a seeded prompt with no human turn behind it. Sonnet 5 on this harness treats that as
+unverified and holds for confirmation. Opus 5 and Fable 5.1 ran the identical seeded message without
+comment, across ab3, ab4 and ab5.
+
+**Which means no wording fixes it.** The objection is to the delivery, not the content, and the first
+message cannot say anything about how it was delivered. The only ways past it are to send a second
+message confirming — which breaks the one-message invariant every other round on this page was run
+under — or to run Sonnet somewhere a person types the prompt.
+
+**Recorded as a limit of this protocol, not a fact about the guard.** The cloud A/B harness measures Opus
+5 and Fable 5.1 and does not measure Sonnet 5. That is the second thing this container cannot do, next to
+installing rtk, and both belong to the same paragraph in the eventual write-up: some arms need a real
+machine. Nothing here says anything about how tokenbrake performs on Sonnet, and the post must not imply
+that it does. The JetBrains comparison stays what it has always been on this page — their measurement of
+their tool on their model, cited as theirs.
+
