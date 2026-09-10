@@ -14,6 +14,28 @@ ahead. Written from source and documentation, not from live runs of the others. 
 | **shunt** (Spotify Portal) | blocks Reads over 350 lines and routes them to a cheaper model | Read | about 90% on bulk reads of one Java monorepo | not fully open |
 | **tokenbrake** | PostToolUse generic trim over 6,000 chars, Read cap, persisted-output cap, `report` | Bash, Read | session billing records, A/B with the nulls kept: on a read-heavy audit the range is −37% to +100% across eight runs on two models and four guard versions, with nothing that repeats; ≈ 0 on debugging, ≈ 0 on a small feature (`AB-TASK.md`) | 0 humans, MIT |
 
+### The download count is not adoption — measured 2026-09-10
+
+npm reports 587 downloads in the package's first week. Per day, from npm's own API:
+
+```
+09-03  0     09-04  0     09-05  146    09-06  163
+09-07  0     09-08  0     09-09  278
+```
+
+Every download falls on a day a version was published, and there are two consecutive days of **zero** while
+three versions sat on the registry. That is the signature of mirrors, CDNs, security scanners and registry
+replicators reacting to a publish event. Real adoption is the opposite shape: a low but continuous baseline
+that exists on days when nothing was published.
+
+Part of it is also us. Every `npx --yes tokenbrake@<version>` that is not already cached is a real
+download, and the A/B arms, the runbook checks and the report calls made many of them — most of the 278 on
+09-09 is likely our own testing. The split cannot be recovered from the public numbers.
+
+So the row above should keep saying **0 humans**, and nothing written from this repository may cite the
+download count as traction. It is the easiest number to misread in the package's favour, which is why it is
+written down here against that temptation.
+
 ## What the JetBrains benchmark means
 
 The largest tool in the space cost more on the bill in a controlled run. The reasons the authors give are
