@@ -83,9 +83,15 @@ function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) 
      1. ANSI escapes go. They colour a terminal nobody is looking at.
      2. A carriage-return redraw keeps its last frame. `\r` exists to overwrite, so only the last write was
         ever visible.
-     3. A run of three or more consecutive lines that differ only in numbers or bar glyphs collapses to its
-        LAST line plus a count. The last one is the informative frame — 100%, the final total — and the
-        count keeps the fact that there were many.
+     3. A run of three or more consecutive REDRAW-LIKE lines collapses to its LAST line plus a count. The
+        last one is the informative frame — 100%, the final total — and the count keeps the fact that
+        there were many.
+
+   Redraw-like is the whole safety of this. "Differs only in numbers" is not enough and was the first
+   version's bug: sixty rows of a settlement table — `acme-041   EUR   2517.41   settled` — differ only in
+   numbers too, and collapsing them destroys fifty-nine tenants' amounts and leaves a count. Found by an
+   outside benchmark before a single run was paid for. A line qualifies only if it carries a run of bar
+   glyphs or a percentage, which a progress redraw has and a data row does not.
 
    What it deliberately does not do: collapse passing-test lines. Their names are answers to real questions
    ("how many checks passed, and what was the last one") and a count is not always enough. That is a
@@ -100,13 +106,16 @@ function shapeKey(line) {
     .replace(/[ \t]+/g, ' ')                      // a bar pads itself with spaces as it fills
     .trim();
 }
+/* A progress redraw carries a bar or a percentage. A row of data carries neither, however many numbers
+   it has, and must survive whole. */
+const REDRAW = /[=\-#>*·▏▎▍▌▋▊▉█░▒▓]{3,}|\d\s*%/;
 function shapeFilter(text) {
   const src = text.replace(ANSI, '').split('\n').map(l => (l.indexOf('\r') >= 0 ? l.slice(l.lastIndexOf('\r') + 1) : l));
   const out = [];
   for (let i = 0; i < src.length;) {
     const key = shapeKey(src[i]);
     let j = i + 1;
-    if (key) while (j < src.length && shapeKey(src[j]) === key) j++;
+    if (key && REDRAW.test(src[i])) while (j < src.length && shapeKey(src[j]) === key && REDRAW.test(src[j])) j++;
     const run = j - i;
     if (run >= 3) {
       out.push(src[j - 1]);

@@ -1784,3 +1784,28 @@ would do anything — 65 progress lines and 144 escape sequences of a single 6,0
 guard change, so it ships default-off behind a config flag and is A/B'd before any default moves, which is
 the rule that has governed every other change here.
 
+### The shape filter's first bug, found before a run was paid for — 2026-09-10
+
+An outside adversarial benchmark was built against tokenbrake the same day the shape filters landed. Its
+mechanism harness exercises the filters on and off, and it reported that they collapse not only the deploy
+log's progress bars but **the tenant settlement table** — distinct numeric rows — and flagged it as a loss
+risk worth the A/B.
+
+Reproduced here in one probe: sixty rows of `acme-041   EUR   2517.41   settled   2026-09-10T11:41:00Z`
+became **one row and a count**. Fifty-nine tenants' amounts gone. The rule was "a run of three or more
+consecutive lines differing only in numbers or bar glyphs", and a table differs only in numbers too.
+
+Fixed by requiring the lines to be **redraw-like**: a run collapses only if its lines carry bar glyphs or a
+percentage, which a progress redraw has and a data row does not. Verified both ways — the sixty-row table
+now passes through untouched (the guard emits nothing at all), and the 400-line install log still goes from
+32,310 characters to 2,519 with ANSI gone and the final status intact. A run of `syncing shard 12 — 12%
+complete` still collapses, because that is a redraw.
+
+The test that had encoded the bug as intended behaviour — "distinct lines that differ only by number ARE
+collapsed, that is the whole mechanism" — is replaced by two: the table must not collapse, and the same
+shape with a percentage must. Writing a test that asserts the bug is the failure mode worth naming here;
+the filter was written and tested by the same person in the same hour, and it took an adversary to see it.
+
+This is the flag-and-A/B rule paying for itself before the A/B: a lossy filter that shipped default-on
+would have destroyed data in real sessions, and the round that would have caught it had not been run yet.
+

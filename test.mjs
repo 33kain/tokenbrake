@@ -600,11 +600,18 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('on: it collapses below maxChars and is delivered without any trim', !/omitted here/.test(on), String(on.length));
   t('on: and is much smaller than what the trim alone delivered', on.length < off.length * 0.6, `${on.length} vs ${off.length}`);
 
-  /* Conservatism, both directions. */
-  const distinct = ['start', ...Array.from({ length: 300 }, (_, i) => `processed record ${i} for tenant acme-${i} in region eu-west-${i}`), 'done'].join('\n');
-  const onDistinct = run(distinct, { shapeFilters: true });
-  t('distinct lines that differ only by number ARE collapsed — that is the whole mechanism',
-    /identical-shaped lines collapsed/.test(onDistinct));
+  /* The safety this rests on, and the first version's bug. "Differs only in numbers" is not enough:
+     sixty rows of a settlement table differ only in numbers too, and collapsing them destroyed
+     fifty-nine tenants' amounts and left a count. An outside benchmark caught it before a run was paid
+     for. A line is only redraw-like if it carries bar glyphs or a percentage. */
+  const table = ['Tenant settlement table',
+    ...Array.from({ length: 60 }, (_, i) => `acme-${String(i).padStart(3, '0')}   EUR   ${1000 + i * 37}.${String(i % 100).padStart(2, '0')}   settled   2026-09-10T11:${String(i % 60).padStart(2, '0')}:00Z`),
+    'END OF TABLE'].join('\n');
+  t('a data table whose rows differ only in numbers is NOT collapsed — no bar, no percentage',
+    run(table, { shapeFilters: true }) === '', run(table, { shapeFilters: true }).slice(0, 160));
+  const withPct = ['start', ...Array.from({ length: 300 }, (_, i) => `syncing shard ${i} — ${i % 100}% complete`), 'done'].join('\n');
+  t('the same shape WITH a percentage is a redraw and does collapse',
+    /identical-shaped lines collapsed/.test(run(withPct, { shapeFilters: true })));
   const varied = ['alpha begins here', 'beta continues elsewhere', 'gamma finishes the job'].join('\n').padEnd(2000, '\nunique tail line here');
   const onVaried = run(varied, { shapeFilters: true });
   t('genuinely different consecutive lines are left alone', onVaried === '' || onVaried.includes('alpha begins here'));
