@@ -12,6 +12,11 @@
   Measured on a 400-line install log: **32,310 characters to 2,519, ANSI escapes 144 to 0**, the final
   status line intact, and no trim needed at all. Against the trim alone, which kept 65 redraws and 144
   escapes and spent nearly the whole 6,000-character budget on them.
+  A run collapses only if its lines are **redraw-like** — carrying bar glyphs or a percentage. "Differs
+  only in numbers" was the first version's rule and it was wrong: sixty rows of a settlement table
+  (`acme-041   EUR   2517.41   settled`) differ only in numbers too, and collapsing them destroyed
+  fifty-nine tenants' amounts and left a count behind. An outside adversarial benchmark caught that before
+  a single measured run was paid for, which is the argument for building one.
   It deliberately does **not** collapse passing-test lines: their names answer real questions ("how many
   checks passed, and what was the last one"), and a count is not always enough. That is a separate flag if
   it is ever wanted.
