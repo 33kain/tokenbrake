@@ -1185,7 +1185,7 @@ The round is `ab7`, and nulls go in with the same care as anything else.
 
 ### ab7 — the runbook
 
-Lifted out to **[`AB7-RUNBOOK.md`](AB7-RUNBOOK.md)** so it can be read beside a terminal instead of
+Lifted out to **[`AB8-RUNBOOK.md`](AB8-RUNBOOK.md)** so it can be read beside a terminal instead of
 scrolled to through this file. It is self-contained: the commands per arm, the audit text, the checks, and
 the table to fill in. It is the only document needed to run the round; this page is what the result comes
 back to.
@@ -1221,7 +1221,7 @@ v24.19.0, commit `c2d0cd7` of `claude/ab7-off`, one message per arm, the twelve-
 | | arm 1, off | arm 2, rtk | arm 3, tokenbrake 0.2.3 |
 |---|---|---|---|
 | session | `01139ae6` | — | `acb853e1` |
-| requests | 15 | **not run** | 5 |
+| requests | 15 | *dropped, see below* | 5 |
 | tool results | 17 | | 23 |
 | tool results per request | 1.1 | | **4.6** |
 | context processed | 1.3M, 92% from cache | | 443k, 67% from cache |
@@ -1234,14 +1234,16 @@ v24.19.0, commit `c2d0cd7` of `claude/ab7-off`, one message per arm, the twelve-
 | Read calls / Bash calls | 0 / 17 | | 11 / 12 |
 | answers | 12 of 12 | | 12 of 12, **identical** |
 
-**Void, for two independent reasons, and neither is about the guard.**
+**The rtk arm was dropped by decision, and that is not why the round is void.** `rtk` turned out not to be
+installed on the machine — discovered at arm 2, after arm 1 had already run — and this project does not
+know its Windows install command, having never run it. Rather than stop, the owner and this session agreed
+to finish as a two-arm round, off against tokenbrake. That is a recorded change of scope, not a defect in
+what was measured: two arms is the design every other round on this page uses. The runbook's failure to
+check that the binary exists before arm 1 is a real hole in the runbook, and it is fixed, but it cost a
+discovery mid-round rather than a result.
 
-*The rtk arm never existed.* `rtk` was not installed on the machine and this project does not know its
-Windows install command, having never run it. The runbook did not say to check that the binary exists
-before starting — a third hole in it, found the same way as the other two. So ab7 is not a head-to-head
-with anything; it is an off arm and a tokenbrake arm.
-
-*And those two did not do the same task.* The pasted instruction says "one step at a time, and do not skip
+**The round is void for exactly one reason: the two arms did not do the same task.** The pasted instruction
+says "one step at a time, and do not skip
 or batch steps". Arm 1 obeyed it: 17 tool results across 15 requests, 1.1 per request. Arm 3 opened with
 "I'll work through the twelve items, running the independent ones in parallel" and batched: 23 tool results
 across 5 requests, 4.6 per request. Every figure in the table follows from that. Five requests re-read the
@@ -1272,4 +1274,57 @@ instruction about that file, unlike ab5's and ab6's, which told the arms not to 
 also why arm 3 spent requests on a commit and a push that arm 1 did not. The figures above are both arms'
 step-12 snapshots, taken before either did anything after the twelve steps, so that asymmetry is outside
 them — but the next round's task text should say it explicitly rather than rely on it.
+
+
+## ab8 — the ab7 re-run, two arms, written 2026-09-10 before the run
+
+Same machine, same person at the keyboard. ab7 established that the workload and the tooling are fine and
+that one thing broke it: one arm batched its tool calls and the other did not. So this is the same round
+with that one cause removed, and with the design it actually has — **two arms, off against tokenbrake
+0.2.3**, which is what every other round on this page runs. rtk is not part of it and its absence is not a
+gap: a head-to-head needs rtk installed by hand first, and that is a separate round on a separate day.
+
+**The one change to the task text, identical on both arms.** After step 12, two sentences are added:
+
+```
+Run exactly one tool call per turn. Do not issue two tool calls in the same turn, even for steps that do not depend on each other.
+Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
+```
+
+The first says explicitly what "one step at a time, and do not skip or batch steps" was always meant to
+say and what ab7's arm 3 read past. The second restores a line ab5 and ab6 carried and ab7 dropped, which
+is why ab7's arm 3 spent requests on a commit and a push that its off arm did not.
+
+Both arms get the new text, which is why **both are re-run** rather than only the one that batched.
+Comparing an arm run on the old text against one run on the new is the mistake this page keeps finding in
+other people's benchmarks.
+
+**Fresh branches.** `claude/ab8-off` and `claude/ab8-tb`, cut from the same commit of `33kain/contexa`,
+differing in `.claude/settings.json` alone. ab7's branches are not reused: `claude/ab7-tb` now carries an
+extra commit its arm pushed, and a branch whose history differs from its pair's is one more thing to
+explain later.
+
+**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within three, answers
+identical. On the audit shape 0.2.3 now has one reading on Opus (ab4, +30% and not a win) and one on Fable
+in the cloud (ab5, −14.6% with requests up, a null). ab7's two arms, for all that they are not comparable
+to each other, both landed between $2.48 and $3.26 — a narrower spread than any cloud round of this task,
+which is what a local machine on a 1M-context model looks like. There is no mechanism on the table that
+would make Windows different in kind.
+
+**Validity gate, checked before any comparison is read.** For each arm, `tool results ÷ requests` from its
+own report. Both arms must be near 1, and within 1.5 of each other. An arm outside that batched, and a
+round where one arm batched is not a measurement — ab7 is the worked example. An arm that fails the gate
+is re-run before anything is compared; if the same arm fails twice, the round is closed as unmeasurable on
+this harness and recorded that way, the way ab6 was closed on Sonnet.
+
+**Decision rule, fixed before the run.** The requests column decides; a cost difference inside 21% is a
+null.
+
+- Requests within three either way and cost inside 21%: the expected null, and the fourth model-workload
+  pair to produce one. The post's audit row gains a Windows-local line reading "no measurable difference".
+- On-arm requests four or more below the off arm with cost not worse: the first result on this page that
+  would survive the requests rule, and it stays inside this file until a second run on a different day
+  reproduces it.
+- On-arm requests four or more above the off arm: a loss, recorded as one.
+- Answers differing anywhere: void, and the answers matter more than the bill.
 

@@ -450,14 +450,13 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-7. **ab7, the rtk head-to-head, is written and waiting for a keyboard.** `AB-TASK.md` ends with its
-   pre-registration; the runbook itself is `AB7-RUNBOOK.md`. Three arms on one clone of `33kain/contexa`, one
-   model, one message each, exactly one tool installed per arm and verified rather than assumed, the paste
-   text, the commands, and the table to fill in. It is pre-registered on **Sonnet 5**, which buys two
-   things at once — the rtk comparison next to JetBrains' own number, and the Sonnet baseline the cloud
-   protocol could not reach — and the trade against running it on Opus is stated there. It does not depend
-   on the Saturday table and can be run before or after it. Nothing else in this plan needs the owner's
-   machine.
+7. **ab8, the audit A/B by hand, is set up and waiting.** `AB8-RUNBOOK.md` is the self-contained Windows
+   runbook: two arms, off against tokenbrake 0.2.3, on `claude/ab8-off` and `claude/ab8-tb` of
+   `33kain/contexa`, cut from `338053f` and differing in `.claude/settings.json` alone, so nothing is
+   installed or uninstalled at all. `AB-TASK.md` carries its pre-registration, including the validity gate
+   ab7 taught: tool results ÷ requests, near 1 on both arms and within 1.5 of each other, checked before
+   any comparison is read. The rtk head-to-head is a separate round needing rtk installed by hand first,
+   and is not blocking anything.
 
 Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
 feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; and ab7
