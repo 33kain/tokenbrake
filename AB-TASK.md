@@ -1595,3 +1595,37 @@ arms and within 1.5 of each other, and identical answers, checked against the gr
   is built.
 - Answers differing from the ground truth on either arm: void, and the answers matter more than the bill.
 
+## What the guard actually did, counted rather than argued — 2026-09-10
+
+Prompted by a critique of the package that listed four weaknesses. All four were accurate, and three were
+this repository's own published findings arrived at independently, which is the most useful thing a critic
+has said about the documentation. One correction: the critique's "−37% to +100%" range mixes guard
+versions; the shipping guard's three paired runs on that workload are 1.30, 0.85 and 1.00.
+
+What the critique did not have is a count. This container's ledger, 285 logged tool results:
+
+| | |
+|---|---|
+| under 6,000 characters — untouched by design | **282** |
+| over 6,000 characters | 3 |
+| — `sed -n '644,750p' AB-TASK.md`, 7,198 chars | a single-file excerpt: exempt since 0.2.3 |
+| — `cat LANDSCAPE.md`, 6,557 chars | a single-file excerpt: exempt since 0.2.3 |
+| — `mcp__github__actions_list`, 6,309 chars | not a shell result: the trim does not apply |
+| **trims actually applied** | **0** |
+| **Read caps fired** | **0** |
+
+Two hundred and eighty-five tool calls, and the guard rewrote nothing. The sample is biased and the bias
+should be stated: this repository's `CLAUDE.md` tells its agents to read with bounded `sed` ranges rather
+than the Read tool, which is exactly the "the model bounds its own output" case that four rounds have
+already shown leaves nothing to save. But it is 285 real calls, and it is the first time anyone counted.
+
+It also sharpens the window that bounds the whole design. A shell result is rewritten only if it is **over
+6,000 characters, under Claude Code's ~30,000-character ceiling, and exited zero.** The critique named the
+failure hole; the ceiling is the one nobody had named, and it means the largest outputs — the ones most
+worth trimming — are as unreachable as the failing ones. Between them they remove the debugging workload
+entirely, which is the workload the trim was written for.
+
+All of it is now in `README.md` under "Limits, with the numbers", ahead of the install instructions, on the
+principle that a package whose whole argument is honesty should not leave its limitations to be discovered
+by someone else.
+
