@@ -422,6 +422,25 @@ and nothing written from `AB-TASK.md` may imply otherwise. Also written: the rtk
 procedure for the owner's Windows machine, and the twelve-step audit task itself, which three rounds had
 used without ever recording it.
 
+**Thirtieth card (2026-09-10): the first round run by a person, and the cap's door.** ab7 and ab8, both on
+the owner's Windows machine, Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267. ab7 was void: one arm
+read "one step at a time, and do not skip or batch steps", announced it would run the independent steps in
+parallel, and came in at 4.6 tool results per request against the other's 1.1, so every figure followed
+from the batching rather than the guard. rtk turned out not to be installed and the round finished as two
+arms by agreement — a change of scope, not a defect. ab8 re-ran it with one added sentence, *one tool call
+per turn*, and both arms landed at 0.94 and 1.00: **$4.37 → $4.39, +0.5%, requests 18 → 21, answers 12 of
+12 identical.** By the rule written before the run, the expected null, and the closest two arms have ever
+come on this page. What the round bought is the mechanism: the Read cap fired on `content.js` (112 KB), the
+model went to `cat` instead, that passed Claude Code's own ceiling and was persisted, and the model read
+the persisted file back in three *bounded* ranges the guard leaves alone by design — 411k token-reads, 43%
+of that arm's carried context. **The cap changed which door the file came in through and nothing else.**
+Four holes in `AB8-RUNBOOK.md` were found by someone actually following it and are fixed: no rtk status
+command was named, nothing said what to save per arm, install/uninstall was replaced by `git checkout` on
+prepared branches, and the arm's own step-12 report can name the wrong session (on Windows a live
+transcript's mtime lags, so `report` with no `--session` picked a previous round's arm — twice). Also
+fixed in the tool: `status` called a single project install a double one. The lesson worth keeping is that
+a protocol document is finished when someone who was not in the room can follow it, not when it is correct.
+
 ## Next session — Saturday 2026-09-13, the distribution table and the post
 
 Nothing to build before then. The task is collection and one table, then publishing. Steps:
@@ -450,14 +469,13 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-7. **ab7, the rtk head-to-head, is written and waiting for a keyboard.** `AB-TASK.md` ends with its
-   pre-registration; the runbook itself is `AB7-RUNBOOK.md`. Three arms on one clone of `33kain/contexa`, one
-   model, one message each, exactly one tool installed per arm and verified rather than assumed, the paste
-   text, the commands, and the table to fill in. It is pre-registered on **Sonnet 5**, which buys two
-   things at once — the rtk comparison next to JetBrains' own number, and the Sonnet baseline the cloud
-   protocol could not reach — and the trade against running it on Opus is stated there. It does not depend
-   on the Saturday table and can be run before or after it. Nothing else in this plan needs the owner's
-   machine.
+7. **ab8, the audit A/B by hand, is set up and waiting.** `AB8-RUNBOOK.md` is the self-contained Windows
+   runbook: two arms, off against tokenbrake 0.2.3, on `claude/ab8-off` and `claude/ab8-tb` of
+   `33kain/contexa`, cut from `338053f` and differing in `.claude/settings.json` alone, so nothing is
+   installed or uninstalled at all. `AB-TASK.md` carries its pre-registration, including the validity gate
+   ab7 taught: tool results ÷ requests, near 1 on both arms and within 1.5 of each other, checked before
+   any comparison is read. The rtk head-to-head is a separate round needing rtk installed by hand first,
+   and is not blocking anything.
 
 Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
 feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; and ab7

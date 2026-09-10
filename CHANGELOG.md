@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `status` no longer calls a single install a double one. The double-install warning fired whenever the
+  *other* scope carried the guard, whether or not this scope did, so the ordinary case — a project install,
+  `status` run without `--project` — printed "the guard runs twice per call here; uninstall one scope". It
+  runs once. The line now says which scope it runs from, and only claims twice when both scopes have it.
+  Found on the first hand-run A/B round, where it read as a second install to hunt down.
+
 ## 0.2.3 — 2026-09-09
 
 - **A file excerpt is a read.** A shell command that only prints one file (`cat`, `sed -n` with a range,

@@ -132,11 +132,17 @@ function status() {
   }
   /* Both scopes at once means two guards per tool call: Claude Code runs the user-scope hooks and the
      project-scope hooks, each spawns node, each writes the same ledger row. Harmless, wasteful, and the
-     ledger shows it as duplicate rows; say so. */
+     ledger shows it as duplicate rows; say so — but only when this scope has the guard too. The other
+     scope carrying it while this one does not is the ordinary case (a project install, `status` run
+     without --project), it runs the guard exactly once, and calling that "twice" sent an A/B arm hunting
+     for a second install that was not there. */
   const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
   const other = readJson(otherPath, null);
   const otherHas = !!(other && other.hooks && ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'].some(ev => (other.hooks[ev] || []).some(isOurs)));
-  if (otherHas) console.log(`  also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
+  const thisHas = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'].some(has);
+  const otherScope = PROJECT ? 'user' : 'project';
+  if (otherHas && thisHas) console.log(`  also installed at ${otherScope} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
+  else if (otherHas) console.log(`  installed at ${otherScope} scope instead (${otherPath}): the guard runs once, from there`);
   const cfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), null);
   console.log(`  config: ${cfg ? JSON.stringify(cfg) : 'defaults'}`);
   const n = fs.existsSync(LEDGER) ? fs.readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).length : 0;

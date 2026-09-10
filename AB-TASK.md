@@ -1185,7 +1185,7 @@ The round is `ab7`, and nulls go in with the same care as anything else.
 
 ### ab7 — the runbook
 
-Lifted out to **[`AB7-RUNBOOK.md`](AB7-RUNBOOK.md)** so it can be read beside a terminal instead of
+Lifted out to **[`AB8-RUNBOOK.md`](AB8-RUNBOOK.md)** so it can be read beside a terminal instead of
 scrolled to through this file. It is self-contained: the commands per arm, the audit text, the checks, and
 the table to fill in. It is the only document needed to run the round; this page is what the result comes
 back to.
@@ -1210,3 +1210,211 @@ Revised 2026-09-10 after its first real use, which went badly and for reasons th
 The general lesson, which belongs with the other methodology findings in `LANDSCAPE.md`: a protocol
 document is not finished when it is correct, it is finished when someone who was not in the room can follow
 it. Every hole above was invisible to its author and cost the first runner an evening.
+
+### ab7 — run 2026-09-10 by hand, and void as a comparison
+
+The first round on this page run by a person at a keyboard rather than by `create_session`, and the first
+run on Windows. Fable 5.1 (`claude-fable-5-1[1m]`, the 1M-context variant), Claude Code 2.1.267, Node
+v24.19.0, commit `c2d0cd7` of `claude/ab7-off`, one message per arm, the twelve-step audit with step 11 as
+`tokenbrake status`.
+
+| | arm 1, off | arm 2, rtk | arm 3, tokenbrake 0.2.3 |
+|---|---|---|---|
+| session | `01139ae6` | — | `acb853e1` |
+| requests | 15 | *dropped, see below* | 5 |
+| tool results | 17 | | 23 |
+| tool results per request | 1.1 | | **4.6** |
+| context processed | 1.3M, 92% from cache | | 443k, 67% from cache |
+| output tokens | 4k | | 4k |
+| cost | $2.48 | | $3.26 |
+| tool results entered | 46k | | 91k |
+| tool results carried | 224k | | 84k |
+| trimmed by the guard | 0 (2 offered, not applied) | | 1 (≈ 2k kept out, ≈ 10k not carried) |
+| under the trim threshold | 10 of 17 shell, 10% of carried | | 11 of 12 shell, 7% of carried |
+| Read calls / Bash calls | 0 / 17 | | 11 / 12 |
+| answers | 12 of 12 | | 12 of 12, **identical** |
+
+**The rtk arm was dropped by decision, and that is not why the round is void.** `rtk` turned out not to be
+installed on the machine — discovered at arm 2, after arm 1 had already run — and this project does not
+know its Windows install command, having never run it. Rather than stop, the owner and this session agreed
+to finish as a two-arm round, off against tokenbrake. That is a recorded change of scope, not a defect in
+what was measured: two arms is the design every other round on this page uses. The runbook's failure to
+check that the binary exists before arm 1 is a real hole in the runbook, and it is fixed, but it cost a
+discovery mid-round rather than a result.
+
+**The round is void for exactly one reason: the two arms did not do the same task.** The pasted instruction
+says "one step at a time, and do not skip
+or batch steps". Arm 1 obeyed it: 17 tool results across 15 requests, 1.1 per request. Arm 3 opened with
+"I'll work through the twelve items, running the independent ones in parallel" and batched: 23 tool results
+across 5 requests, 4.6 per request. Every figure in the table follows from that. Five requests re-read the
+context five times instead of fifteen, so carried context falls from 224k to 84k with the guard credited
+for 10k of it; and five requests reuse the cache less, 67% against 92%, so on a model that lists cache
+writes at eighty times its reads the bill goes *up* 31% while requests go *down* 67%. The requests column,
+which the decision rule says decides, was decided by the batching.
+
+The two arms also read differently — arm 1 used `sed -n` through Bash and let 46k in, arm 3 used the Read
+tool and let 91k in — which is the same planning variance this page has measured at a factor of two on
+Opus, now visible on Fable, on the same model and the same task on the same machine within an hour.
+
+**What survives.** The answers: 12 of 12, identical, on both arms, including the two that a compressed or
+capped read would be most likely to break — 112 lines matching `  t(` in a 60 KB file, and 48 matches for
+"Start fresh". Both arms also independently named `publishing/website/index.html` as the runner-up in step
+8, which nobody asked for. That is now four rounds across three models where the hooks changed no answer.
+
+**What it says about the protocol, which is the useful part.** A one-message instruction not to batch is
+not binding on the model, and a round where one arm batches and the other does not is not a measurement.
+Every cloud round so far happened not to hit this: ab5's arms ran 26 and 29 requests for 25 and 28 results,
+ab3's and ab4's the same shape. It took the first hand-run round to produce an arm that read the same
+sentence and worked in parallel anyway. Any future round has to check tool-results-per-request before
+looking at cost, and treat a gap like 1.1 against 4.6 as voiding, the way a difference in answers voids.
+
+**The `claude/ab7-tb` branch carries one extra commit now** (`ee4ca51`), an `ab-results/real/` file the arm
+wrote and pushed under the repository's own end-of-session rule in `CLAUDE.md`. The ab7 task text has no
+instruction about that file, unlike ab5's and ab6's, which told the arms not to write one; that omission is
+also why arm 3 spent requests on a commit and a push that arm 1 did not. The figures above are both arms'
+step-12 snapshots, taken before either did anything after the twelve steps, so that asymmetry is outside
+them — but the next round's task text should say it explicitly rather than rely on it.
+
+
+## ab8 — the ab7 re-run, two arms, written 2026-09-10 before the run
+
+Same machine, same person at the keyboard. ab7 established that the workload and the tooling are fine and
+that one thing broke it: one arm batched its tool calls and the other did not. So this is the same round
+with that one cause removed, and with the design it actually has — **two arms, off against tokenbrake
+0.2.3**, which is what every other round on this page runs. rtk is not part of it and its absence is not a
+gap: a head-to-head needs rtk installed by hand first, and that is a separate round on a separate day.
+
+**The one change to the task text, identical on both arms.** After step 12, two sentences are added:
+
+```
+Run exactly one tool call per turn. Do not issue two tool calls in the same turn, even for steps that do not depend on each other.
+Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
+```
+
+The first says explicitly what "one step at a time, and do not skip or batch steps" was always meant to
+say and what ab7's arm 3 read past. The second restores a line ab5 and ab6 carried and ab7 dropped, which
+is why ab7's arm 3 spent requests on a commit and a push that its off arm did not.
+
+Both arms get the new text, which is why **both are re-run** rather than only the one that batched.
+Comparing an arm run on the old text against one run on the new is the mistake this page keeps finding in
+other people's benchmarks.
+
+**Fresh branches.** `claude/ab8-off` and `claude/ab8-tb`, cut from the same commit of `33kain/contexa`,
+differing in `.claude/settings.json` alone. ab7's branches are not reused: `claude/ab7-tb` now carries an
+extra commit its arm pushed, and a branch whose history differs from its pair's is one more thing to
+explain later.
+
+**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within three, answers
+identical. On the audit shape 0.2.3 now has one reading on Opus (ab4, +30% and not a win) and one on Fable
+in the cloud (ab5, −14.6% with requests up, a null). ab7's two arms, for all that they are not comparable
+to each other, both landed between $2.48 and $3.26 — a narrower spread than any cloud round of this task,
+which is what a local machine on a 1M-context model looks like. There is no mechanism on the table that
+would make Windows different in kind.
+
+**Validity gate, checked before any comparison is read.** For each arm, `tool results ÷ requests` from its
+own report. Both arms must be near 1, and within 1.5 of each other. An arm outside that batched, and a
+round where one arm batched is not a measurement — ab7 is the worked example. An arm that fails the gate
+is re-run before anything is compared; if the same arm fails twice, the round is closed as unmeasurable on
+this harness and recorded that way, the way ab6 was closed on Sonnet.
+
+**Decision rule, fixed before the run.** The requests column decides; a cost difference inside 21% is a
+null.
+
+- Requests within three either way and cost inside 21%: the expected null, and the fourth model-workload
+  pair to produce one. The post's audit row gains a Windows-local line reading "no measurable difference".
+- On-arm requests four or more below the off arm with cost not worse: the first result on this page that
+  would survive the requests rule, and it stays inside this file until a second run on a different day
+  reproduces it.
+- On-arm requests four or more above the off arm: a loss, recorded as one.
+- Answers differing anywhere: void, and the answers matter more than the bill.
+
+### The report can read the wrong session, and on Windows it did — 2026-09-10
+
+`report` with no `--session` opens the newest transcript on disk. Run from *inside* a live session, that
+is normally the session itself. On Windows it twice was not.
+
+- ab7, arm 1: the arm's step-12 report described a session the arm believed was not its own. It was its
+  own, and the caveat was a false alarm — which taught the wrong lesson, because it made the same caveat
+  easy to dismiss the next time.
+- ab8, arm 1: the arm's step-12 report described `acb853e1`, the *previous* round's tokenbrake arm, at its
+  final state. The arm said "this session made more calls than that" and was right. Its own session,
+  `460d9673`, was on disk and newer.
+
+The tell that settles it in one line: **the off arm's report said `tokenbrake trimmed 1 of them`.** An arm
+running with no hooks at either scope cannot have a trim. Any report whose trim line disagrees with the
+arm's configuration is a report of a different session, and that check costs nothing.
+
+The likely mechanism is Windows file modification times: a transcript being written by a live process can
+carry a stale mtime until the handle is flushed, so a session that finished an hour ago can look newer than
+the one running now. That is a property of the platform rather than of the format, and the cloud rounds
+never hit it.
+
+What follows for the protocol: an arm's step-12 report stays in the task, because producing a large tool
+result is part of the workload being measured, but **its header is not the record**. The record is
+`report --session=<id>` run from the shell after the session is closed, with the id taken from
+`report --all` — the newest row carrying the repository's path — and confirmed against the arm's
+configuration by the trim line. The runbook says so now.
+
+
+### ab8 — the result, run 2026-09-10 by hand. A clean null, and one mechanism worth the whole round.
+
+Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267, Node v24.19.0, commit `338053f` of
+`33kain/contexa`, Windows, one message per arm, the twelve-step audit with the one-tool-call-per-turn line.
+Both figures are `report --session=<id>` run from PowerShell after each session closed.
+
+| | off, `460d9673` | tokenbrake 0.2.3, `8c21713d` | change |
+|---|---|---|---|
+| requests | 18 | 21 | +3 |
+| tool results | 17 | 21 | |
+| **tool results ÷ requests** | **0.94** | **1.00** | both pass the gate |
+| context processed | 2.6M, 93% from cache | 2.9M, 94% from cache | |
+| output tokens | 4k | 5k | |
+| cost | $4.37 | $4.39 | **+0.5%** |
+| tool results entered | 90k | 89k | −1% |
+| tool results carried | 939k | 965k | +3% |
+| trimmed by the guard | none | none | |
+| under the trim threshold | 10 of 10 shell, 3% of carried | 10 of 10 shell, 3% of carried | |
+| Read / Bash / Grep calls | 7 / 10 / 0 | 10 / 10 / 1 | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**By the rule written before the run this is the expected null**, and the branch that fired is the first
+one: requests within three either way, cost inside 21%. It is also the closest two arms have ever come on
+this page — half a percent apart on a task where identically configured arms have been 21% apart — and the
+first round where both arms passed the batching gate. ab7's lesson worked: the explicit
+one-tool-call-per-turn line produced 0.94 and 1.00 where the old wording produced 1.1 and 4.6.
+
+**Both arms report `trimmed none`, and on the guarded arm that is correct rather than broken.** Every shell
+result on both arms was under the 6,000-character threshold — 10 of 10 — so the trim had nothing to act on,
+and the reads that were bounded are untouched by design. The guard was present and running: arm 1's report
+counted 69 ledger rows and arm 2's counted 90, and the 21 in between are this session's 21 tool calls, one
+row logged per call. **That row count, not the trim line, is what identifies which arm a report belongs
+to.** An earlier version of this page's guidance said the guarded arm must show a trim; that is only true
+when the guard has something to trim, and it is wrong as a check.
+
+**The mechanism, which is what this round actually bought.** The Read cap fired once, on the arm's first
+unbounded Read of `extension/content.js` (112 KB, over `readMaxBytes`). What happened next is the finding:
+
+- The model went to Bash and ran `cat extension/content.js` instead.
+- That passed Claude Code's own inline ceiling, so Claude Code wrote the output to
+  `~/.claude/projects/<project>/<session>/tool-results/…` and handed back a preview.
+- The model then read that persisted file back in **three bounded ranges** — 11k, 11k and 7k tokens,
+  carried 167k, 148k and 96k, **411k token-reads, 43% of everything this arm carried**.
+- The guard could not touch any of the three. Its persisted-output cap fires on an *unbounded* read of such
+  a file; a bounded read of one is untouched by design, and by design is right in general — a model asking
+  for a range is the behaviour the cap exists to produce.
+
+So the cap did not keep `content.js` out. The off arm let it in as two Read calls, 30k tokens entered and
+377k carried. The guarded arm let in 29k and carried 411k, through a persisted file, in more steps. **The
+cap changed which door the file came in through and nothing else.** That is the same sentence the launch
+post opens with about Claude Code's own persisted outputs, now measured on the guard's own behaviour rather
+than on its absence, and it is the sharpest illustration yet of the rule this page keeps arriving at: on a
+task that asks for whole files, capping a read buys a return trip, not a saving.
+
+It cost nothing here — half a percent, inside any noise band — which is the honest way to state it. It did
+not cost the 10% the `readMaxBytes` round did, and it did not save anything either.
+
+**What this adds to the record.** A fourth model-workload pair producing a null, a third model, the first
+run on a real machine rather than in a container, and the tightest agreement between arms yet measured.
+Across ab4, ab5, ab7 and ab8 — Opus 5, Fable 5.1 in the cloud and Fable 5.1 on Windows — 0.2.3 has not
+shown a saving on the read-heavy audit, and every arm of every round has given identical answers.
+

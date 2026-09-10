@@ -1,9 +1,12 @@
-# ab7 — the rtk head-to-head, at the keyboard
+# ab8 — the audit A/B, at the keyboard
 
-The one round in this project that cannot run in the cloud. Three Claude Code sessions on one clone of
-`33kain/contexa`, the same twelve-step audit, differing only in what sits in front of the tools: nothing,
-rtk, tokenbrake 0.2.3. Windows, PowerShell. About an hour with the waiting, roughly $10 to $20 at list
-price.
+**Two arms: no hooks, and tokenbrake 0.2.3.** Two Claude Code sessions on one clone of `33kain/contexa`,
+the same twelve-step audit, differing only in whether the guard is in front of the tools. Windows,
+PowerShell. About forty minutes with the waiting, roughly $6 at list price.
+
+rtk is not part of this round. A head-to-head against it needs rtk installed on the machine first and is a
+separate round on a separate day; ab7 discovered mid-round that it was not installed, and this page's
+history of that is in `AB-TASK.md`.
 
 Everything needed is on this page. `AB-TASK.md` holds the reasoning and the pre-registered decision rule,
 and is where the filled-in result goes back; you do not need it open while running.
@@ -118,11 +121,11 @@ clone already carry the two configurations, so **tokenbrake is switched with `gi
 
 | branch | `.claude/settings.json` | used by |
 |---|---|---|
-| `claude/ab7-off` | `{"hooks": {}}` — no hooks | arm 1 (off) and arm 2 (rtk) |
-| `claude/ab7-tb` | the full 0.2.3 project install | arm 3 (tokenbrake) |
+| `claude/ab8-off` | `{"hooks": {}}` — no hooks | arm 1 (off) |
+| `claude/ab8-tb` | the full 0.2.3 project install | arm 2 (tokenbrake) |
 
-Both branches are cut from the same commit and their trees differ in that one file and nothing else. So the
-only thing you install or uninstall in this whole round is **rtk**, once each way.
+Both branches are cut from the same commit (`338053f`) and their trees differ in that one file and nothing
+else. **Nothing is installed or uninstalled in this round at all** — the arms switch with `git checkout`.
 
 Do not run `npx tokenbrake init` at any point. If you already did last night, undo it with
 `npx --yes tokenbrake@0.2.3 uninstall` in step 0; a user-scope install would run on all three arms and void
@@ -131,7 +134,7 @@ the round.
 ## Arm 1 — off
 
 ```powershell
-git checkout claude/ab7-off
+git checkout claude/ab8-off
 npx --yes tokenbrake@0.2.3 status
 ```
 
@@ -142,33 +145,36 @@ with `git branch --show-current`.
 Then `claude` in the clone, paste the task below, send nothing else, let it finish, and capture it per
 "After each arm" below.
 
-## Arm 2 — rtk
+## Arm 2 — tokenbrake
 
 ```powershell
-git branch --show-current          # must still say claude/ab7-off
-rtk init -g
-type $HOME\.claude\settings.json  # confirm with your own eyes that rtk's hook is now there
-npx --yes tokenbrake@0.2.3 status  # and that tokenbrake still says missing everywhere
+git checkout claude/ab8-tb
+git branch --show-current
+npx --yes tokenbrake@0.2.3 status
 ```
+
+`status` should now name the project scope — the three hooks present there — while user scope stays
+`missing`. A line saying the guard "runs once, from there" is the right one; on tokenbrake 0.2.3 that line
+reads "runs twice per call here", which is a wording bug fixed after this round and means the same thing
+when user scope is missing. Ignore it.
 
 Fresh `claude` session — a new terminal, not `/clear` in the previous one, which keeps its requests and its
 cost. Same paste.
 
-## Arm 3 — tokenbrake
+## Check each arm before trusting it
 
-```powershell
-rtk init -g --uninstall
-type $HOME\.claude\settings.json  # confirm rtk's hook is gone, with your own eyes
-git checkout claude/ab7-tb
-npx --yes tokenbrake@0.2.3 status  # now: "also installed at project scope", and the three hooks present there
-```
+Two things void an arm, and both are visible the moment it finishes.
 
-Fresh session, same paste.
+**Batching.** The task says one step at a time. An arm that says something like "running the independent
+ones in parallel" has ignored it, and its request count is then about how it planned rather than about the
+tool under test. The check is one division, from that arm's own report: `tool results` ÷ `requests`. Around
+1 is what the protocol asks for. The first hand-run round had one arm at 1.1 and another at 4.6, and the
+round was void — the arm with 4.6 spent a third more money on a third of the requests, and none of it was
+the hook. If two arms are more than about 1.5 apart on that ratio, they did not do the same task; re-run
+the offending arm before comparing anything.
 
-(The rtk commands are the owner's; this page has never run rtk and does not verify its CLI. If `rtk init -g
---uninstall` is not the right command, the fallback is step 0: edit `settings.json` and remove rtk's hook
-entries by hand. What matters is only that `settings.json` shows exactly one tool per arm and that you
-looked at it rather than assumed it.)
+**Different answers.** Any of the twelve differing across arms voids the round outright, whatever the bill
+says. A cheaper wrong audit is not a saving.
 
 ## After each arm — what to save
 
@@ -187,6 +193,18 @@ npx --yes tokenbrake@0.2.3 report --all
 npx --yes tokenbrake@0.2.3 report --session=<the 8 characters> --top=8 > arm1-off-report.txt
 ```
 
+**Do not trust the session id printed by step 12.** `report` with no `--session` opens the newest transcript
+on disk, and on Windows a live session's transcript can have a stale modification time, so the report an arm
+runs *inside itself* can describe a different session entirely. It has happened twice: once giving a false
+alarm, once giving plausible wrong numbers that would have gone straight into the table. Find the id from
+`report --all` after closing the session — the arm is the newest row with this repository's path — and
+sanity-check the arm you think it is. The reliable check is the **ledger row count** on the
+`tokenbrake trimmed` line: it grows by one per tool call of a session the guard ran in, so the guarded
+arm's count should exceed the off arm's by about that arm's number of tool results. An off arm that reports
+a *trim* is certainly the wrong session — an arm with no hooks cannot trim anything — but a guarded arm
+reporting `trimmed none` is not: if every shell result was under the threshold and every read was bounded,
+the guard had nothing to do, which is exactly what ab8 measured.
+
 **This last report, not the one from step 12, is the number that goes in the table.** Step 12 runs while the
 session is still going, so it prices and counts the session as it stood at that moment — it misses the
 requests that came after. Run from PowerShell once the session is closed, the same command reads the
@@ -197,7 +215,7 @@ That file gives you every row of the table: `requests`, `At list price` (the cos
 `carried`, the `tokenbrake trimmed` line, and the by-tool table with Read and Bash call counts. There is no
 separate place to look and nothing else to keep.
 
-## The task — paste verbatim, identical on all three arms
+## The task — paste verbatim, identical on both arms
 
 ```
 Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write twelve lines, one per step, then paste the output of steps 11 and 12 verbatim.
@@ -214,25 +232,33 @@ Read-only audit of this repository. Do every step with tools, in this order, one
 10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
 11. Run `npx --yes tokenbrake@0.2.3 status` and paste its output.
 12. Run `npx --yes tokenbrake@0.2.3 report --top=8` and paste its full output.
+
+Run exactly one tool call per turn. Do not issue two tool calls in the same turn, even for steps that do not depend on each other.
+
+Do not write or commit an `ab-results/real/` file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
-Notes on the task. Step 10 has no file to read on arms 1 and 2, since the guard is uninstalled there; "the file does
+The one-tool-call-per-turn line is the reason this round is being run again. In ab7 an arm read
+"one step at a time, and do not skip or batch steps", announced it would run the independent steps in
+parallel, and came in at 4.6 tool results per request against the other arm's 1.1. Everything measured then
+followed from that rather than from the guard.
+
+Notes on the task. Step 10 has a file to read on both arms — the guard copy stays on the off branch, only its registration is emptied — so; "the file does
 not exist" is the correct answer and the arms should say so rather than hunting for it. Step 11 reports which arm this
 was, from the tool's own status, which is why it is that command and not a look at `~/.claude` — see "ab6, first
 attempt" in `AB-TASK.md` for what that cost. Step 12 is the measuring instrument and works on all three arms: it reads
 the Claude Code transcript, not tokenbrake's ledger, so on the rtk arm it still says what entered and what was
 carried, which is the quantity rtk's own claims are about.
 
-## After the third arm
+## After both arms
 
 ```powershell
 npx --yes tokenbrake@0.2.3 report --all                    # session ids, newest first
-npx --yes tokenbrake@0.2.3 report --compare <off> <rtk>
-npx --yes tokenbrake@0.2.3 report --compare <off> <tokenbrake>
+npx --yes tokenbrake@0.2.3 report --compare OFFID TBID
 ```
 
-`--compare` prints two sessions side by side with a change column, which is most of the table below already
-worked out. Save both comparisons to files too.
+Use the two session ids without angle brackets. `--compare` prints both sessions side by side with a change
+column, which is most of the table below already worked out; save it to a file too.
 
 ## The record to fill in
 
@@ -240,9 +266,9 @@ Every row comes from the per-arm report file you saved under "After each arm". N
 a usage page or any other tool — the line each number sits on is named in the left column.
 
 ```
-ab7 — <date>, <model>, Claude Code <version>, Node <version>, commit <sha>, Windows
+ab8 — <date>, <model>, Claude Code <version>, Node <version>, commit 338053f, Windows
 
-                                                    off        rtk        tokenbrake 0.2.3
+                                                    off        tokenbrake 0.2.3
 requests                    ("N requests")
 context processed           ("Context processed")
 % read from cache           (same line, in brackets)
@@ -250,11 +276,12 @@ output tokens               (same line, "output N")
 cost                        ("At list price: ≈ $")
 tool results entered        ("Tool results entered ≈")
 tool results carried        (same line, "carried through later requests ≈")
-trimmed                     ("tokenbrake trimmed" — arm 3 only; "none" on arms 1 and 2)
+trimmed                     ("tokenbrake trimmed" — arm 2 only; "none" on arm 1)
 under the trim threshold    ("Under the trim threshold")
 Read calls / Bash calls     (the "By tool" table at the bottom)
 step 1 (npm test) as delivered   (what the arm said in its line 1)
-answers                                             __ of 12   __ of 12   __ of 12
+tool results / requests (the validity gate)
+answers                                             __ of 12   __ of 12
 ```
 
 Two notes on the cost row. It is the report's own figure, not a bill you look up: the formula reproduces
