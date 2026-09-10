@@ -1358,7 +1358,7 @@ configuration by the trim line. The runbook says so now.
 
 ### ab8 — the result, run 2026-09-10 by hand. A clean null, and one mechanism worth the whole round.
 
-Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267, Node v24.19.0, commit `338053f` of
+Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267, Node v24.19.0, commit `d477c97` of
 `33kain/contexa`, Windows, one message per arm, the twelve-step audit with the one-tool-call-per-turn line.
 Both figures are `report --session=<id>` run from PowerShell after each session closed.
 
@@ -1491,7 +1491,7 @@ Three properties of the task cause it, and all three are fixable:
    is independent, which is what let ab7's arm run them in parallel and void the round; the fix there was
    an instruction, where the task's own shape should have made batching impossible.
 
-**Measured on this repository, at commit `338053f`, so the replacement can be built on facts:**
+**Measured on this repository, at commit `d477c97`, so the replacement can be built on facts:**
 
 | command | characters | exit | what it exercises |
 |---|---|---|---|
@@ -1523,7 +1523,7 @@ deliverable** (part 2, which is where the Read cap and whole-file reading live).
 Code's ~30,000-character ceiling, and exited zero. A debugging session's large outputs are failing test
 runs — non-zero exit, where Claude Code ignores the hook's replacement — so the workload the trim was
 written for is structurally out of its reach, and four debugging rounds have already returned ≈ 0 for that
-reason. Measured on this repository at `338053f`, the commands that land *inside* the window are the ones a
+reason. Measured on this repository at `d477c97`, the commands that land *inside* the window are the ones a
 review session runs: `git log --stat -40` (23,995 chars), `cd worker && node test.mjs` (23,089),
 `sed -n '1,400p' CHANGELOG.md` (18,074), `git diff HEAD~3` (13,642), `grep -rn 'function ' extension/
 worker/src/` (13,107), `git log -p -3` (7,865).
@@ -1556,7 +1556,7 @@ The report: one numbered line per step above, then the outputs of steps 11 and 1
 Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
-**Ground truth, computed on `338053f` before either arm runs.** Steps 1 and 2 move as the repository gains
+**Ground truth, computed on `d477c97` before either arm runs.** Steps 1 and 2 move as the repository gains
 commits and are fixed only within a round; the rest are stable.
 
 | step | answer |

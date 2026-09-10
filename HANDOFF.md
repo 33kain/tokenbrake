@@ -487,13 +487,18 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-8. **ab8, the audit A/B by hand, is set up and waiting.** `AB-RUNBOOK.md` is the self-contained Windows
-   runbook: two arms, off against tokenbrake 0.2.3, on `claude/ab8-off` and `claude/ab8-tb` of
-   `33kain/contexa`, cut from `338053f` and differing in `.claude/settings.json` alone, so nothing is
-   installed or uninstalled at all. `AB-TASK.md` carries its pre-registration, including the validity gate
-   ab7 taught: tool results ÷ requests, near 1 on both arms and within 1.5 of each other, checked before
-   any comparison is read. The rtk head-to-head is a separate round needing rtk installed by hand first,
-   and is not blocking anything.
+8. **ab9, the review A/B by hand, is set up and waiting.** `AB-RUNBOOK.md` is the self-contained Windows
+   runbook: two arms, off against tokenbrake 0.2.4, on `claude/ab9-off` and `claude/ab9-tb` of
+   `33kain/contexa`, cut from `d477c97` and differing in `.claude/settings.json` alone, so nothing is
+   installed or uninstalled at all. The task is no longer the twelve-step audit — ab8 showed that measured
+   a hook which fired zero times on both arms — but a release review plus a mechanism trace, built from
+   measured output sizes so four steps land in the band where the trim acts, one step fails with 17k
+   already printed, and one step gives the Read cap the only chance in nine rounds to save rather than
+   cost. `AB-TASK.md` carries the pre-registration, the ground truth for every answer, and the validity
+   gate ab7 taught: tool results ÷ requests, near 1 on both arms and within 1.5 of each other, checked
+   before any comparison is read. ab8's own result stands as recorded; ab9's numbers do not compare to it,
+   because the workload changed. The rtk head-to-head remains a separate round needing rtk installed by
+   hand first, and blocks nothing.
 
 Open on the owner's side: rotate the old Cloudflare token (npm done 09-09); the `anthropics/claude-code` bug and the
 feature request (per-result clearing of old tool results, the lever no hook can reach), text in `AB-TASK.md`; and ab7
