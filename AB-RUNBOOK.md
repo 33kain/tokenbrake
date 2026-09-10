@@ -124,7 +124,7 @@ clone already carry the two configurations, so **tokenbrake is switched with `gi
 | `claude/ab9-off` | `{"hooks": {}}` — no hooks | arm 1 (off) |
 | `claude/ab9-tb` | the full 0.2.3 project install | arm 2 (tokenbrake) |
 
-Both branches are cut from the same commit (`338053f`) and their trees differ in that one file and nothing
+Both branches are cut from the same commit (`d477c97`) and their trees differ in that one file and nothing
 else. **Nothing is installed or uninstalled in this round at all** — the arms switch with `git checkout`.
 
 Do not run `npx tokenbrake init` at any point. If you already did last night, undo it with
@@ -275,7 +275,7 @@ Every row comes from the per-arm report file you saved under "After each arm". N
 a usage page or any other tool — the line each number sits on is named in the left column.
 
 ```
-ab9 — <date>, <model>, Claude Code <version>, Node <version>, commit 338053f, Windows
+ab9 — <date>, <model>, Claude Code <version>, Node <version>, commit d477c97, Windows
 
                                                     off        tokenbrake 0.2.3
 requests                    ("N requests")
