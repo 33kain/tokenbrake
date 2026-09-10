@@ -243,6 +243,25 @@ function ledgerIndex(ledgerRecs, sessionId) {
   return { byId, byWhat };
 }
 
+/* The Read cap's own firings, from the ledger rather than the transcript: a capped Read produces a
+   perfectly ordinary short result with no marker in it, so the trim line cannot see it and never could.
+   The two halves are different features that happen to share a hook and are separable by config —
+   `readMaxBytes` caps an unbounded Read of a large source file, `persistedLimitLines` caps a read of an
+   output Claude Code had already written to disk — and the evidence for them is not the same. On one real
+   421-request session, reads of persisted outputs carried 25% of everything carried, while the source-file
+   cap has not been observed to fire at all outside a test. Counting them apart is what lets a week of real
+   sessions decide whether either default is worth keeping. */
+function readCaps(ledgerRecs, sessionId) {
+  let source = 0, persisted = 0, bytes = 0;
+  for (const r of ledgerRecs) {
+    if (!r || r.ev !== 'read-cap') continue;
+    if (sessionId && r.session && r.session !== sessionId) continue;
+    bytes += Number(r.bytes) || 0;
+    if (r.persisted) persisted++; else source++;
+  }
+  return { source, persisted, n: source + persisted, bytes };
+}
+
 /* Find transcripts. The ledger's `transcript` field (0.1.0) is exact; failing that, every JSONL under
    <config>/projects/<encoded cwd>/, newest first. Subagent transcripts sit in a sibling directory named
    after the session and are not sessions of their own. */
@@ -310,6 +329,19 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   if (ignored.length) {
     const entered = ignored.reduce((s, r) => s + r.tokens, 0);
     lines.push(`  ${ignored.length} trim${ignored.length === 1 ? '' : 's'} offered and not applied (over Claude Code's own ceiling, or a failing command): ≈ ${kfmt(entered)} tokens entered as Claude Code delivered them`);
+  }
+
+  /* A capped Read never carries the guard's marker — it is an ordinary short read — so it cannot appear on
+     the trim line, and until now nothing in the report said the Read cap had fired at all. Split by which
+     half fired, because they are separate features sharing a hook and their evidence differs. */
+  const caps = readCaps(ledger, parsed.sessionId);
+  if (caps.n) {
+    const parts = [];
+    if (caps.source) parts.push(`${caps.source} on a large source file`);
+    if (caps.persisted) parts.push(`${caps.persisted} on a persisted output`);
+    lines.push(`  Read caps fired: ${caps.n} (${parts.join(', ')}), on ≈ ${kfmt(Math.round(caps.bytes / CHARS_PER_TOKEN))} tokens of file`);
+  } else if (ledger.length) {
+    lines.push(`  Read caps fired: none`);
   }
 
   /* What the trim does not touch: shell results under the threshold. Small excerpts carried through a long
@@ -422,4 +454,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, readKey, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, readKey, readCaps, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

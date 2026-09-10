@@ -543,6 +543,24 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('with their tokens and carried cost', sm.tokens === 500 + 100 && sm.carried === 500 * 3 + 100 * 0, JSON.stringify(sm));
   const text = T.renderReport(parsed, []);
   t('the report carries the line with the share of all carried', /Under the trim threshold: 2 of 3 shell results/.test(text) && /% of all carried\)/.test(text), text.split('\n').find(l => /Under the trim/.test(l)));
+
+  /* The Read cap's firings come from the ledger, not the transcript: a capped Read is an ordinary short
+     result with no marker, invisible to the trim line. The two halves are separate features sharing one
+     hook — readMaxBytes on a large source file, persistedLimitLines on an output Claude Code wrote to
+     disk — and their evidence differs, so the report counts them apart. */
+  console.log('\n-- the Read-cap line');
+  const capLedger = [
+    { ev: 'read-cap', session: 'small', tool: 'Read', what: '/w/big.js', bytes: 80000, persisted: false },
+    { ev: 'read-cap', session: 'small', tool: 'Read', what: '/w/t/tool-results/a.txt', bytes: 40000, persisted: true },
+    { ev: 'read-cap', session: 'other', tool: 'Read', what: '/w/x.js', bytes: 99999, persisted: false },
+    { ev: 'post', session: 'small', tool: 'Bash', what: 'npm test', chars: 9000, kept: 500 },
+  ];
+  const caps = T.readCaps(capLedger, 'small');
+  t('counts this session only, split by which half fired', caps.n === 2 && caps.source === 1 && caps.persisted === 1, JSON.stringify(caps));
+  t('a post row is not a read cap', caps.bytes === 120000, JSON.stringify(caps));
+  const capText = T.renderReport(parsed, capLedger);
+  t('the report names both halves', /Read caps fired: 2 \(1 on a large source file, 1 on a persisted output\)/.test(capText), capText.split('\n').find(l => /Read caps/.test(l)));
+  t('with no cap rows the line says none rather than going missing', /Read caps fired: none/.test(T.renderReport(parsed, [capLedger[3]])), T.renderReport(parsed, [capLedger[3]]).split('\n').find(l => /Read caps/.test(l)));
 }
 
 /* ---- context after flagged lines ------------------------------------------
