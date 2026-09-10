@@ -28,6 +28,8 @@ const DEFAULTS = {
   readMaxBytes: 60000,   // Read without offset/limit on a file bigger than this gets capped
   readLimitLines: 300,
   persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
+  shapeFilters: false,   // OFF by default: collapse progress redraws and repeated lines before anything else
+  shapeMinChars: 1500,   // and only on results at least this long
   logAllTools: true      // record size of every tool result in the ledger (feeds `tokenbrake report`)
 };
 
@@ -69,6 +71,53 @@ function log(rec) {
   } catch { /* ledger is best-effort */ }
 }
 function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; }
+
+/* Shape filters, OFF by default and A/B'd before any default moves.
+
+   The trim only acts above maxChars, and a measured install log shows why that is not enough on its own:
+   400 lines of progress bars kept 65 progress lines and 144 ANSI escape sequences and spent nearly the
+   whole 6,000-character budget on them, leaving the final status alive only because it sat in the tail.
+   Repeated near-identical lines are not information; they are the same line drawn again.
+
+   Three passes, all conservative, in this order:
+     1. ANSI escapes go. They colour a terminal nobody is looking at.
+     2. A carriage-return redraw keeps its last frame. `\r` exists to overwrite, so only the last write was
+        ever visible.
+     3. A run of three or more consecutive lines that differ only in numbers or bar glyphs collapses to its
+        LAST line plus a count. The last one is the informative frame — 100%, the final total — and the
+        count keeps the fact that there were many.
+
+   What it deliberately does not do: collapse passing-test lines. Their names are answers to real questions
+   ("how many checks passed, and what was the last one") and a count is not always enough. That is a
+   separate flag if it is ever wanted, measured separately.
+
+   Nothing here is lossy about which distinct lines occurred, only about how many times a line was redrawn. */
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
+function shapeKey(line) {
+  return line
+    .replace(/[=\-#>*.·▏▎▍▌▋▊▉█░▒▓]{2,}/g, '§')  // a run of bar glyphs is one glyph
+    .replace(/\d[\d.,:%]*/g, '#')                 // any number is the same number
+    .replace(/[ \t]+/g, ' ')                      // a bar pads itself with spaces as it fills
+    .trim();
+}
+function shapeFilter(text) {
+  const src = text.replace(ANSI, '').split('\n').map(l => (l.indexOf('\r') >= 0 ? l.slice(l.lastIndexOf('\r') + 1) : l));
+  const out = [];
+  for (let i = 0; i < src.length;) {
+    const key = shapeKey(src[i]);
+    let j = i + 1;
+    if (key) while (j < src.length && shapeKey(src[j]) === key) j++;
+    const run = j - i;
+    if (run >= 3) {
+      out.push(src[j - 1]);
+      out.push(`[tokenbrake] the line above was drawn ${run} times; ${run - 1} identical-shaped lines collapsed`);
+    } else {
+      for (let k = i; k < j; k++) out.push(src[k]);
+    }
+    i = j;
+  }
+  return out.join('\n');
+}
 
 function trimText(text, cfg, savedPath) {
   const lines = text.split('\n');
@@ -164,8 +213,23 @@ function handlePost(input, cfg) {
     failed: failed || undefined
   };
 
+  /* Shaping runs before the size test, so a log that collapses below maxChars is delivered clean and never
+     trimmed at all. That is the point: the trim's head/tail/flagged shape is right for a log and the wrong
+     thing to spend on redraws. */
+  let shaped = false;
+  if (isShell && cfg.shapeFilters && text.length >= cfg.shapeMinChars) {
+    const s2 = shapeFilter(text);
+    if (s2.length < text.length) { rec.shapedFrom = text.length; rec.shapedTo = s2.length; text = s2; shaped = true; }
+  }
+
   if (!isShell || text.length <= cfg.maxChars) {
     if (cfg.logAllTools) log(rec);
+    /* Shaped but under the trim threshold: the replacement still has to go out, or the shaping is a
+       measurement of something the model never received — the mistake the report's credit fix was about. */
+    if (shaped) {
+      const u = (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: text, stderr: '' } : text;
+      emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: u } });
+    }
     return;
   }
 

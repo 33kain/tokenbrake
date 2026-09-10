@@ -563,6 +563,62 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('with no cap rows the line says none rather than going missing', /Read caps fired: none/.test(T.renderReport(parsed, [capLedger[3]])), T.renderReport(parsed, [capLedger[3]]).split('\n').find(l => /Read caps/.test(l)));
 }
 
+/* ---- shape filters, off by default ---------------------------------------
+   The trim only acts above maxChars and spends that budget on whatever is there, which on an install log
+   is progress redraws: measured, 400 such lines kept 65 of them and 144 ANSI escapes and left the final
+   status alive only because it sat in the tail (AB-TASK.md, "An outside test plan"). These filters run
+   before the size test, so a log that collapses below maxChars is delivered clean and never trimmed at
+   all. Default off; a default only moves after an A/B, as every other default here has. */
+{
+  console.log('\n-- shape filters (off by default)');
+  const bar = (pct, i) => `\x1b[32m[${'='.repeat(Math.floor(pct / 8)).padEnd(12)}] ${pct}% - loading package number ${i} from the registry cache\x1b[0m`;
+  const log400 = ['Installing dependencies...', ...Array.from({ length: 400 }, (_, i) => bar((i % 100) + 1, i)), 'Added 142 packages in 3s.'].join('\n');
+  const run = (text, cfgExtra, command = 'npm install') => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shape-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], {
+      input: JSON.stringify({ session_id: 'shape', tool_use_id: 'toolu_shape_' + Math.random().toString(36).slice(2, 8),
+        tool_name: 'Bash', tool_input: { command }, tool_response: bashResp(text) }), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    rmSync(dir, { recursive: true, force: true });
+    const o = parse(r.stdout);
+    return o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+  };
+
+  const off = run(log400, null);
+  t('off by default: the log is trimmed the old way, redraws and all',
+    off.includes('\x1b[') && /omitted here/.test(off), `ansi=${(off.match(/\x1b\[/g) || []).length}`);
+
+  const on = run(log400, { shapeFilters: true });
+  t('on: ANSI escapes are gone', !on.includes('\x1b['), `ansi=${(on.match(/\x1b\[/g) || []).length}`);
+  t('on: repeated redraws collapse with a count', /drawn \d+ times; \d+ identical-shaped lines collapsed/.test(on),
+    (on.split('\n').find(l => /collapsed/.test(l)) || on.slice(0, 120)));
+  t('on: the final status line survives', on.includes('Added 142 packages in 3s.'));
+  /* The point of running before the size test: this log no longer needs trimming at all, so the model
+     gets a whole document instead of a head, a tail and a hole. */
+  t('on: it collapses below maxChars and is delivered without any trim', !/omitted here/.test(on), String(on.length));
+  t('on: and is much smaller than what the trim alone delivered', on.length < off.length * 0.6, `${on.length} vs ${off.length}`);
+
+  /* Conservatism, both directions. */
+  const distinct = ['start', ...Array.from({ length: 300 }, (_, i) => `processed record ${i} for tenant acme-${i} in region eu-west-${i}`), 'done'].join('\n');
+  const onDistinct = run(distinct, { shapeFilters: true });
+  t('distinct lines that differ only by number ARE collapsed — that is the whole mechanism',
+    /identical-shaped lines collapsed/.test(onDistinct));
+  const varied = ['alpha begins here', 'beta continues elsewhere', 'gamma finishes the job'].join('\n').padEnd(2000, '\nunique tail line here');
+  const onVaried = run(varied, { shapeFilters: true });
+  t('genuinely different consecutive lines are left alone', onVaried === '' || onVaried.includes('alpha begins here'));
+
+  const small = 'short output, nothing to do here';
+  t('under shapeMinChars nothing is emitted at all', run(small, { shapeFilters: true }) === '');
+
+  /* A carriage-return redraw is one line overwritten many times; only the last write was ever visible. */
+  const cr = 'downloading\n' + 'x'.repeat(1600) + '\n' + ['  5%', ' 25%', ' 75%', '100% done'].map(p => `progress: ${p}`).join('\r') + '\nfinished';
+  const onCr = run(cr, { shapeFilters: true });
+  t('a carriage-return redraw keeps its last frame only',
+    onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
+}
+
 /* ---- what the trim keeps and what it breaks -------------------------------
    From a review of an outside test plan (AB-TASK.md, "An outside test plan").
    Two of its four claims about this guard were checkable and they came out
