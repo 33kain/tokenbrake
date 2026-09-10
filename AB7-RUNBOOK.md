@@ -50,7 +50,44 @@ Whichever you pick, the three-arm design carries its own off arm, so the compari
 Self-contained; nothing above needs to be open while running it. Windows, PowerShell. Costs roughly $10 to
 $20 at list price depending on model and is about an hour with the waiting.
 
-## Before anything
+## Step 0 — put the machine in a known state
+
+If you have already tried this once, start here regardless of what you think is installed. The one thing
+that silently voids an arm is a leftover hook, and neither tool's own command can see the other's. So look
+at the file both of them write to, which is the ground truth:
+
+```powershell
+type $HOME\.claude\settings.json
+```
+
+- **File not found** → no user-scope hooks at all. That is the clean state. Good.
+- **It prints JSON with a `hooks` block** → something is installed at user scope. Read it: entries naming
+  `tokenbrake` or `guard.js` are tokenbrake's, entries naming `rtk` are rtk's.
+
+To clear tokenbrake from user scope: `npx --yes tokenbrake@0.2.3 uninstall`. To clear rtk, use rtk's own
+uninstall. If rtk's uninstall does not work or you are not sure of the command, you can edit
+`$HOME\.claude\settings.json` by hand — delete the hook entries that name rtk, or if the whole file is
+nothing but hooks you installed, delete the file. Claude Code treats a missing user settings file as no
+user-scope configuration, which is exactly what arms 1 and 2 need. Back it up first if you have other
+settings in there:
+
+```powershell
+copy $HOME\.claude\settings.json $HOME\.claude\settings.json.bak
+```
+
+Then confirm, and this is the check to trust over any tool's status output:
+
+```powershell
+type $HOME\.claude\settings.json     # "cannot find" is the answer you want
+npx --yes tokenbrake@0.2.3 status      # backs it up for tokenbrake specifically
+```
+
+**Why this and not `rtk status`.** The first version of this page told you to run rtk's own status command
+without saying what it is, because this project has never run rtk and does not know its CLI. That was a
+hole in the instructions and it cost you an evening. Reading `settings.json` needs no tool's CLI at all,
+shows every hook whichever tool installed it, and cannot be out of date.
+
+## Before anything else
 
 Close every other Claude Code session; the five-hour window is shared. Then, once:
 
@@ -59,10 +96,12 @@ cd $HOME\Desktop
 git clone https://github.com/33kain/contexa
 cd contexa
 npm install
-git rev-parse --short HEAD      # write this down; all three arms run from it
+git fetch origin
 claude --version                # write this down
 node --version                  # and this
 ```
+
+If you already cloned it last night, `cd` into it and run `git fetch origin` instead of cloning again.
 
 **One thing that is different on Windows, and it bears on this round.** The first Windows run (2026-09-09, recorded in
 `AB-TASK.md`) found `npm test` on this repository printing 49.4 KB, against 27 KB on Linux. That is past Claude Code's
@@ -71,46 +110,92 @@ persisted-output preview whatever any hook does. Step 1 is therefore not a step 
 this machine, and if the arms differ there the difference is not theirs. Note in the record what step 1 looked like on
 each arm.
 
+## How the arms differ — tokenbrake is never installed or uninstalled
+
+This is the part that was hardest last night, and it was harder than it needed to be. Two branches of the
+clone already carry the two configurations, so **tokenbrake is switched with `git checkout`, not with
+`init` and `uninstall`**:
+
+| branch | `.claude/settings.json` | used by |
+|---|---|---|
+| `claude/ab7-off` | `{"hooks": {}}` — no hooks | arm 1 (off) and arm 2 (rtk) |
+| `claude/ab7-tb` | the full 0.2.3 project install | arm 3 (tokenbrake) |
+
+Both branches are cut from the same commit and their trees differ in that one file and nothing else. So the
+only thing you install or uninstall in this whole round is **rtk**, once each way.
+
+Do not run `npx tokenbrake init` at any point. If you already did last night, undo it with
+`npx --yes tokenbrake@0.2.3 uninstall` in step 0; a user-scope install would run on all three arms and void
+the round.
+
 ## Arm 1 — off
 
-Neither tool installed.
-
 ```powershell
-rtk init -g --uninstall            # even if you think it is not installed
-npx --yes tokenbrake@0.2.3 uninstall
-npx --yes tokenbrake@0.2.3 uninstall --project
+git checkout claude/ab7-off
 npx --yes tokenbrake@0.2.3 status
 ```
 
-`status` should print `missing` against all three hooks and against the guard file, and must not print the
-"also installed at project scope" line — that line means the guard would run on this arm and voids it.
-The clone carries project-scope tokenbrake hooks on `main`, which the third command removes. Do not skip the
-`status`; a leftover project hook is the easiest way to void an arm, and it also spawn-tests the node path,
-which on Windows contains a space (`C:\Program Files\nodejs\node.exe`) and has broken installs before.
+`status` should print `missing` against all three hooks and against the guard file, and must **not** print
+the "also installed at project scope" line. If it does print that line, you are on the wrong branch — check
+with `git branch --show-current`.
 
-Then `claude` in the clone, paste the task below, send nothing else, and let it finish.
+Then `claude` in the clone, paste the task below, send nothing else, let it finish, and capture it per
+"After each arm" below.
 
 ## Arm 2 — rtk
 
 ```powershell
-rtk init -g                        # then rtk's own status command: confirm the hook is registered
-npx --yes tokenbrake@0.2.3 status  # again: three `missing` lines, no project-scope line
+git branch --show-current          # must still say claude/ab7-off
+rtk init -g
+type $HOME\.claude\settings.json  # confirm with your own eyes that rtk's hook is now there
+npx --yes tokenbrake@0.2.3 status  # and that tokenbrake still says missing everywhere
 ```
 
-Fresh `claude` session — not `/clear` in the previous one, which keeps its requests and its cost. Same
-paste.
+Fresh `claude` session — a new terminal, not `/clear` in the previous one, which keeps its requests and its
+cost. Same paste.
 
 ## Arm 3 — tokenbrake
 
 ```powershell
-rtk init -g --uninstall            # then rtk's status: confirm it is gone
-npx --yes tokenbrake@0.2.3 init
-npx --yes tokenbrake@0.2.3 status  # PostToolUse, PostToolUseFailure and PreToolUse Read cap all present
+rtk init -g --uninstall
+type $HOME\.claude\settings.json  # confirm rtk's hook is gone, with your own eyes
+git checkout claude/ab7-tb
+npx --yes tokenbrake@0.2.3 status  # now: "also installed at project scope", and the three hooks present there
 ```
 
-Fresh session, same paste. (The rtk commands here are the owner's; this page has never run rtk and does not
-verify its CLI. Whatever rtk's install, uninstall and status commands actually are, the requirement is only
-that exactly one tool is installed per arm and that you confirmed it rather than assumed it.)
+Fresh session, same paste.
+
+(The rtk commands are the owner's; this page has never run rtk and does not verify its CLI. If `rtk init -g
+--uninstall` is not the right command, the fallback is step 0: edit `settings.json` and remove rtk's hook
+entries by hand. What matters is only that `settings.json` shows exactly one tool per arm and that you
+looked at it rather than assumed it.)
+
+## After each arm — what to save
+
+Do this the moment an arm's twelve lines are on screen, before starting the next one. Nothing here is
+recoverable later except from the transcript, so save it now.
+
+1. **Copy the session's whole final answer** — the twelve lines plus the two pasted blocks — into a text
+   file: `arm1-off-answer.txt`, `arm2-rtk-answer.txt`, `arm3-tb-answer.txt`. Plain copy-paste from the
+   terminal is fine.
+2. **Write down the session id.** It is the first line of the step-12 report inside that answer:
+   `Session abc12345…  C:\Users\...\contexa`. The first eight characters are what you need.
+3. **Close that Claude Code session.** Then, from PowerShell:
+
+```powershell
+npx --yes tokenbrake@0.2.3 report --all
+npx --yes tokenbrake@0.2.3 report --session=<the 8 characters> --top=8 > arm1-off-report.txt
+```
+
+**This last report, not the one from step 12, is the number that goes in the table.** Step 12 runs while the
+session is still going, so it prices and counts the session as it stood at that moment — it misses the
+requests that came after. Run from PowerShell once the session is closed, the same command reads the
+finished transcript and gives the final figures. `--all` lists the sessions newest first if you lose track
+of which id is which.
+
+That file gives you every row of the table: `requests`, `At list price` (the cost), `Tool results entered`,
+`carried`, the `tokenbrake trimmed` line, and the by-tool table with Read and Bash call counts. There is no
+separate place to look and nothing else to keep.
 
 ## The task — paste verbatim, identical on all three arms
 
@@ -146,26 +231,36 @@ npx --yes tokenbrake@0.2.3 report --compare <off> <rtk>
 npx --yes tokenbrake@0.2.3 report --compare <off> <tokenbrake>
 ```
 
+`--compare` prints two sessions side by side with a change column, which is most of the table below already
+worked out. Save both comparisons to files too.
+
 ## The record to fill in
 
-Paste this filled out into a new `### ab7 — the result` section in `AB-TASK.md`.
+Every row comes from the per-arm report file you saved under "After each arm". Nothing here needs a website,
+a usage page or any other tool — the line each number sits on is named in the left column.
 
 ```
 ab7 — <date>, <model>, Claude Code <version>, Node <version>, commit <sha>, Windows
 
-                              off        rtk        tokenbrake 0.2.3
-API cost
-requests
-cache-read tokens
-cache-write tokens
-output tokens
-tool results entered
-tool results carried
-Read calls / Bash calls
-trimmed by the guard
-step 1 (npm test) as delivered
-answers                       __ of 12   __ of 12   __ of 12
+                                                    off        rtk        tokenbrake 0.2.3
+requests                    ("N requests")
+context processed           ("Context processed")
+% read from cache           (same line, in brackets)
+output tokens               (same line, "output N")
+cost                        ("At list price: ≈ $")
+tool results entered        ("Tool results entered ≈")
+tool results carried        (same line, "carried through later requests ≈")
+trimmed                     ("tokenbrake trimmed" — arm 3 only; "none" on arms 1 and 2)
+under the trim threshold    ("Under the trim threshold")
+Read calls / Bash calls     (the "By tool" table at the bottom)
+step 1 (npm test) as delivered   (what the arm said in its line 1)
+answers                                             __ of 12   __ of 12   __ of 12
 ```
+
+Two notes on the cost row. It is the report's own figure, not a bill you look up: the formula reproduces
+the API's records to the cent on both Opus 5 and Fable 5.1 (`AB-TASK.md`, ab5), so it is the number, not an
+estimate. And it counts the whole session including the writing at the end, which is why the report has to
+be run from PowerShell after the session is closed rather than read off step 12.
 
 Then the verdict against the decision rule in `AB-TASK.md`, in its own words, including which branch of it fired.
 If any arm was void — a tool that would not install, an arm that refused the task, a second message sent —
