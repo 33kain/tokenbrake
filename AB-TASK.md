@@ -1391,10 +1391,14 @@ row logged per call. **That row count, not the trim line, is what identifies whi
 to.** An earlier version of this page's guidance said the guarded arm must show a trim; that is only true
 when the guard has something to trim, and it is wrong as a check.
 
-**The mechanism, which is what this round actually bought.** The Read cap fired once, on the arm's first
-unbounded Read of `extension/content.js` (112 KB, over `readMaxBytes`). What happened next is the finding:
+**The mechanism, which is what this round actually bought.** The Read cap fired once. *Corrected
+2026-09-10:* when 0.2.4's `Read caps fired` line was run against this arm's transcript afterwards it read
+**"1 (1 on a persisted output)"** — so the cap that fired was the persisted-output cap, not `readMaxBytes`,
+and the arm's unbounded Read of `extension/content.js` was refused by Claude Code's own Read limit rather
+than capped by the guard. `readMaxBytes` did not fire in ab8 at all, and has still never been observed to
+fire outside a test. What happened is: 
 
-- The model went to Bash and ran `cat extension/content.js` instead.
+- The model went to Bash and ran `cat extension/content.js`.
 - That passed Claude Code's own inline ceiling, so Claude Code wrote the output to
   `~/.claude/projects/<project>/<session>/tool-results/…` and handed back a preview.
 - The model then read that persisted file back in **three bounded ranges** — 11k, 11k and 7k tokens,
@@ -1637,4 +1641,98 @@ entirely, which is the workload the trim was written for.
 All of it is now in `README.md` under "Limits, with the numbers", ahead of the install instructions, on the
 principle that a package whose whole argument is honesty should not leave its limitations to be discovered
 by someone else.
+
+### The wrong-session default, a third time — and the check that is actually reliable
+
+ab9's off arm ran the new `report --top=8` at step 12 and got a report of `8c21713d`, which is **ab8's
+tokenbrake arm**. Its own session was `8516e976`, on disk and newer. The arm said so — "this session issued
+no Read or Grep tool calls at all, only Bash, so the ten Read rows do not describe this session's work" —
+and was right, as ab8's arm was right and ab7's arm was wrong.
+
+That is three misfires of the same default on Windows, and it is now established rather than suspected: a
+transcript being written by a live process can carry a stale modification time there, so `report` with no
+`--session` can name a session that finished hours earlier. **The step-12 report is part of the workload
+and not part of the record.** The record is always `report --session=<id>` from the shell after the session
+closes, with the id taken from `report --all`, and the id is the newest row carrying the repository's path
+— never the one printed inside the arm's own step 12.
+
+The reliable identity check is the **ledger row count**, not the trim line and not the session id: it grows
+by one per tool call of a session the guard ran in. It caught nothing here only because the wrong report
+was pulled before anyone compared counts.
+
+
+### ab9 — the result, run 2026-09-10 by hand. The first time the guard moved anything.
+
+Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267, Windows, commit `d477c97` of `33kain/contexa`, one
+message per arm, the review task. Both figures are `report --session=<id>` run from PowerShell after each
+session closed.
+
+| | off, `8516e976` | tokenbrake 0.2.4, `a2afb138` | change |
+|---|---|---|---|
+| requests | 16 | 17 | +1 |
+| tool results | 15 | 16 | |
+| **tool results ÷ requests** | **0.94** | **0.94** | both pass the gate |
+| cost | $1.93 | $1.70 | −11.9% |
+| **tool results entered** | **12k** | **9k** | **−25%** |
+| **tool results carried** | **118k** | **97k** | **−17.8%** |
+| output tokens | 11k | 8k | −27% |
+| trimmed by the guard | 0 | **3 — ≈ 9k kept out, ≈ 141k token-reads not carried** | |
+| Read caps fired | none | none | |
+| under the trim threshold | 12 of 15 shell, 29% of carried | 15 of 16 shell, 75% of carried | |
+| Read / Bash calls | 0 / 15 | 0 / 16 | |
+
+**By the rule written before the run, this is the first branch that has ever fired:** entered lower on the
+guarded arm, requests within three, cost not worse. It therefore stays in this file and goes nowhere else
+until a second run on another day reproduces it. That rule has already retired two numbers on this page and
+it applies in this direction too.
+
+**What is a claim and what is not.** The −11.9% on cost is *inside* the 21% band two identically configured
+arms have produced here, so it is not a cost claim and must not be quoted as one. What is measured rather
+than inferred is **entered** and **carried**: those are per-result counts from the transcript, not outcomes
+of how the model chose to plan. Entered fell 25% and carried fell 18%, and the three trims are visible in
+the arm's own table — `git log --stat -40` trimmed from 7k tokens to 544, `git diff HEAD~3` from 3k to 2k,
+one `sed` excerpt from 2k to 1k. That is the first time in nine rounds that the guard's action shows up in
+the numbers at all.
+
+Note the guard's own "≈ 141k token-reads not carried" is a per-result counterfactual, and the measured
+difference in carried is 21k. The two do not reconcile and should not be added together: the arms did
+slightly different amounts of work, and the counterfactual assumes everything else held.
+
+**The model starves the task, even one built to feed it.** The workload was designed from measured sizes so
+four steps would produce 17k–24k characters. Neither arm let that happen. The off arm ran the worker suite
+as `node test.mjs 2>&1 | tee … | tail -`, answered "read CHANGELOG.md in full" with `wc -l` and
+`grep -c` on a 237 KB file it never opened, and used **zero Read calls in fifteen tool calls**. Total
+entered: 12k, against 90k on the old audit. You cannot make a model accept a large result; you can only ask
+a question, and it will find the cheapest way to answer. Which is the project's own thesis arriving from
+the other side: the hook exists to stop the model letting big things in, and mostly the model does not.
+
+**Three design faults in the task, found by running it.**
+
+- **Steps 1, 2 and 3 are not comparable between the arms.** The off branch carries one extra commit — the
+  one that empties `.claude/settings.json` — so `git log --stat -40` slides its window by one and
+  `HEAD~3` spans different commits on each arm. The arms' answers differ accordingly: `index.html` at 4
+  against 5 on step 1, and completely different file lists on step 2. That is the branch design, not the
+  guard, and it means any step reading git history is void as an identity check. A future round must cut
+  the off arm's configuration into the *same* commit as the on arm's, or ask nothing of `git log`.
+- **Step 4 is open-ended and cannot be compared.** "List every named limit" produced 15 rows on one arm and
+  19 on the other, both correct as far as they go. An A/B needs questions with one answer.
+- **Steps 5 to 10 agreed exactly**, including step 5, the one that required noticing rather than looking
+  up: both arms found `MAX_BRIEF_CHARS` and `cleanBrief` duplicated at `extension/background.js:621/622`
+  and `worker/src/index.js:633/634`, and both got step 6's reasoning right in both directions. Ground truth
+  confirmed 3, 7, 8, 9 and 10 against the branch afterwards; the arms were right and one of my
+  pre-computed answers (step 8) was wrong.
+
+**A gap the round exposed in the excerpt rule.** The guarded arm's trimmed `sed` excerpt was
+`echo '=== content.js 320-345 (capture windows) ==='; sed -n …`. The 0.2.3 rule exempts a command that
+*only* prints one file; prefixing a label with `echo` makes it a compound command and the exemption is
+lost, so the excerpt was trimmed to head, tail and error-looking lines — the exact behaviour 0.2.3 removed,
+reached through a different door. Models label their output this way constantly. Worth fixing, and worth
+measuring before it is.
+
+**What the round bought.** The first positive reading in the project's history, on the first workload built
+from measurements rather than guessed at; a mechanism for it that is visible in the arm's own table; the
+sign-off both arms wrote, which found a real code smell nobody asked about — the own-key fork handler
+hardcodes `6000` and `2000` where the worker uses named constants, so drift there would be invisible to
+`build.mjs`; and three faults in the task that the next round fixes. It is one run. It is not a number for
+the README yet.
 

@@ -441,6 +441,26 @@ transcript's mtime lags, so `report` with no `--session` picked a previous round
 fixed in the tool: `status` called a single project install a double one. The lesson worth keeping is that
 a protocol document is finished when someone who was not in the room can follow it, not when it is correct.
 
+**Thirty-first card (2026-09-10): ab9, and the first time the guard moved anything.** The audit task was
+retired after ab8 showed it measured a hook that fired zero times on both arms; its replacement is a
+release review plus a mechanism trace, built from measured output sizes. ab9 on Fable 5.1 on Windows, off
+against 0.2.4: **entered 12k → 9k (−25%), carried 118k → 97k (−18%), cost $1.93 → $1.70, requests 16 → 17**,
+both arms at 0.94 tool results per request. By the rule written before the run this is the first branch
+that has ever fired — entered lower, requests within three, cost not worse — and by the same rule it stays
+in `AB-TASK.md` until a second run on another day reproduces it. The cost figure is inside the 21% noise
+band and is *not* a claim; entered and carried are per-result counts and are. Three trims are visible in
+the arm's own table, `git log --stat -40` cut from 7k tokens to 544 among them. Also found: **the model
+starves even a task built to feed it** — the off arm answered "read CHANGELOG.md in full" with `wc -l` and
+`grep -c` on a file it never opened, and made zero Read calls in fifteen tool calls; **three faults in the
+task itself**, chiefly that the off branch's extra commit slides `git log --stat -40` and `HEAD~3` so any
+git-history step is void as an identity check; and **a gap in the excerpt rule** — prefixing `echo '=== label ==='`
+to a `sed` range makes it a compound command, loses the 0.2.3 exemption, and gets it trimmed, which models
+do constantly. ab8's record was corrected the same day: 0.2.4's new `Read caps fired` line shows the cap
+that fired there was the *persisted* one, so `readMaxBytes` has still never been observed to fire outside a
+test. Released 0.2.4 (the `Read caps fired` line; `status` no longer calls a single install a double one);
+`README.md` gained "Limits, with the numbers" ahead of the install instructions, including the count of 285
+logged tool results in which the trim applied to none.
+
 ## Next session — Saturday 2026-09-13, the distribution table and the post
 
 Nothing to build before then. The task is collection and one table, then publishing. Steps:
