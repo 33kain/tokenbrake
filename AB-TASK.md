@@ -1859,3 +1859,54 @@ and nothing needs to be run in one sitting: the fixtures are deterministic and `
 proceed if they do not match the pre-registered hashes. **ab10 runs through this, not through
 `AB-RUNBOOK.md`.**
 
+### The shape filter's second and third bugs, from the same review — 2026-09-10
+
+The list that came with the benchmark named five things. Two were claims about this code and both were
+true; they were checked with probes rather than judged, and both destroyed data.
+
+**A percentage is not a redraw signal.** The settlement-table fix had narrowed collapsing to lines carrying
+"bar glyphs **or a percentage**". Eighty rows of `tenant acme-079 risk score 53% approved` collapsed to one
+row and a count — the same destruction as the settlement table, through the other half of the same rule.
+Percentages appear in data far more often than in progress bars. **A run of bar glyphs is now the only
+signal.** The cost is real and accepted: a bar-less `Downloading… 45%` is no longer collapsed. A filter that
+misses noise is a nuisance; one that eats rows is a bug.
+
+**A trailing `\r` is a line ending, not a redraw.** After `split('\n')`, every line of a CRLF document ends
+with `\r`, so "keep what follows the last `\r`" followed nothing: a 120-row CRLF CSV was delivered as **121
+characters of empty lines**, every field gone. The worst thing this filter has done. A line is a redraw only
+if a `\r` sits *inside* it; a plain line, CRLF or LF, now passes byte for byte.
+
+**What the two fixes cost, measured honestly.** The first probe used a bar that starts empty
+(`'='.repeat(pct/8)`, zero glyphs for the first quarter), and against it the filter now barely acts:
+5,998 characters to 5,841, still trimmed, still a hole. Against a bar with glyphs from the start — what a
+real installer prints — it is **5,936 to 942 with no trim at all**. The headline this file and the README
+carried for one afternoon, 32,310 to 2,519, came from the unsafe version and is withdrawn. The number that
+matters is the benchmark's own `F08_deploy_log_ansi` fixture, which will be lower than the 8,353 → 5,368 it
+reported against the unsafe guard; that measurement is now the benchmark's to make, not a probe's.
+
+**Three bugs in one feature in one afternoon, all in code written and tested by the same person in the same
+hour, none caught by its own tests.** Each test that shipped alongside a bug asserted the bug was the
+intended behaviour — twice, then a third time. What caught all three was an outside document written by
+someone with no stake in the feature working. That is the argument for the benchmark and for the flag: the
+default is still `false`, and none of this reached a real session.
+
+### The remaining three items on that list, and what they need
+
+- **Excerpt detection: labelled outputs and quoted paths with spaces.** `EXCERPT` requires the command to
+  be a bare `cat`/`sed -n`/`head`/`tail` with one unquoted, space-free path and nothing after it. So
+  `echo '=== content.js ==='; sed -n '320,345p' file.js` loses the exemption and is trimmed to head, tail
+  and error lines — ab9's guarded arm did exactly that — and `cat "my file.txt"` fails the same way because
+  the character class forbids whitespace inside the path. Models label their output constantly and Windows
+  paths have spaces. **The benchmark covers this**: its mechanism harness runs plain reads, labelled
+  equivalents, piped ones and quoted paths as separate fixtures. Fix after its Experiment A says how often
+  each shape actually appears, not before.
+- **The report as a product: where the guard *can* act, what was applied, what was out of reach.** The
+  report already says what entered, what was trimmed, what was offered and not applied, what sat under the
+  threshold, and now how many Read caps fired. What it does not say is the share that was never reachable
+  at all — results above the host's ceiling, failing commands, non-shell tools — which is the honest
+  denominator for everything else. On one ledger that share was total: 285 tool results, trim applied to
+  none. **The benchmark will not produce this**; it is product work, and on a package whose whole argument
+  is honest measurement it is arguably the most valuable item on the list.
+- **Only then a lower threshold or shape filters on by default.** Correct sequencing and exactly the rule
+  this page already runs on. Nothing moves until an A/B moves it.
+

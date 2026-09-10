@@ -227,11 +227,16 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
 
 `shapeFilters` (default `false`) turns on a pre-pass over shell results at least `shapeMinChars` (1,500)
-long: ANSI escapes removed, carriage-return redraws reduced to their last frame, and runs of three or more
-consecutive lines differing only in numbers or bar glyphs collapsed to the last one plus a count. It runs
-*before* the size test, so a log that collapses below `maxChars` is delivered whole and never trimmed. On a
-400-line install log that is 32,310 characters to 2,519. It is off because no A/B has moved it yet; see
-`AB-TASK.md`.
+long: ANSI escapes removed, a carriage-return redraw *inside* a line reduced to its last frame, and runs of
+three or more consecutive lines carrying a run of **bar glyphs** collapsed to the last one plus a count. It
+runs *before* the size test, so a log that collapses below `maxChars` is delivered whole and never trimmed.
+On a 400-line install log with a realistic bar that is 5,936 characters to 942, with no trim at all.
+
+A run of bar glyphs is the only signal, and that is deliberate. "Lines differing only in numbers" collapsed
+a settlement table; adding "or a percentage" collapsed a table of risk scores; and treating a trailing `\r`
+as a redraw destroyed every field of a CRLF CSV. Each was caught in a probe on the day it was written. A
+filter that misses noise is a nuisance; one that eats rows is a bug. It is off because no A/B has moved it
+yet; see `AB-TASK.md`.
 
 ## Uninstall
 
