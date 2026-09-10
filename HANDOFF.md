@@ -422,6 +422,25 @@ and nothing written from `AB-TASK.md` may imply otherwise. Also written: the rtk
 procedure for the owner's Windows machine, and the twelve-step audit task itself, which three rounds had
 used without ever recording it.
 
+**Thirtieth card (2026-09-10): the first round run by a person, and the cap's door.** ab7 and ab8, both on
+the owner's Windows machine, Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267. ab7 was void: one arm
+read "one step at a time, and do not skip or batch steps", announced it would run the independent steps in
+parallel, and came in at 4.6 tool results per request against the other's 1.1, so every figure followed
+from the batching rather than the guard. rtk turned out not to be installed and the round finished as two
+arms by agreement — a change of scope, not a defect. ab8 re-ran it with one added sentence, *one tool call
+per turn*, and both arms landed at 0.94 and 1.00: **$4.37 → $4.39, +0.5%, requests 18 → 21, answers 12 of
+12 identical.** By the rule written before the run, the expected null, and the closest two arms have ever
+come on this page. What the round bought is the mechanism: the Read cap fired on `content.js` (112 KB), the
+model went to `cat` instead, that passed Claude Code's own ceiling and was persisted, and the model read
+the persisted file back in three *bounded* ranges the guard leaves alone by design — 411k token-reads, 43%
+of that arm's carried context. **The cap changed which door the file came in through and nothing else.**
+Four holes in `AB8-RUNBOOK.md` were found by someone actually following it and are fixed: no rtk status
+command was named, nothing said what to save per arm, install/uninstall was replaced by `git checkout` on
+prepared branches, and the arm's own step-12 report can name the wrong session (on Windows a live
+transcript's mtime lags, so `report` with no `--session` picked a previous round's arm — twice). Also
+fixed in the tool: `status` called a single project install a double one. The lesson worth keeping is that
+a protocol document is finished when someone who was not in the room can follow it, not when it is correct.
+
 ## Next session — Saturday 2026-09-13, the distribution table and the post
 
 Nothing to build before then. The task is collection and one table, then publishing. Steps:

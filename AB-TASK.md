@@ -1355,3 +1355,66 @@ result is part of the workload being measured, but **its header is not the recor
 `report --all` — the newest row carrying the repository's path — and confirmed against the arm's
 configuration by the trim line. The runbook says so now.
 
+
+### ab8 — the result, run 2026-09-10 by hand. A clean null, and one mechanism worth the whole round.
+
+Fable 5.1 (`claude-fable-5-1[1m]`), Claude Code 2.1.267, Node v24.19.0, commit `338053f` of
+`33kain/contexa`, Windows, one message per arm, the twelve-step audit with the one-tool-call-per-turn line.
+Both figures are `report --session=<id>` run from PowerShell after each session closed.
+
+| | off, `460d9673` | tokenbrake 0.2.3, `8c21713d` | change |
+|---|---|---|---|
+| requests | 18 | 21 | +3 |
+| tool results | 17 | 21 | |
+| **tool results ÷ requests** | **0.94** | **1.00** | both pass the gate |
+| context processed | 2.6M, 93% from cache | 2.9M, 94% from cache | |
+| output tokens | 4k | 5k | |
+| cost | $4.37 | $4.39 | **+0.5%** |
+| tool results entered | 90k | 89k | −1% |
+| tool results carried | 939k | 965k | +3% |
+| trimmed by the guard | none | none | |
+| under the trim threshold | 10 of 10 shell, 3% of carried | 10 of 10 shell, 3% of carried | |
+| Read / Bash / Grep calls | 7 / 10 / 0 | 10 / 10 / 1 | |
+| answers | 12 of 12 | 12 of 12, identical | |
+
+**By the rule written before the run this is the expected null**, and the branch that fired is the first
+one: requests within three either way, cost inside 21%. It is also the closest two arms have ever come on
+this page — half a percent apart on a task where identically configured arms have been 21% apart — and the
+first round where both arms passed the batching gate. ab7's lesson worked: the explicit
+one-tool-call-per-turn line produced 0.94 and 1.00 where the old wording produced 1.1 and 4.6.
+
+**Both arms report `trimmed none`, and on the guarded arm that is correct rather than broken.** Every shell
+result on both arms was under the 6,000-character threshold — 10 of 10 — so the trim had nothing to act on,
+and the reads that were bounded are untouched by design. The guard was present and running: arm 1's report
+counted 69 ledger rows and arm 2's counted 90, and the 21 in between are this session's 21 tool calls, one
+row logged per call. **That row count, not the trim line, is what identifies which arm a report belongs
+to.** An earlier version of this page's guidance said the guarded arm must show a trim; that is only true
+when the guard has something to trim, and it is wrong as a check.
+
+**The mechanism, which is what this round actually bought.** The Read cap fired once, on the arm's first
+unbounded Read of `extension/content.js` (112 KB, over `readMaxBytes`). What happened next is the finding:
+
+- The model went to Bash and ran `cat extension/content.js` instead.
+- That passed Claude Code's own inline ceiling, so Claude Code wrote the output to
+  `~/.claude/projects/<project>/<session>/tool-results/…` and handed back a preview.
+- The model then read that persisted file back in **three bounded ranges** — 11k, 11k and 7k tokens,
+  carried 167k, 148k and 96k, **411k token-reads, 43% of everything this arm carried**.
+- The guard could not touch any of the three. Its persisted-output cap fires on an *unbounded* read of such
+  a file; a bounded read of one is untouched by design, and by design is right in general — a model asking
+  for a range is the behaviour the cap exists to produce.
+
+So the cap did not keep `content.js` out. The off arm let it in as two Read calls, 30k tokens entered and
+377k carried. The guarded arm let in 29k and carried 411k, through a persisted file, in more steps. **The
+cap changed which door the file came in through and nothing else.** That is the same sentence the launch
+post opens with about Claude Code's own persisted outputs, now measured on the guard's own behaviour rather
+than on its absence, and it is the sharpest illustration yet of the rule this page keeps arriving at: on a
+task that asks for whole files, capping a read buys a return trip, not a saving.
+
+It cost nothing here — half a percent, inside any noise band — which is the honest way to state it. It did
+not cost the 10% the `readMaxBytes` round did, and it did not save anything either.
+
+**What this adds to the record.** A fourth model-workload pair producing a null, a third model, the first
+run on a real machine rather than in a container, and the tightest agreement between arms yet measured.
+Across ab4, ab5, ab7 and ab8 — Opus 5, Fable 5.1 in the cloud and Fable 5.1 on Windows — 0.2.3 has not
+shown a saving on the read-heavy audit, and every arm of every round has given identical answers.
+

@@ -198,8 +198,12 @@ on disk, and on Windows a live session's transcript can have a stale modificatio
 runs *inside itself* can describe a different session entirely. It has happened twice: once giving a false
 alarm, once giving plausible wrong numbers that would have gone straight into the table. Find the id from
 `report --all` after closing the session — the arm is the newest row with this repository's path — and
-sanity-check the arm you think it is: **the off arm must say `tokenbrake trimmed none`**, and the
-tokenbrake arm must say it trimmed something. An off arm with a trim is the wrong session, full stop.
+sanity-check the arm you think it is. The reliable check is the **ledger row count** on the
+`tokenbrake trimmed` line: it grows by one per tool call of a session the guard ran in, so the guarded
+arm's count should exceed the off arm's by about that arm's number of tool results. An off arm that reports
+a *trim* is certainly the wrong session — an arm with no hooks cannot trim anything — but a guarded arm
+reporting `trimmed none` is not: if every shell result was under the threshold and every read was bounded,
+the guard had nothing to do, which is exactly what ab8 measured.
 
 **This last report, not the one from step 12, is the number that goes in the table.** Step 12 runs while the
 session is still going, so it prices and counts the session as it stood at that moment — it misses the
