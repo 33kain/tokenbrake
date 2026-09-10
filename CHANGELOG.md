@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **`report` now says what the guard could ever have acted on, not only what it did.** Three lines:
+  `Within the guard's reach` (shell, exit 0, over the trim threshold and under Claude Code's own inline
+  ceiling — with its share of everything carried), `Out of reach` (under the threshold; not a shell result;
+  failed, where the host ignores the replacement; past the ceiling, where the output is persisted and the
+  replacement is never applied), and `Acted on` as a share of the reachable. The buckets account for every
+  result exactly once, and a result the guard rewrote counts as reachable **by proof** rather than by size,
+  since a trimmed result measures under the threshold afterwards.
+  Reporting what was trimmed against a total that includes all four flattered the tool. On one session:
+  **2 of 450 results within reach, 8% of everything carried, and the guard acted on none of them.** That is
+  the difference between "it saved nothing here" and "it could never have saved anything here", and the
+  second is usually the true sentence.
 - **Shape filters, off by default.** `shapeFilters: true` in `~/.claude/tokenbrake.json` turns on three
   conservative passes over a shell result at least `shapeMinChars` (1,500) long, before the size test:
   ANSI escape sequences are removed; a carriage-return redraw **inside** a line keeps only its last frame;

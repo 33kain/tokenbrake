@@ -70,6 +70,12 @@ out, until the first Windows run caught it; and on Windows a live transcript's m
 so `report` run from inside a session picked a different session — twice, once producing plausible wrong
 numbers. Both are fixed and both are recorded.
 
+**The report tells you this about your own sessions.** Since 0.2.5 it prints `Within the guard's reach`,
+`Out of reach` and `Acted on`: how many of your tool results the hooks could ever touch, why the rest are
+beyond them, and what share of your carried context that is. On the session that produced the count above
+it read 2 of 450 results, 8% of everything carried, acted on none. No other tool in this space reports its
+own inapplicability, and it is the only number that answers "would this have helped me".
+
 What follows from all of that: **run `tokenbrake report` on your own last session before installing
 anything.** The "Tool results entered" and "Under the trim threshold" lines say whether you have the kind
 of session this can act on. Most sessions are not.
