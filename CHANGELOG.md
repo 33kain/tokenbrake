@@ -4,22 +4,25 @@
 
 - **Shape filters, off by default.** `shapeFilters: true` in `~/.claude/tokenbrake.json` turns on three
   conservative passes over a shell result at least `shapeMinChars` (1,500) long, before the size test:
-  ANSI escape sequences are removed; a carriage-return redraw keeps only its last frame, since `\r` exists
-  to overwrite and only the last write was ever visible; and a run of three or more consecutive lines that
-  differ only in numbers, bar glyphs or padding collapses to its last line plus a count. Running before the
-  size test is the point — a log that collapses below `maxChars` is delivered whole and never trimmed, so
-  the model gets a complete short document instead of a head, a tail and a hole.
-  Measured on a 400-line install log: **32,310 characters to 2,519, ANSI escapes 144 to 0**, the final
-  status line intact, and no trim needed at all. Against the trim alone, which kept 65 redraws and 144
-  escapes and spent nearly the whole 6,000-character budget on them.
-  A run collapses only if its lines are **redraw-like** — carrying bar glyphs or a percentage. "Differs
-  only in numbers" was the first version's rule and it was wrong: sixty rows of a settlement table
-  (`acme-041   EUR   2517.41   settled`) differ only in numbers too, and collapsing them destroyed
-  fifty-nine tenants' amounts and left a count behind. An outside adversarial benchmark caught that before
-  a single measured run was paid for, which is the argument for building one.
+  ANSI escape sequences are removed; a carriage-return redraw **inside** a line keeps only its last frame;
+  and a run of three or more consecutive lines carrying a run of **bar glyphs** collapses to its last line
+  plus a count. Running before the size test is the point — a log that collapses below `maxChars` is
+  delivered whole and never trimmed, so the model gets a complete short document instead of a head, a tail
+  and a hole. On a 400-line install log with a realistic bar: **5,936 characters to 942, ANSI 106 to 0, and
+  no trim at all**, against 5,936 trimmed to a gap with the filters off.
+- **Two rules had to be narrowed the same day, both after they destroyed data in a probe.** A run was first
+  collapsed when its lines "differ only in numbers or bar glyphs": sixty rows of a settlement table differ
+  only in numbers too, and collapsing them left one row and a count. Adding "or a percentage" as the
+  signal was no better — eighty rows of `tenant acme-079 risk score 53% approved` went the same way.
+  **A run of bar glyphs is now the only signal.** The cost is that a bar-less `Downloading… 45%` is no
+  longer collapsed, which is the right side to err on: a filter that misses noise is a nuisance, one that
+  eats rows is a bug.
+- **And `\r` at the end of a line is a CRLF line ending, not a redraw.** Reading it as one turned a
+  120-row CRLF CSV into 121 characters of empty lines — every field gone, the worst thing this filter has
+  done. A line is a redraw only if a `\r` sits inside it; a plain line, CRLF or LF, now passes byte for
+  byte.
   It deliberately does **not** collapse passing-test lines: their names answer real questions ("how many
-  checks passed, and what was the last one"), and a count is not always enough. That is a separate flag if
-  it is ever wanted.
+  checks passed, and what was the last one"), and a count is not always enough. Separate flag if wanted.
   Default stays `false` until an A/B moves it, as every default here has.
 
 ## 0.2.4 — 2026-09-10

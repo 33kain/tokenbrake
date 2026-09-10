@@ -571,7 +571,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
    all. Default off; a default only moves after an A/B, as every other default here has. */
 {
   console.log('\n-- shape filters (off by default)');
-  const bar = (pct, i) => `\x1b[32m[${'='.repeat(Math.floor(pct / 8)).padEnd(12)}] ${pct}% - loading package number ${i} from the registry cache\x1b[0m`;
+  /* A real progress bar carries glyphs from early on; a degenerate one that starts empty is not the case
+     the filter is for, and using it here hid how much the safety rules cost. */
+  const bar = (pct, i) => `\x1b[32m[${'='.repeat(Math.max(3, Math.floor(pct * 0.4))).padEnd(40)}] ${pct}% - loading package number ${i} from the registry cache\x1b[0m`;
   const log400 = ['Installing dependencies...', ...Array.from({ length: 400 }, (_, i) => bar((i % 100) + 1, i)), 'Added 142 packages in 3s.'].join('\n');
   const run = (text, cfgExtra, command = 'npm install') => {
     const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shape-'));
@@ -609,9 +611,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     'END OF TABLE'].join('\n');
   t('a data table whose rows differ only in numbers is NOT collapsed — no bar, no percentage',
     run(table, { shapeFilters: true }) === '', run(table, { shapeFilters: true }).slice(0, 160));
-  const withPct = ['start', ...Array.from({ length: 300 }, (_, i) => `syncing shard ${i} — ${i % 100}% complete`), 'done'].join('\n');
-  t('the same shape WITH a percentage is a redraw and does collapse',
-    /identical-shaped lines collapsed/.test(run(withPct, { shapeFilters: true })));
+  /* A percentage was allowed as a redraw signal for one afternoon and had to come out: eighty rows of
+     `tenant acme-079 risk score 53% approved` collapsed to one and a count — the settlement table again,
+     through the other half of the rule. Percentages are in data more often than in progress bars. The
+     cost is that a bar-less `Downloading… 45%` is no longer collapsed; that is the right side to err on. */
+  const risk = ['Risk review', ...Array.from({ length: 80 }, (_, i) => `tenant acme-${String(i).padStart(3, '0')} risk score ${(i * 7) % 100}% approved`), 'END'].join('\n');
+  t('a percentage alone is NOT a redraw signal — risk scores are percentages too',
+    run(risk, { shapeFilters: true }) === '', run(risk, { shapeFilters: true }).slice(0, 160));
+
+  /* `\r` at the end of a line is a CRLF line ending, not a redraw. Reading it as one turned a 120-row CRLF
+     CSV into 121 characters of empty lines: every field gone, the worst thing this filter has done. */
+  const csv = 'date,tenant,ccy,amount,status\r\n' + Array.from({ length: 120 }, (_, i) => `2026-09-10,acme-${String(i).padStart(3, '0')},EUR,${1000 + i * 7}.${String(i % 100).padStart(2, '0')},settled`).join('\r\n') + '\r\n';
+  t('a CRLF document passes through untouched — the trailing \\r is a line ending, not a redraw',
+    run(csv, { shapeFilters: true }) === '', run(csv, { shapeFilters: true }).slice(0, 160));
   const varied = ['alpha begins here', 'beta continues elsewhere', 'gamma finishes the job'].join('\n').padEnd(2000, '\nunique tail line here');
   const onVaried = run(varied, { shapeFilters: true });
   t('genuinely different consecutive lines are left alone', onVaried === '' || onVaried.includes('alpha begins here'));

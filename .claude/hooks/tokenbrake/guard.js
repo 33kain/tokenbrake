@@ -83,7 +83,8 @@ function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) 
      1. ANSI escapes go. They colour a terminal nobody is looking at.
      2. A carriage-return redraw keeps its last frame. `\r` exists to overwrite, so only the last write was
         ever visible.
-     3. A run of three or more consecutive REDRAW-LIKE lines collapses to its LAST line plus a count. The
+     3. A run of three or more consecutive lines carrying a run of BAR GLYPHS collapses to its LAST line
+        plus a count. The
         last one is the informative frame — 100%, the final total — and the count keeps the fact that
         there were many.
 
@@ -91,7 +92,8 @@ function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) 
    version's bug: sixty rows of a settlement table — `acme-041   EUR   2517.41   settled` — differ only in
    numbers too, and collapsing them destroys fifty-nine tenants' amounts and leaves a count. Found by an
    outside benchmark before a single run was paid for. A line qualifies only if it carries a run of bar
-   glyphs or a percentage, which a progress redraw has and a data row does not.
+   glyphs. A percentage was allowed for one afternoon and had to be removed for the same reason: risk
+   scores are percentages too.
 
    What it deliberately does not do: collapse passing-test lines. Their names are answers to real questions
    ("how many checks passed, and what was the last one") and a count is not always enough. That is a
@@ -106,11 +108,25 @@ function shapeKey(line) {
     .replace(/[ \t]+/g, ' ')                      // a bar pads itself with spaces as it fills
     .trim();
 }
-/* A progress redraw carries a bar or a percentage. A row of data carries neither, however many numbers
-   it has, and must survive whole. */
-const REDRAW = /[=\-#>*·▏▎▍▌▋▊▉█░▒▓]{3,}|\d\s*%/;
+/* A progress redraw carries a run of bar glyphs. Nothing else is enough.
+
+   A percentage was in this list for one afternoon and had to come out: eighty rows of
+   `tenant acme-079 risk score 53% approved` collapsed to one row and a count, the same destruction the
+   settlement table showed, reached through the other half of the test. Percentages appear in data far more
+   often than they appear in progress bars, and "the numbers differ" is never a licence to delete a line.
+   The cost of dropping it is that `Downloading… 45%` with no bar is no longer collapsed. That is the right
+   side to err on: a filter that misses noise is a nuisance, one that eats rows is a bug. */
+const REDRAW = /[=\-#>*·▏▎▍▌▋▊▉█░▒▓]{3,}/;
 function shapeFilter(text) {
-  const src = text.replace(ANSI, '').split('\n').map(l => (l.indexOf('\r') >= 0 ? l.slice(l.lastIndexOf('\r') + 1) : l));
+  /* `\r` at the END of a line is a CRLF line ending, not a redraw. Treating it as one turned a 120-row
+     CRLF CSV into 121 characters of empty lines — every field gone — because "keep what follows the last
+     \r" follows nothing. A line is only a redraw if a `\r` sits INSIDE it; a plain line, CRLF or LF, comes
+     through byte for byte. */
+  const src = text.replace(ANSI, '').split('\n').map(l => {
+    const body = l.endsWith('\r') ? l.slice(0, -1) : l;
+    if (body.indexOf('\r') < 0) return l;
+    return body.slice(body.lastIndexOf('\r') + 1);
+  });
   const out = [];
   for (let i = 0; i < src.length;) {
     const key = shapeKey(src[i]);
