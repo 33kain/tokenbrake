@@ -563,6 +563,58 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('with no cap rows the line says none rather than going missing', /Read caps fired: none/.test(T.renderReport(parsed, [capLedger[3]])), T.renderReport(parsed, [capLedger[3]]).split('\n').find(l => /Read caps/.test(l)));
 }
 
+/* ---- reach: what the guard could ever have acted on ------------------------
+   Every other line in the report says what the guard did. None said what it could have done, and the
+   difference is the whole honesty of the thing: on one ledger, 285 tool results and the trim applied to
+   none — a session where "it saved nothing" and "it could never have saved anything" are different
+   sentences and the second is true. Four ways to be out of reach, and a result the guard actually rewrote
+   is in the window by proof rather than by size, since a trimmed result measures under the threshold. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const dir = join(CFG, 'projects', '-w-reach'); mkdirSync(dir, { recursive: true });
+  const L = []; let n = 0;
+  const call = (id, tool, input, text, isError) => {
+    n++;
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'q' + n, uuid: 'q' + n, sessionId: 'reach', cwd: '/w',
+      message: { model: 'claude-opus-5', usage: { input_tokens: 1, cache_read_input_tokens: 100, cache_creation_input_tokens: 1, output_tokens: 1 }, content: [{ type: 'tool_use', id, name: tool, input }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: 'reach',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text, is_error: !!isError }] } }));
+  };
+  call('r1', 'Bash', { command: 'npm test' }, '[tokenbrake] x'.padEnd(3000, '.'));   // rewritten: in the window by proof
+  call('r2', 'Bash', { command: 'git log --stat -40' }, 'y'.repeat(9000));           // over the threshold, exit 0: the window
+  call('r3', 'Bash', { command: 'git status' }, 'z'.repeat(500));                    // under the threshold
+  call('r4', 'Read', { file_path: '/w/a.js' }, 'w'.repeat(9000));                    // not a shell result
+  call('r5', 'Bash', { command: 'node broken.js' }, 'e'.repeat(9000), true);         // failed: the host ignores the replacement
+  call('r6', 'Bash', { command: 'node dump.js' }, 'p'.repeat(40000));                // past the host's ceiling
+  const f = join(dir, 'reach.jsonl');
+  writeFileSync(f, L.join('\n') + '\n');
+  const parsed = T.carry(T.parseTranscript(f));
+  const byId = (id) => parsed.results.find(r => r.id === id);
+  const rc = T.reach(parsed, [byId('r1')]);
+
+  console.log('\n-- reach: the denominator');
+  t('a result the guard rewrote is in the window by proof, not by its delivered size',
+    rc.window.n === 2, JSON.stringify({ window: rc.window.n }));
+  t('a non-shell result is out of reach whatever its size', rc.nonShell.n === 1, JSON.stringify(rc.nonShell));
+  t('a failing shell result is out of reach — the host ignores the replacement', rc.failed.n === 1, JSON.stringify(rc.failed));
+  t('a result past the host ceiling is out of reach — persisted, never applied', rc.persisted.n === 1, JSON.stringify(rc.persisted));
+  t('a shell result under the threshold is out of reach by design', rc.under.n === 1, JSON.stringify(rc.under));
+  t('the buckets account for every result exactly once',
+    rc.window.n + rc.under.n + rc.failed.n + rc.persisted.n + rc.nonShell.n === rc.total.n && rc.total.n === 6,
+    JSON.stringify({ total: rc.total.n }));
+
+  const text = T.renderReport(parsed, []);
+  t('the report prints the reach line with a share of carried', /Within the guard's reach: \d+ of 6 tool results/.test(text),
+    text.split('\n').find(l => /Within the guard/.test(l)));
+  t('and an out-of-reach line naming each way', /Out of reach: .*under the threshold.*not shell results.*failed.*ceiling/.test(text),
+    text.split('\n').find(l => /Out of reach/.test(l)));
+  /* Acted-on can never exceed what was reachable; the first version printed 450% because it counted every
+     result whose text merely mentioned the marker against a window computed from delivered sizes. */
+  const acted = (text.match(/Acted on: (\d+) of those — (\d+)%/) || []);
+  t('acted-on never exceeds what was reachable', !acted[2] || Number(acted[2]) <= 100, acted[0] || 'no acted line');
+}
+
 /* ---- shape filters, off by default ---------------------------------------
    The trim only acts above maxChars and spends that budget on whatever is there, which on an install log
    is progress redraws: measured, 400 such lines kept 65 of them and 144 ANSI escapes and left the final

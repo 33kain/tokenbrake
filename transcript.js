@@ -213,6 +213,43 @@ function smallResults(parsed) {
   return out;
 }
 
+/* What the guard could ever have acted on, which is the denominator every other line here needs.
+
+   The trim reaches a tool result only if all three hold: it is a shell result, it exited zero, and it is
+   over TRIM_CHARS but under Claude Code's own inline ceiling. Outside that window the guard is a spectator:
+   a Read or an MCP result is not its business; a failing command fires PostToolUseFailure, where Claude
+   Code ignores the replacement; a result past the ceiling is persisted by the host and the model is handed
+   a preview, so the replacement is never applied; and a result under the threshold is left alone by design.
+
+   Reporting only what was trimmed, against a session total that includes all four, flatters the tool. On
+   one ledger, 285 tool results and the trim applied to none of them — a fact no line in this report said.
+   These buckets are what make "it saved nothing here" and "it could never have saved anything here"
+   different sentences, and the second is usually the true one.
+
+   HOST_CEILING is approximate and the class is confirmed rather than guessed where possible: a result the
+   host persisted names its tool-results path, which is a fact in the transcript, not an estimate. */
+const HOST_CEILING = 30000;
+function reach(parsed, wasTrimmed) {
+  const B = () => ({ n: 0, tokens: 0, carried: 0 });
+  const out = { window: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
+  const add = (b, r) => { b.n++; b.tokens += r.tokens; b.carried += r.carried || 0; };
+  const trimmed = new Set(wasTrimmed || []);
+  for (const r of parsed.results) {
+    add(out.total, r);
+    /* A result the guard rewrote is in the window by proof, whatever its delivered size says. Sizes here
+       are what the model received, so a trimmed result now measures under the threshold — classifying by
+       size alone would put every success in the "untouched" bucket and leave the window empty. */
+    if (trimmed.has(r)) { add(out.window, r); continue; }
+    const shell = r.name === 'Bash' || r.name === 'PowerShell';
+    if (!shell) { add(out.nonShell, r); continue; }
+    if (r.isError) { add(out.failed, r); continue; }
+    if (r.chars >= HOST_CEILING) { add(out.persisted, r); continue; }
+    if (r.chars <= TRIM_CHARS) { add(out.under, r); continue; }
+    add(out.window, r);
+  }
+  return out;
+}
+
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
    cache reads + cache writes), so summing those is the total the session has actually processed, and the
    LAST request's figure is roughly what the context holds right now. cacheRead over the total is how much
@@ -351,6 +388,21 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   if (small.shell) {
     lines.push(`  Under the trim threshold: ${small.n} of ${small.shell} shell results (≈ ${kfmt(small.tokens)} tokens entered, ≈ ${kfmt(small.carried)} token-reads carried, ${carried ? Math.round(100 * small.carried / carried) : 0}% of all carried)`);
   }
+  /* The denominator. Everything above says what the guard did; this says what it could ever have done,
+     which on most sessions is the more useful number and is usually smaller than anyone expects. */
+  const rc = reach(parsed, trimmed);
+  const pct = (x) => (carried ? Math.round(100 * x / carried) : 0);
+  if (rc.total.n) {
+    lines.push(`  Within the guard's reach: ${rc.window.n} of ${rc.total.n} tool results (≈ ${kfmt(rc.window.tokens)} tokens entered, ≈ ${kfmt(rc.window.carried)} carried, ${pct(rc.window.carried)}% of all carried) — shell, exit 0, over ${kfmt(TRIM_CHARS / CHARS_PER_TOKEN)} tokens and under Claude Code's own ceiling`);
+    const oor = [];
+    if (rc.under.n) oor.push(`${rc.under.n} under the threshold`);
+    if (rc.nonShell.n) oor.push(`${rc.nonShell.n} not shell results`);
+    if (rc.failed.n) oor.push(`${rc.failed.n} failed (the host ignores the replacement)`);
+    if (rc.persisted.n) oor.push(`${rc.persisted.n} past the host's ceiling (persisted, replacement never applied)`);
+    if (oor.length) lines.push(`  Out of reach: ${oor.join('; ')} — ≈ ${kfmt(rc.total.carried - rc.window.carried)} carried, ${pct(rc.total.carried - rc.window.carried)}% of all carried`);
+    lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` — ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
+  }
+
   const rep = repeatReads(parsed);
   if (rep.sameShape) {
     lines.push(rep.repeats
@@ -454,4 +506,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, readKey, readCaps, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
