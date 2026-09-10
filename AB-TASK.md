@@ -1922,17 +1922,21 @@ commit beside the guard commit; without both, a number is not reproducible.
 - **Primary expectation: null.** The OFF arm's transcript says the trim has almost nothing to bite on —
   6 of 8 shell results are under the 6,000-char threshold, the host had already persisted 3 previews, and
   the results under the threshold account for 5% of carried tokens. Two candidate results is not a lever.
-- **Secondary hypothesis, named in advance.** The model is `claude-fable-5-1[1m]` and **3 of its 7
-  requests crossed 200k input tokens**. On a >200k-context model those requests are billed at
-  long-context rates for the *whole* request. That is a step, not a slope: a guard that pulls a request
-  back under the threshold saves far more than its token count implies, and one that does not saves
-  nothing despite removing the same tokens. On this model the step is plausibly the only mechanism by
-  which the hook can move the bill at all.
-- **Decision rule.** Cost is read only after `prices.json` carries the published long-context rates, on
-  both arms from the same table; until then every figure is a declared lower bound and the aggregate says
-  `COST NOT PRICED` instead of a verdict. `requests_over_threshold` is reported as its own column, per
-  pair. **Moving from 3 to 2 does not confirm the hypothesis if the total stays inside the OFF/OFF band.
-  The band still decides.**
+- **A secondary hypothesis, raised and then withdrawn before the run.** 3 of the OFF arm's 7 requests
+  crossed 200k input tokens, and I argued that a long-context surcharge — a step rather than a slope —
+  was plausibly the only mechanism by which the hook could move the bill on this model. I had not checked.
+  The pricing page, *Long context pricing*, read 2026-09-10: Claude 4.6 and later bill the full 1M window
+  at standard rates, "a 900k-token request is billed at the same per-token rate as a 9k-token request".
+  **There is no step.** The hypothesis is dead before it cost a session, and the null expectation now
+  stands alone with one fewer route to a saving.
+- **Decision rule.** The OFF/OFF band decides, as always. `requests_over_threshold` is reported per run
+  as context, never as a price. `prices.json` now records, per model and with a verification date,
+  whether the long window bills at standard rates, at a published surcharge, or is unrecorded — and an
+  unrecorded model makes the run a declared lower bound rather than being assumed cheap.
+
+  Base rates were re-checked against the same page: Fable 5.1 $10 in / $50 out / $0.25 cache read (the
+  0.025x multiplier, not 0.1x) / $20 for a 1h cache write. `$5.7349` is the cost of the OFF arm, not a
+  lower bound. At that rate the pre-registered 16 sessions are roughly **$90**, not the $30 I estimated.
 
 ### B-pair1-off — the OFF arm
 
@@ -1952,8 +1956,11 @@ Three defects, all found by running it once, all recorded in the bench's `result
    having nothing to do with the guard. Now the candidate with the most schema keys wins, and an answer
    carrying none is **refused** (exit 65, `capture_invalid`) rather than scored zero.
    I first blamed the operator's hand-copied capture. That was wrong, and the hand copy scores 38 / 38 too.
-2. **Cost omitted the long-context surcharge** — see the hypothesis above; the lever was in the part that
-   was not being measured.
+2. **Long-context billing was asserted, not checked.** `measure.mjs` printed "list price WITHOUT
+   long-context surcharge", wording that claims a surcharge exists, against a page that says the opposite.
+   Now `prices.json` carries the answer per model with a date and a source, and the three-state
+   distinction that matters: priced, surcharged, or *unrecorded and therefore a declared lower bound*.
+   An unknown is never quietly treated as standard — the same error as this one, made cheaply.
 3. **The validity gate would have voided every run.** It failed any run with `tool results ÷ requests`
    over 2.5; this one measured 5.71. The cap came from ab7/ab8, whose prompt was twelve numbered steps and
    forced one call per turn. This benchmark deliberately lets the agent batch — batching is recorded as an
