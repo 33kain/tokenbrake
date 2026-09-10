@@ -452,24 +452,42 @@ Nothing to build before then. The task is collection and one table, then publish
    trimmed N of them: ≈ N tokens kept out, ≈ N token-reads not carried" (files from before 0.2.2's report may
    over-credit, see the Windows section of `AB-TASK.md`; note which version wrote each); "Under the trim threshold"
    and "Repeat reads" where present (reports from 0.2.2+ only); "At list price" where present.
-3. The table: one row per session, then median / min / max per column, plus kept-out as a share of entered and
-   not-carried as a share of carried. Put it in `AB-TASK.md` under a new heading "Real sessions, one week", and the
+3. **Before building the table, four things the inventory of 2026-09-10 found. It was run early and it is
+   why this step changes shape.** Eight files exist across all `claude/…` branches; they are not eight
+   sessions.
+   - **`ced42a1a` appears three times** — 09-06 at 421 requests, 09-07 at 505, 09-09 at 617. One session,
+     reported three times as it grew. Count it **once, at its latest snapshot**. Tabling all three would
+     triple-count the largest session on record, which is exactly the error this page exists to avoid.
+   - **`acb853e1` is an A/B arm** (ab7's tokenbrake arm, on Windows), not an ordinary session. Exclude it,
+     and exclude any future file whose session is an arm.
+   - **Two files are not contexa sessions**: `c5ad7352` ran in `/home/user/tokenbrake` and `ca84ebdd` in
+     `/home/user`. The claim is "one repository", so either exclude them or drop that word.
+   - What is left is **three ordinary contexa sessions — 617, 150 and 5 requests** — and one of those is
+     trivial. **A median of three, one of them n=5, is not a distribution.** Say the number of sessions in
+     the table's first line and never print a median that rests on fewer than, say, eight.
+   - **Files written before 0.2.4 have no "Read caps fired" line**, since the report gained it on 09-10.
+     For those sessions the split between the `readMaxBytes` cap and the persisted-output cap is simply
+     unknown, and the table's note must say so rather than showing a blank as a zero. That gap is the whole
+     reason the line was added, so the decision it feeds — whether `readMaxBytes` earns its default —
+     waits for sessions recorded from 0.2.4 on.
+4. The table: one row per session, then median / min / max per column **only if there are enough rows to
+   mean anything**, plus kept-out as a share of entered and not-carried as a share of carried. Put it in `AB-TASK.md` under a new heading "Real sessions, one week", and the
    median row into README's "Measured" paragraph as the third number after the audit and debugging figures.
-4. The post: the draft is in this repository's owner's scratch (sent to them as `tokenbrake-post.md` on 09-09), with a
+5. The post: the draft is in this repository's owner's scratch (sent to them as `tokenbrake-post.md` on 09-09), with a
    `[TABLE: …]` slot; fill it from step 3, commit the post as `POST.md`, and publish in this order: Show HN, then
    r/ClaudeCode, then X. Lead with the bill and the nulls; cite the JetBrains benchmark; do not claim more than the
    table shows.
-5. Only if the table says small results dominate (the "Under the trim threshold" share is high across sessions):
+6. Only if the table says small results dominate (the "Under the trim threshold" share is high across sessions):
    shape filters for small output become the next build, A/B'd with the protocol before default-on. Only if
    "Repeat reads" is common: repeat-read suppression, compaction-aware. Otherwise neither.
 
-6. Two report fixes that Saturday's table wants and that are display-only, no guard change and so no A/B:
+7. Two report fixes that Saturday's table wants and that are display-only, no guard change and so no A/B:
    the `what` column truncates a persisted path before the `tool-results/<id>.txt` that identifies it
    (elide the middle, not the tail), and every report prices the session as it stood when it ran, which
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-7. **ab8, the audit A/B by hand, is set up and waiting.** `AB8-RUNBOOK.md` is the self-contained Windows
+8. **ab8, the audit A/B by hand, is set up and waiting.** `AB8-RUNBOOK.md` is the self-contained Windows
    runbook: two arms, off against tokenbrake 0.2.3, on `claude/ab8-off` and `claude/ab8-tb` of
    `33kain/contexa`, cut from `338053f` and differing in `.claude/settings.json` alone, so nothing is
    installed or uninstalled at all. `AB-TASK.md` carries its pre-registration, including the validity gate
