@@ -563,6 +563,114 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('with no cap rows the line says none rather than going missing', /Read caps fired: none/.test(T.renderReport(parsed, [capLedger[3]])), T.renderReport(parsed, [capLedger[3]]).split('\n').find(l => /Read caps/.test(l)));
 }
 
+/* ---- shape filters, off by default ---------------------------------------
+   The trim only acts above maxChars and spends that budget on whatever is there, which on an install log
+   is progress redraws: measured, 400 such lines kept 65 of them and 144 ANSI escapes and left the final
+   status alive only because it sat in the tail (AB-TASK.md, "An outside test plan"). These filters run
+   before the size test, so a log that collapses below maxChars is delivered clean and never trimmed at
+   all. Default off; a default only moves after an A/B, as every other default here has. */
+{
+  console.log('\n-- shape filters (off by default)');
+  const bar = (pct, i) => `\x1b[32m[${'='.repeat(Math.floor(pct / 8)).padEnd(12)}] ${pct}% - loading package number ${i} from the registry cache\x1b[0m`;
+  const log400 = ['Installing dependencies...', ...Array.from({ length: 400 }, (_, i) => bar((i % 100) + 1, i)), 'Added 142 packages in 3s.'].join('\n');
+  const run = (text, cfgExtra, command = 'npm install') => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shape-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], {
+      input: JSON.stringify({ session_id: 'shape', tool_use_id: 'toolu_shape_' + Math.random().toString(36).slice(2, 8),
+        tool_name: 'Bash', tool_input: { command }, tool_response: bashResp(text) }), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    rmSync(dir, { recursive: true, force: true });
+    const o = parse(r.stdout);
+    return o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+  };
+
+  const off = run(log400, null);
+  t('off by default: the log is trimmed the old way, redraws and all',
+    off.includes('\x1b[') && /omitted here/.test(off), `ansi=${(off.match(/\x1b\[/g) || []).length}`);
+
+  const on = run(log400, { shapeFilters: true });
+  t('on: ANSI escapes are gone', !on.includes('\x1b['), `ansi=${(on.match(/\x1b\[/g) || []).length}`);
+  t('on: repeated redraws collapse with a count', /drawn \d+ times; \d+ identical-shaped lines collapsed/.test(on),
+    (on.split('\n').find(l => /collapsed/.test(l)) || on.slice(0, 120)));
+  t('on: the final status line survives', on.includes('Added 142 packages in 3s.'));
+  /* The point of running before the size test: this log no longer needs trimming at all, so the model
+     gets a whole document instead of a head, a tail and a hole. */
+  t('on: it collapses below maxChars and is delivered without any trim', !/omitted here/.test(on), String(on.length));
+  t('on: and is much smaller than what the trim alone delivered', on.length < off.length * 0.6, `${on.length} vs ${off.length}`);
+
+  /* Conservatism, both directions. */
+  const distinct = ['start', ...Array.from({ length: 300 }, (_, i) => `processed record ${i} for tenant acme-${i} in region eu-west-${i}`), 'done'].join('\n');
+  const onDistinct = run(distinct, { shapeFilters: true });
+  t('distinct lines that differ only by number ARE collapsed — that is the whole mechanism',
+    /identical-shaped lines collapsed/.test(onDistinct));
+  const varied = ['alpha begins here', 'beta continues elsewhere', 'gamma finishes the job'].join('\n').padEnd(2000, '\nunique tail line here');
+  const onVaried = run(varied, { shapeFilters: true });
+  t('genuinely different consecutive lines are left alone', onVaried === '' || onVaried.includes('alpha begins here'));
+
+  const small = 'short output, nothing to do here';
+  t('under shapeMinChars nothing is emitted at all', run(small, { shapeFilters: true }) === '');
+
+  /* A carriage-return redraw is one line overwritten many times; only the last write was ever visible. */
+  const cr = 'downloading\n' + 'x'.repeat(1600) + '\n' + ['  5%', ' 25%', ' 75%', '100% done'].map(p => `progress: ${p}`).join('\r') + '\nfinished';
+  const onCr = run(cr, { shapeFilters: true });
+  t('a carriage-return redraw keeps its last frame only',
+    onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
+}
+
+/* ---- what the trim keeps and what it breaks -------------------------------
+   From a review of an outside test plan (AB-TASK.md, "An outside test plan").
+   Two of its four claims about this guard were checkable and they came out
+   opposite ways: the error survives, the structure does not. Both are pinned
+   here so a future change to the budget cannot quietly move either. */
+{
+  console.log('\n-- error integrity, and structure integrity');
+  const post = (command, text) => guard('post', { session_id: 'ig', tool_use_id: 'toolu_ig_' + Math.random().toString(36).slice(2, 8),
+    tool_name: 'Bash', tool_input: { command }, tool_response: bashResp(text) });
+  const trimmedText = (r) => {
+    if (r.status !== 0 || !r.stdout) return '';
+    const o = JSON.parse(r.stdout).hookSpecificOutput;
+    return (o && o.updatedToolOutput && o.updatedToolOutput.stdout) || '';
+  };
+  const noise = Array.from({ length: 200 }, (_, i) => `  ok   check number ${i} passed in this suite of many checks`).join('\n');
+  const crash = [noise, '',
+    "Error: Cannot find module 'express'",
+    '    at Function.Module._resolveFilename (node:internal/modules/cjs/loader:1145:15)',
+    '    at Function.Module._load (node:internal/modules/cjs/loader:986:27)',
+    '    at Module.require (node:internal/modules/cjs/loader:1233:19)',
+    noise].join('\n');
+  let r = post('node server.js', crash);
+  let out = trimmedText(r);
+  t('a stack trace buried in 400 lines of passing noise survives the trim',
+    out.includes("Error: Cannot find module 'express'"), out.slice(0, 200));
+  /* The kept frames come back line-numbered, as `L203:     at Function…`, because the trim reports
+     where in the omitted region each flagged line was. A test written against a bare `    at ` would
+     pass on a guard that dropped the numbering, so match the shape that actually ships. */
+  t('and keeps its frames, which is what makes it actionable',
+    (out.match(/L\d+: {5}at /g) || []).length >= 3, String((out.match(/L\d+: {5}at /g) || []).length));
+
+  /* Head, tail and flagged lines with a gap between them is the right shape for a log and the
+     wrong shape for a structured document: the fences survive because they sit at the ends, and
+     what they enclose no longer parses. The guard does not claim to preserve structure and this
+     test says so out loud rather than leaving it to be discovered in a session. */
+  const big = { name: 'contexa', items: Array.from({ length: 120 }, (_, i) => ({ id: i, label: `item number ${i} with a reasonably long label to pad it` })) };
+  const doc = 'Here is the config:\n```json\n' + JSON.stringify(big, null, 2) + '\n```\nDone.';
+  r = post('node dump-config.js', doc);
+  out = trimmedText(r);
+  t('a fenced block over the threshold keeps both fences (they are head and tail)',
+    (out.match(/```/g) || []).length === 2, String((out.match(/```/g) || []).length));
+  const inner = out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1);
+  let parses = true; try { JSON.parse(inner); } catch { parses = false; }
+  t('but the JSON it encloses no longer parses — a known limit, not a regression', parses === false);
+
+  /* The gap in the middle is marked, so a reader can tell a truncated document from a complete
+     one. Without this the model has no way to know it is looking at a hole. */
+  t('the omitted middle is marked rather than silently joined',
+    /\[tokenbrake\] \d[\d,]* lines omitted here/.test(out),
+    (out.split('\n').find(l => /omitted here/.test(l)) || out.slice(0, 120)));
+}
+
 /* ---- context after flagged lines ------------------------------------------
    A FAIL line alone names the test. The lines after it carry the assertion and the first frame, and a
    model that gets only the name comes back for the rest with a whole extra request. */

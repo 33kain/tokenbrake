@@ -226,6 +226,13 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
 
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
 
+`shapeFilters` (default `false`) turns on a pre-pass over shell results at least `shapeMinChars` (1,500)
+long: ANSI escapes removed, carriage-return redraws reduced to their last frame, and runs of three or more
+consecutive lines differing only in numbers or bar glyphs collapsed to the last one plus a count. It runs
+*before* the size test, so a log that collapses below `maxChars` is delivered whole and never trimmed. On a
+400-line install log that is 32,310 characters to 2,519. It is off because no A/B has moved it yet; see
+`AB-TASK.md`.
+
 ## Uninstall
 
 ```

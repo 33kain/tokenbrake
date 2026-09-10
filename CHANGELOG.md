@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- **Shape filters, off by default.** `shapeFilters: true` in `~/.claude/tokenbrake.json` turns on three
+  conservative passes over a shell result at least `shapeMinChars` (1,500) long, before the size test:
+  ANSI escape sequences are removed; a carriage-return redraw keeps only its last frame, since `\r` exists
+  to overwrite and only the last write was ever visible; and a run of three or more consecutive lines that
+  differ only in numbers, bar glyphs or padding collapses to its last line plus a count. Running before the
+  size test is the point — a log that collapses below `maxChars` is delivered whole and never trimmed, so
+  the model gets a complete short document instead of a head, a tail and a hole.
+  Measured on a 400-line install log: **32,310 characters to 2,519, ANSI escapes 144 to 0**, the final
+  status line intact, and no trim needed at all. Against the trim alone, which kept 65 redraws and 144
+  escapes and spent nearly the whole 6,000-character budget on them.
+  It deliberately does **not** collapse passing-test lines: their names answer real questions ("how many
+  checks passed, and what was the last one"), and a count is not always enough. That is a separate flag if
+  it is ever wanted.
+  Default stays `false` until an A/B moves it, as every default here has.
+
 ## 0.2.4 — 2026-09-10
 
 - **`report` says whether the Read cap fired, and which half of it.** A capped Read is an ordinary short
