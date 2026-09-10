@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **`report` says whether the Read cap fired, and which half of it.** A capped Read is an ordinary short
+  result carrying no marker, so the trim line could never see it and nothing in the report said the cap had
+  acted at all. The new line counts the ledger's `read-cap` rows for the session, split into the two
+  features that share the hook: `readMaxBytes`, an unbounded Read of a large source file, and
+  `persistedLimitLines`, a read of an output Claude Code had already written to disk. They are separable by
+  config and their evidence is not the same — on one real 421-request session reads of persisted outputs
+  carried a quarter of everything carried, while the source-file cap has not been observed to fire outside
+  a test, and the A/B where it did fire showed the file entering through `cat` and a persisted file instead
+  (`AB-TASK.md`, ab8). Counting them apart is what lets a week of ordinary sessions decide whether either
+  default is worth keeping.
 - `status` no longer calls a single install a double one. The double-install warning fired whenever the
   *other* scope carried the guard, whether or not this scope did, so the ordinary case — a project install,
   `status` run without `--project` — printed "the guard runs twice per call here; uninstall one scope". It
