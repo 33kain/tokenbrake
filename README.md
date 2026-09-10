@@ -26,6 +26,54 @@ model would otherwise have let in, and on the runs so far that is 0 to 37% at be
 with no result on either model that survives being run twice; the report's "Tool results entered" line says which end
 a session was on. The protocol and every number, the losses included, are in [`AB-TASK.md`](AB-TASK.md).
 
+## Limits, with the numbers
+
+Read this before installing. It is the part most tools in this space leave to their critics.
+
+**The trim's window is narrow on three sides at once.** A shell result is rewritten only if it is over
+6,000 characters (below that it is left alone), under Claude Code's own ~30,000-character ceiling (above
+that Claude Code persists the output to a file and hands the model a preview, and the hook's replacement is
+never applied), and exited zero (a non-zero exit fires `PostToolUseFailure`, where Claude Code ignores the
+replacement — see `AB-TASK.md`, "The failing command"). So the biggest outputs and every failing one are
+out of reach, and what remains is medium-sized successful output.
+
+**Measured on one machine's ledger: 285 tool results, and the trim applied to none of them.** 282 were
+under the threshold. The three over it were two single-file excerpts — which 0.2.3 deliberately leaves
+alone, because trimming them taught the model to read in eighty-line chunks and doubled the bill on one
+task — and one MCP result, which is not a shell result. The Read cap fired zero times in the same 285. That
+sample is biased toward well-behaved output: the repository it came from tells its agents to read with
+bounded `sed` ranges, which is exactly the case where there is nothing to save. It is still 285 real calls
+in which the hook did nothing.
+
+**Results under the threshold are most of the cost.** In one working session they were 57% of all context
+carried; in an audit session, 79%. Compressing them is what the rest of this category does, and it is where
+the JetBrains benchmark found rtk losing money, so tokenbrake does not — but the share it declines to touch
+is the majority of the bill.
+
+**Generic trimming can keep the wrong three things.** Head, tail and error-looking lines are a guess about
+what matters. The one measured instance of that guess being wrong is in this repository's own history: on
+source-file excerpts those are the wrong three things, which is why 0.2.3 stopped trimming them. No round
+has produced a wrong *answer* — every arm of every A/B has agreed, 12 of 12 — but the mechanism is real.
+
+**No repeatable saving has been demonstrated on the bill, by any version, on any workload.** On the
+read-heavy audit the shipping guard's three paired runs came out at 1.30, 0.85 and 1.00 times the no-hook
+cost. Two debugging rounds and a feature round were flat. The best figure ever recorded, −37%, is one run
+of eight on that shape and is not reproducible; the worst, +100%, came from a guard behaviour since
+removed.
+
+**Real-session evidence for the current version is zero sessions.** Every `ab-results/real/` file on record
+predates 0.2.3, and the only one showing substantial savings got them from the excerpt trimming that 0.2.3
+removed.
+
+**The measuring tool itself has been wrong twice.** It credited tokenbrake with tokens Claude Code had kept
+out, until the first Windows run caught it; and on Windows a live transcript's modification time can lag,
+so `report` run from inside a session picked a different session — twice, once producing plausible wrong
+numbers. Both are fixed and both are recorded.
+
+What follows from all of that: **run `tokenbrake report` on your own last session before installing
+anything.** The "Tool results entered" and "Under the trim threshold" lines say whether you have the kind
+of session this can act on. Most sessions are not.
+
 ## Install
 
 As a Claude Code plugin (0.2.0):
@@ -192,8 +240,11 @@ npx tokenbrake clean --days=7   # delete saved full outputs older than 7 days
   the rewrite against the tool's own result shape (for Bash: the `{ stdout, stderr, … }` object) and drops a
   mismatch without telling anyone but the debug log; tokenbrake returns the object, and `status` checks it.
 - Claude Code caps hook output strings at 10,000 characters; tokenbrake keeps its rewrite under that.
-- Only successful tool calls pass through PostToolUse. A failing command already arrives as a ~10,000-char
-  head/tail excerpt from Claude Code itself; tokenbrake doesn't touch it.
+- For Bash, only successful tool calls pass through `PostToolUse`; a non-zero exit fires `PostToolUseFailure`,
+  which tokenbrake has registered for since 0.2.2 and which Claude Code 2.1.261–2.1.267 ignores the
+  replacement on, against its own hooks reference. So a failing command's output enters as Claude Code
+  delivers it — capped by its own error ceiling, middle elided to about 7,500 characters — and the ledger
+  records what it cost. `AB-TASK.md`, "The failing command", has the measurements.
 - The guard fails open: any error exits 0 with no output and Claude Code proceeds unchanged.
 - One `node` process per tool call (~50–100 ms). Set the PostToolUse matcher to `Bash|PowerShell|Read` in
   settings.json if you want it lighter and don't need the full ledger.
