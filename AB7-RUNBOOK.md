@@ -89,6 +89,17 @@ shows every hook whichever tool installed it, and cannot be out of date.
 
 ## Before anything else
 
+**Check that rtk is actually installed**, before spending anything:
+
+```powershell
+rtk --version
+```
+
+If that says "not recognized", you have no rtk and there is no head-to-head to run. Install it from its own
+project first, or run the round as two arms — arm 1 and arm 3 — and record it as a two-arm round. Do not
+start arm 1 planning to sort rtk out later: the arms have to share a model, a commit and a Claude Code
+version, and a day spent installing something can cost you all three.
+
 Close every other Claude Code session; the five-hour window is shared. Then, once:
 
 ```powershell
@@ -170,6 +181,21 @@ Fresh session, same paste.
 entries by hand. What matters is only that `settings.json` shows exactly one tool per arm and that you
 looked at it rather than assumed it.)
 
+## Check each arm before trusting it
+
+Two things void an arm, and both are visible the moment it finishes.
+
+**Batching.** The task says one step at a time. An arm that says something like "running the independent
+ones in parallel" has ignored it, and its request count is then about how it planned rather than about the
+tool under test. The check is one division, from that arm's own report: `tool results` ÷ `requests`. Around
+1 is what the protocol asks for. The first hand-run round had one arm at 1.1 and another at 4.6, and the
+round was void — the arm with 4.6 spent a third more money on a third of the requests, and none of it was
+the hook. If two arms are more than about 1.5 apart on that ratio, they did not do the same task; re-run
+the offending arm before comparing anything.
+
+**Different answers.** Any of the twelve differing across arms voids the round outright, whatever the bill
+says. A cheaper wrong audit is not a saving.
+
 ## After each arm — what to save
 
 Do this the moment an arm's twelve lines are on screen, before starting the next one. Nothing here is
@@ -214,6 +240,8 @@ Read-only audit of this repository. Do every step with tools, in this order, one
 10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
 11. Run `npx --yes tokenbrake@0.2.3 status` and paste its output.
 12. Run `npx --yes tokenbrake@0.2.3 report --top=8` and paste its full output.
+
+Do not write or commit an `ab-results/real/` file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
 Notes on the task. Step 10 has no file to read on arms 1 and 2, since the guard is uninstalled there; "the file does

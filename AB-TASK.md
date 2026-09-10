@@ -1210,3 +1210,66 @@ Revised 2026-09-10 after its first real use, which went badly and for reasons th
 The general lesson, which belongs with the other methodology findings in `LANDSCAPE.md`: a protocol
 document is not finished when it is correct, it is finished when someone who was not in the room can follow
 it. Every hole above was invisible to its author and cost the first runner an evening.
+
+### ab7 — run 2026-09-10 by hand, and void as a comparison
+
+The first round on this page run by a person at a keyboard rather than by `create_session`, and the first
+run on Windows. Fable 5.1 (`claude-fable-5-1[1m]`, the 1M-context variant), Claude Code 2.1.267, Node
+v24.19.0, commit `c2d0cd7` of `claude/ab7-off`, one message per arm, the twelve-step audit with step 11 as
+`tokenbrake status`.
+
+| | arm 1, off | arm 2, rtk | arm 3, tokenbrake 0.2.3 |
+|---|---|---|---|
+| session | `01139ae6` | — | `acb853e1` |
+| requests | 15 | **not run** | 5 |
+| tool results | 17 | | 23 |
+| tool results per request | 1.1 | | **4.6** |
+| context processed | 1.3M, 92% from cache | | 443k, 67% from cache |
+| output tokens | 4k | | 4k |
+| cost | $2.48 | | $3.26 |
+| tool results entered | 46k | | 91k |
+| tool results carried | 224k | | 84k |
+| trimmed by the guard | 0 (2 offered, not applied) | | 1 (≈ 2k kept out, ≈ 10k not carried) |
+| under the trim threshold | 10 of 17 shell, 10% of carried | | 11 of 12 shell, 7% of carried |
+| Read calls / Bash calls | 0 / 17 | | 11 / 12 |
+| answers | 12 of 12 | | 12 of 12, **identical** |
+
+**Void, for two independent reasons, and neither is about the guard.**
+
+*The rtk arm never existed.* `rtk` was not installed on the machine and this project does not know its
+Windows install command, having never run it. The runbook did not say to check that the binary exists
+before starting — a third hole in it, found the same way as the other two. So ab7 is not a head-to-head
+with anything; it is an off arm and a tokenbrake arm.
+
+*And those two did not do the same task.* The pasted instruction says "one step at a time, and do not skip
+or batch steps". Arm 1 obeyed it: 17 tool results across 15 requests, 1.1 per request. Arm 3 opened with
+"I'll work through the twelve items, running the independent ones in parallel" and batched: 23 tool results
+across 5 requests, 4.6 per request. Every figure in the table follows from that. Five requests re-read the
+context five times instead of fifteen, so carried context falls from 224k to 84k with the guard credited
+for 10k of it; and five requests reuse the cache less, 67% against 92%, so on a model that lists cache
+writes at eighty times its reads the bill goes *up* 31% while requests go *down* 67%. The requests column,
+which the decision rule says decides, was decided by the batching.
+
+The two arms also read differently — arm 1 used `sed -n` through Bash and let 46k in, arm 3 used the Read
+tool and let 91k in — which is the same planning variance this page has measured at a factor of two on
+Opus, now visible on Fable, on the same model and the same task on the same machine within an hour.
+
+**What survives.** The answers: 12 of 12, identical, on both arms, including the two that a compressed or
+capped read would be most likely to break — 112 lines matching `  t(` in a 60 KB file, and 48 matches for
+"Start fresh". Both arms also independently named `publishing/website/index.html` as the runner-up in step
+8, which nobody asked for. That is now four rounds across three models where the hooks changed no answer.
+
+**What it says about the protocol, which is the useful part.** A one-message instruction not to batch is
+not binding on the model, and a round where one arm batches and the other does not is not a measurement.
+Every cloud round so far happened not to hit this: ab5's arms ran 26 and 29 requests for 25 and 28 results,
+ab3's and ab4's the same shape. It took the first hand-run round to produce an arm that read the same
+sentence and worked in parallel anyway. Any future round has to check tool-results-per-request before
+looking at cost, and treat a gap like 1.1 against 4.6 as voiding, the way a difference in answers voids.
+
+**The `claude/ab7-tb` branch carries one extra commit now** (`ee4ca51`), an `ab-results/real/` file the arm
+wrote and pushed under the repository's own end-of-session rule in `CLAUDE.md`. The ab7 task text has no
+instruction about that file, unlike ab5's and ab6's, which told the arms not to write one; that omission is
+also why arm 3 spent requests on a commit and a push that arm 1 did not. The figures above are both arms'
+step-12 snapshots, taken before either did anything after the twelve steps, so that asymmetry is outside
+them — but the next round's task text should say it explicitly rather than rely on it.
+
