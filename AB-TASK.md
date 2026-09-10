@@ -1809,3 +1809,53 @@ the filter was written and tested by the same person in the same hour, and it to
 This is the flag-and-A/B rule paying for itself before the A/B: a lossy filter that shipped default-on
 would have destroyed data in real sessions, and the round that would have caught it had not been run yet.
 
+### The adversarial benchmark, built and configured — 2026-09-10
+
+An outside spec asked for a reproducible adversarial benchmark and it was built the same day, in
+`tokenbrake-bench` on the owner's machine, separate from this repository. It supersedes `AB-RUNBOOK.md`
+for future rounds. What it is, from its own self-check and from what was verified here:
+
+- **One seeded generator** builds a synthetic payment-incident repo and a hidden answer key **from the same
+  objects**, so fixtures and answers cannot drift. `node selftest.mjs` regenerates, checks hashes and runs
+  every validation with **no model calls**; it ends `ALL GREEN`.
+- **Fixtures sit on the window's boundaries**, each asserted: successful commands at exactly 5,900 / 6,000
+  / 6,001 chars and at 12k and 28k; one over 35,000 that the host persists so the replacement is never
+  applied; a failing command at ~18,000 chars with a non-zero exit, where Claude Code ignores the
+  replacement. Plus a source file over 60,000 bytes with the fault past line 300, saved outputs straddling
+  the persisted-read threshold with evidence past line 80, a 144 KB file over the host's Read refusal,
+  passing tests named `error`/`failure`/`warning` with ASCII and Unicode markers, CRLF, quoted paths with
+  spaces, and a decisive neutral record that the default trim does **not** preserve.
+- **It fixes, by construction, four things this page learned the hard way.** Arms toggle by writing a
+  git-ignored `.claude/`, so both sit on the same commit with a clean tree — no second commit sliding
+  `git log --stat -40` or `HEAD~3`, which voided ab9's steps 1 to 3. `measure.mjs` re-derives cost and
+  tokens **from the transcript, not from tokenbrake's ledger**, and its arithmetic is proven against
+  synthetic transcripts with hand-computed answers including compaction boundaries. The session id is
+  found from the shell after the session closes, never from inside it — the default that named the wrong
+  session three times here. And it measures what the guard **emits** separately from what the host
+  **delivers**, which is the distinction the report's credit fix was about.
+- **Two experiments, never pooled.** A mechanism stress test over fixed fixtures, and one natural incident
+  task whose prompt names no file and never says "read in full" — the phrasing that forbids the guard's
+  saving by construction. Only the natural task feeds the cost verdict.
+- **Pre-registered**: five paired OFF/ON runs in balanced order, two OFF/OFF controls to estimate normal
+  variability, one ON/SHAPE pair, and a verdict rule fixed in `results/PRE-REGISTRATION.md`. Fewer than
+  five pairs is reported as "inconclusive". An ON-arm critical correctness error the OFF arm did not make
+  blocks any safe-savings claim whatever the cost did.
+
+**It found a real bug before a single run was paid for** — the shape filters collapsing the tenant
+settlement table, recorded in the section above. After the fix was pulled and the fixtures regenerated
+against `bcaaf58`, its mechanism output changes exactly one fixture with `shapeFilters` on
+(`F08_deploy_log_ansi`, 8,353 → 5,368 chars) and the settlement table no longer appears. That is the
+confirmation, and it is the strongest argument the flag-and-A/B rule has produced in either direction.
+
+**Two small defects in the build, recorded rather than fixed.** Its own README claims the guard SHA is
+pinned into `fixtures/manifest.json`; there is no `guard` key there, only fixture hashes, so
+`plan.json`'s instruction to make `guard_version` "match fixtures/manifest.json guard sha" cannot be
+followed and the field was filled by hand (`0.2.4 @ bcaaf58`). And `selftest.mjs`'s own output says
+nothing about the shape filters; that evidence lives in `results/mechanism/experiment-A.txt`.
+
+**Configured and ready**: guard `bcaaf58`, model `claude-fable-5-1[1m]`, Claude Code 2.1.267, Node
+v24.19.0, no `TBD` left. Sixteen sessions in the plan at roughly $2 each on this workload — about $30 —
+and nothing needs to be run in one sitting: the fixtures are deterministic and `restore.mjs` refuses to
+proceed if they do not match the pre-registered hashes. **ab10 runs through this, not through
+`AB-RUNBOOK.md`.**
+

@@ -507,7 +507,17 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-8. **ab9, the review A/B by hand, is set up and waiting.** `AB-RUNBOOK.md` is the self-contained Windows
+8. **ab10 runs through the adversarial benchmark, not through `AB-RUNBOOK.md`.** `tokenbrake-bench` on
+   the owner's machine is built, self-checking (`node selftest.mjs` ends `ALL GREEN` with no model calls),
+   and configured — guard `bcaaf58`, model `claude-fable-5-1[1m]`, no `TBD` left. It fixes by construction
+   the four things this page learned the hard way: arms toggle without a second commit, measurement is
+   re-derived from the transcript rather than from the guard's own ledger, the session id comes from the
+   shell after the session closes, and what the guard emits is never confused with what the host delivers.
+   Five paired runs, two OFF/OFF controls and one ON/SHAPE pair are pre-registered, with the verdict rule
+   fixed. Roughly $30 and resumable across sittings. `AB-RUNBOOK.md` stays as the record of how ab8 and ab9
+   were run.
+
+9. **ab9, the review A/B by hand, is recorded and its faults are known.** `AB-RUNBOOK.md` is the self-contained Windows
    runbook: two arms, off against tokenbrake 0.2.4, on `claude/ab9-off` and `claude/ab9-tb` of
    `33kain/contexa`, cut from `d477c97` and differing in `.claude/settings.json` alone, so nothing is
    installed or uninstalled at all. The task is no longer the twelve-step audit — ab8 showed that measured
