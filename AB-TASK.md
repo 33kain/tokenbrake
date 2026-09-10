@@ -1510,90 +1510,99 @@ back bounded — a wasted round trip. With the hook the PreToolUse cap rewrites 
 runs and hands back 300 lines immediately. **Every round so far has given the Read cap opportunities to
 hurt and none to help.** A benchmark that only measures a feature where it cannot win is not measuring it.
 
-## ab9 — the trace task, written 2026-09-10 before the run
+## ab9 — the review task, written 2026-09-10 before the run
 
-A replacement for the twelve-step audit, built from the measurements above. Same protocol, same two arms,
-same repository at the same commit; the workload is new, so **ab9's numbers do not compare to ab4, ab5 or
-ab8** — it is a new benchmark, and the old one's results stay on this page as what they are.
+The first version of this section was a trace task, and the owner rejected it on sight: nine of its twelve
+steps had changed but it was still the same *kind* of thing — twelve lookup questions, "run a command,
+report a number". He was right. A harder quiz is not a different workload, and the workload is what the
+measurement is about. This is the replacement, built from the two shapes he chose: a **release review**
+(part 1, which puts real work inside the trim's operating window) and a **mechanism trace with a synthesis
+deliverable** (part 2, which is where the Read cap and whole-file reading live). Part 3 verifies.
 
-**What it is designed to do, point by point against the diagnosis.**
+**Why these two and not debugging.** The trim acts only on results over 6,000 characters, under Claude
+Code's ~30,000-character ceiling, and exited zero. A debugging session's large outputs are failing test
+runs — non-zero exit, where Claude Code ignores the hook's replacement — so the workload the trim was
+written for is structurally out of its reach, and four debugging rounds have already returned ≈ 0 for that
+reason. Measured on this repository at `338053f`, the commands that land *inside* the window are the ones a
+review session runs: `git log --stat -40` (23,995 chars), `cd worker && node test.mjs` (23,089),
+`sed -n '1,400p' CHANGELOG.md` (18,074), `git diff HEAD~3` (13,642), `grep -rn 'function ' extension/
+worker/src/` (13,107), `git log -p -3` (7,865).
 
-- **The trim can fire.** Four steps produce between 17k and 24k characters — over the 6,000 threshold and
-  under Claude Code's ~30,000 ceiling, the band where a hook's replacement is actually delivered. The old
-  task had none.
-- **A step fails with real output.** Step 6 ends in a grep that matches nothing, so the command exits 1
-  with 17k characters already printed. That reaches `PostToolUseFailure`, which no round has exercised
-  with substantial output, and which the ledger records even though Claude Code ignores the replacement.
-- **The Read cap gets a chance to help, not only to hurt.** Step 5 asks for `CHANGELOG.md` whole. Claude
-  Code's Read refuses a file that size; the off arm eats an error and a return trip, the guarded arm is
-  handed 300 lines. If the cap is worth anything anywhere, it is here, and this is the first task that asks.
-- **Batching is impossible by construction, not by instruction.** Steps 1→2→3→4→5 each take their input
-  from the previous step's *answer*. An arm cannot run them in parallel because it does not know what to
-  grep for until the step before has finished. ab7 was voided by an arm that read "do not batch" and
-  batched anyway; this removes the option instead of repeating the request.
-- **The excerpt rule is exercised.** Step 8 is a `sed -n` range of 18k characters — over the trim
-  threshold, and 0.2.3 must pass it through untouched. If a future guard change breaks that, this step
-  catches it on the bill rather than in a unit test.
-
-**The task, to be pasted verbatim, identical on both arms.**
+**The task, pasted verbatim, identical on both arms.**
 
 ```
-Read-only trace of this repository. Each step depends on the answer to the one before it, so do them strictly in order and do not start a step until the previous one has an answer. Do not modify any file. Run exactly one tool call per turn. At the end write twelve numbered lines, one per step, then paste the output of steps 11 and 12 verbatim.
+Read-only review of this repository before a release. Work through the parts in order; part 2 and part 3 depend on what you find in part 1. Do not modify any file. Run exactly one tool call per turn. At the end produce the report described at the bottom.
 
-1. Run `cd worker && node test.mjs`. Report how many checks passed, and the exact text of the last check that ran.
-2. Find that exact check text in worker/test.mjs with grep -n. Report the line number.
-3. Read worker/test.mjs around that line. Name the function in worker/src/index.js that the check is about.
-4. Find that function's definition in worker/src/index.js. Report the line it is defined on, and the constant defined on the line immediately above it, with its value.
-5. Read CHANGELOG.md in full. Report how many of its lines mention the function from step 3, and quote the last such line.
-6. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
-7. Run `git log --stat -40`. Report which file appears on the most changed-file lines in it.
-8. Run `sed -n '1,400p' CHANGELOG.md`. Report how many lines in that excerpt begin with "## ".
-9. Run `grep -rn "<the function from step 3>" extension/ worker/src/ CHANGELOG.md`. Report the match count in each of the three locations separately.
+Part 1 — what changed.
+1. Run `git log --stat -40`. Name the three files that appear on the most changed-file lines, with their counts.
+2. Run `git diff HEAD~3`. Name every file it touches and say in one line what the change does.
+3. Read CHANGELOG.md in full. Report the version number of its most recent entry, and how many of the file's lines mention `MAX_BRIEF_CHARS`.
+
+Part 2 — trace the mechanism.
+4. A "brief" travels from the extension page to the worker and back. Starting at `weightLine` in extension/content.js, list every named numeric limit the thread or the brief passes on that path, in the order it meets them, giving for each: constant name, value, file, and line number.
+5. One of those limits is enforced in two different files, by two copies of the same function. Name the constant, name the function, and give both file:line pairs for each.
+6. For a thread of 15,000 tokens whose brief is 3,000 characters: say which limits from step 4 apply, in order, and what the brief's final length is. Then say what happens instead for a thread of 5,000 tokens, and why.
+
+Part 3 — verify.
+7. Run `cd worker && node test.mjs`. Report how many checks passed and the exact text of the last check that ran.
+8. Run `grep -rn "MAX_BRIEF_CHARS" extension/ worker/src/`. Report the match count in each of the two locations separately.
+9. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
 10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
 11. Run `npx --yes tokenbrake@0.2.4 status` and paste its output.
 12. Run `npx --yes tokenbrake@0.2.4 report --top=8` and paste its full output.
 
+The report: one numbered line per step above, then the outputs of steps 11 and 12 pasted verbatim, then two sentences saying whether you would sign off on the release and what you would want changed first.
+
 Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
-**Ground truth, computed on `338053f` before either arm runs**, so that two arms agreeing on a wrong
-answer is caught rather than counted:
+**Ground truth, computed on `338053f` before either arm runs.** Steps 1 and 2 move as the repository gains
+commits and are fixed only within a round; the rest are stable.
 
 | step | answer |
 |---|---|
-| 1 | 151 checks; `cleanBrief lives inside the injected helper block` |
-| 2 | 1026 |
-| 3 | `cleanBrief` |
-| 4 | line 634; `const MAX_BRIEF_CHARS = 1800;` on line 633 |
-| 5 | 2 lines; ``from the same twenty. `cleanBrief` is in the injected helper block, so the`` |
-| 6 | 148 matches; exit code 1 |
-| 7 | `CLAUDE.md` |
-| 8 | 19 |
-| 9 | extension/ 18, worker/src/ 5, CHANGELOG.md 2 |
+| 1 | `CLAUDE.md` 4, `.claude/hooks/tokenbrake/guard.js` 4, `publishing/website/site.css` 3 |
+| 3 | lines mentioning `MAX_BRIEF_CHARS`: to be read off the file at the round's commit |
+| 4 | `LONG_THREAD_TOKENS` 12000 — content.js:434; `FRAGMENT_MIN_THREAD_TOKENS` 4000 — content.js:928; `MAX_BRIEF_CHARS` 1800 — background.js:621; `BRIEF_TTL_MS` 2·60·1000 — background.js:753; `MAX_BRIEF_CHARS` 1800 — worker/src/index.js:633; `FORK_MAX_TOKENS` 2000 — worker/src/index.js:827 |
+| 5 | `MAX_BRIEF_CHARS`, function `cleanBrief`, at `extension/background.js:621`/`:622` and `worker/src/index.js:633`/`:634` |
+| 6 | 15,000 > `LONG_THREAD_TOKENS` so the cost line and the Start fresh control render; the brief is cut by `cleanBrief` at `MAX_BRIEF_CHARS`, final length ≤ 1,800. At 5,000 tokens `weightLine` returns the fragments nudge instead — 5,000 is above `FRAGMENT_MIN_THREAD_TOKENS` but below `LONG_THREAD_TOKENS` — so no Start fresh control renders, no brief is produced, and the 1,800 cap never applies. |
+| 7 | 151 checks; `cleanBrief lives inside the injected helper block` |
+| 8 | extension/ 2, worker/src/ 3 — to be confirmed at the round's commit |
+| 9 | 148 matches; exit code 1 |
 | 10 | `#!/usr/bin/env node` |
 
-Step 7's answer moves as the repository gains commits; it is fixed within a round because both arms run
-from one commit, and it is not comparable across rounds. Steps 1–6 and 8–10 are stable at that commit.
+Step 5 is the one worth the round on its own: **the same constant and the same function are defined twice,
+independently, in the extension and in the worker.** No arm has been asked anything that required noticing
+something, as opposed to looking something up, and a review that misses it is a review that did not read.
 
-**Expectation, fixed before the run.** For the first time, not a null. The trim will act on four results
-worth 17k–24k characters each, where every previous round gave it nothing, and the Read cap will act where
-the alternative is an error. If the guard saves anything anywhere, this is the workload where it shows,
-and the honest prediction is a real difference in what enters — entered tokens lower on the guarded arm by
-something like 20k — with requests close to level. If entered falls and requests rise, that is the return
-trip again and the guard is neutral at best on this shape too.
+**What each part is for, against the guard.**
 
-**Decision rule, fixed before the run.** The validity gate first: tool results ÷ requests near 1 on both
-arms and within 1.5 of each other, and identical answers, checked against the ground truth above.
+- **Part 1** puts three results in the trim's window (24k, 14k, and CHANGELOG reading) and asks questions
+  whose answers survive trimming — the head, the tail and the file names — so a trim that keeps the wrong
+  three things shows up as a wrong answer rather than as a saving.
+- **Part 2** is where the Read cap lives. Step 3 asks for `CHANGELOG.md` whole: 237 KB, about 59k tokens,
+  and Claude Code's Read refuses a file over roughly 25k. The off arm should eat an error and come back
+  bounded; the guarded arm should be handed 300 lines by the PreToolUse cap before the tool runs. **This is
+  the only case in nine rounds where the cap can save rather than cost.** Steps 4–6 then need three large
+  files read well enough to reason over, which is the shape the cap is supposed to help with.
+- **Part 3** re-runs the suite (23k, in the window), forces a non-zero exit with 17k already printed
+  (`PostToolUseFailure`, which no round has exercised with real output), and closes with the instruments.
 
-- Entered lower on the guarded arm **and** requests within three **and** cost not worse: the first
-  workload on which this guard demonstrably works. It stays inside this file until a second run on another
-  day reproduces it, and only then does the README get a number.
-- Entered lower and requests four or more higher: the return trip, again, now on a task built to favour
-  the guard. That would be the strongest evidence yet that trimming does not pay on the bill, and it
-  should be said that plainly.
-- Entered level: the guard is not acting even here, and the reason goes in this file before anything else
-  is built.
-- Answers differing from the ground truth on either arm: void, and the answers matter more than the bill.
+**Expectation, fixed before the run.** For the first time, not a null: entered tokens lower on the guarded
+arm, by something like 20k, with requests within three. If entered falls and requests rise by four or
+more, that is the return trip on a task built to favour the guard, and it would be the strongest evidence
+yet that trimming does not pay on the bill. If entered is level, the guard is not acting even here.
+
+**Decision rule, fixed before the run.** Validity gate first: tool results ÷ requests near 1 on both arms
+and within 1.5 of each other, and both arms' answers checked against the ground truth above — including
+step 5, which is the one an arm can fail while looking fluent.
+
+- Entered lower **and** requests within three **and** cost not worse: the first workload on which this
+  guard demonstrably works. It stays in this file until a second run on another day reproduces it.
+- Entered lower and requests four or more higher: the return trip, recorded as such.
+- Entered level: the guard is not acting on a task designed to make it act, and that goes in `README.md`'s
+  "Limits" section next to the 285-call count.
+- Either arm's answers wrong against the ground truth: void, and the wrong answer is the finding.
 
 ## What the guard actually did, counted rather than argued — 2026-09-10
 
