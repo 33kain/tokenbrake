@@ -1391,10 +1391,14 @@ row logged per call. **That row count, not the trim line, is what identifies whi
 to.** An earlier version of this page's guidance said the guarded arm must show a trim; that is only true
 when the guard has something to trim, and it is wrong as a check.
 
-**The mechanism, which is what this round actually bought.** The Read cap fired once, on the arm's first
-unbounded Read of `extension/content.js` (112 KB, over `readMaxBytes`). What happened next is the finding:
+**The mechanism, which is what this round actually bought.** The Read cap fired once. *Corrected
+2026-09-10:* when 0.2.4's `Read caps fired` line was run against this arm's transcript afterwards it read
+**"1 (1 on a persisted output)"** — so the cap that fired was the persisted-output cap, not `readMaxBytes`,
+and the arm's unbounded Read of `extension/content.js` was refused by Claude Code's own Read limit rather
+than capped by the guard. `readMaxBytes` did not fire in ab8 at all, and has still never been observed to
+fire outside a test. What happened is: 
 
-- The model went to Bash and ran `cat extension/content.js` instead.
+- The model went to Bash and ran `cat extension/content.js`.
 - That passed Claude Code's own inline ceiling, so Claude Code wrote the output to
   `~/.claude/projects/<project>/<session>/tool-results/…` and handed back a preview.
 - The model then read that persisted file back in **three bounded ranges** — 11k, 11k and 7k tokens,
@@ -1637,4 +1641,22 @@ entirely, which is the workload the trim was written for.
 All of it is now in `README.md` under "Limits, with the numbers", ahead of the install instructions, on the
 principle that a package whose whole argument is honesty should not leave its limitations to be discovered
 by someone else.
+
+### The wrong-session default, a third time — and the check that is actually reliable
+
+ab9's off arm ran the new `report --top=8` at step 12 and got a report of `8c21713d`, which is **ab8's
+tokenbrake arm**. Its own session was `8516e976`, on disk and newer. The arm said so — "this session issued
+no Read or Grep tool calls at all, only Bash, so the ten Read rows do not describe this session's work" —
+and was right, as ab8's arm was right and ab7's arm was wrong.
+
+That is three misfires of the same default on Windows, and it is now established rather than suspected: a
+transcript being written by a live process can carry a stale modification time there, so `report` with no
+`--session` can name a session that finished hours earlier. **The step-12 report is part of the workload
+and not part of the record.** The record is always `report --session=<id>` from the shell after the session
+closes, with the id taken from `report --all`, and the id is the newest row carrying the repository's path
+— never the one printed inside the arm's own step 12.
+
+The reliable identity check is the **ledger row count**, not the trim line and not the session id: it grows
+by one per tool call of a session the guard ran in. It caught nothing here only because the wrong report
+was pulled before anyone compared counts.
 
