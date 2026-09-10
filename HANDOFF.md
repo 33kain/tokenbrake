@@ -434,7 +434,7 @@ come on this page. What the round bought is the mechanism: the Read cap fired on
 model went to `cat` instead, that passed Claude Code's own ceiling and was persisted, and the model read
 the persisted file back in three *bounded* ranges the guard leaves alone by design — 411k token-reads, 43%
 of that arm's carried context. **The cap changed which door the file came in through and nothing else.**
-Four holes in `AB8-RUNBOOK.md` were found by someone actually following it and are fixed: no rtk status
+Four holes in `AB-RUNBOOK.md` were found by someone actually following it and are fixed: no rtk status
 command was named, nothing said what to save per arm, install/uninstall was replaced by `git checkout` on
 prepared branches, and the arm's own step-12 report can name the wrong session (on Windows a live
 transcript's mtime lags, so `report` with no `--session` picked a previous round's arm — twice). Also
@@ -487,7 +487,7 @@ Nothing to build before then. The task is collection and one table, then publish
    for the `ab-results/real/` files means each one is a snapshot short of its session's end. The table's
    note has to say the second even if the first is fixed.
 
-8. **ab8, the audit A/B by hand, is set up and waiting.** `AB8-RUNBOOK.md` is the self-contained Windows
+8. **ab8, the audit A/B by hand, is set up and waiting.** `AB-RUNBOOK.md` is the self-contained Windows
    runbook: two arms, off against tokenbrake 0.2.3, on `claude/ab8-off` and `claude/ab8-tb` of
    `33kain/contexa`, cut from `338053f` and differing in `.claude/settings.json` alone, so nothing is
    installed or uninstalled at all. `AB-TASK.md` carries its pre-registration, including the validity gate

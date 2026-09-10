@@ -1,6 +1,6 @@
-# ab8 — the audit A/B, at the keyboard
+# The A/B at the keyboard — current round: ab9, the trace task
 
-**Two arms: no hooks, and tokenbrake 0.2.3.** Two Claude Code sessions on one clone of `33kain/contexa`,
+**Two arms: no hooks, and tokenbrake 0.2.4.** Two Claude Code sessions on one clone of `33kain/contexa`,
 the same twelve-step audit, differing only in whether the guard is in front of the tools. Windows,
 PowerShell. About forty minutes with the waiting, roughly $6 at list price.
 
@@ -67,7 +67,7 @@ type $HOME\.claude\settings.json
 - **It prints JSON with a `hooks` block** → something is installed at user scope. Read it: entries naming
   `tokenbrake` or `guard.js` are tokenbrake's, entries naming `rtk` are rtk's.
 
-To clear tokenbrake from user scope: `npx --yes tokenbrake@0.2.3 uninstall`. To clear rtk, use rtk's own
+To clear tokenbrake from user scope: `npx --yes tokenbrake@0.2.4 uninstall`. To clear rtk, use rtk's own
 uninstall. If rtk's uninstall does not work or you are not sure of the command, you can edit
 `$HOME\.claude\settings.json` by hand — delete the hook entries that name rtk, or if the whole file is
 nothing but hooks you installed, delete the file. Claude Code treats a missing user settings file as no
@@ -82,7 +82,7 @@ Then confirm, and this is the check to trust over any tool's status output:
 
 ```powershell
 type $HOME\.claude\settings.json     # "cannot find" is the answer you want
-npx --yes tokenbrake@0.2.3 status      # backs it up for tokenbrake specifically
+npx --yes tokenbrake@0.2.4 status      # backs it up for tokenbrake specifically
 ```
 
 **Why this and not `rtk status`.** The first version of this page told you to run rtk's own status command
@@ -121,21 +121,21 @@ clone already carry the two configurations, so **tokenbrake is switched with `gi
 
 | branch | `.claude/settings.json` | used by |
 |---|---|---|
-| `claude/ab8-off` | `{"hooks": {}}` — no hooks | arm 1 (off) |
-| `claude/ab8-tb` | the full 0.2.3 project install | arm 2 (tokenbrake) |
+| `claude/ab9-off` | `{"hooks": {}}` — no hooks | arm 1 (off) |
+| `claude/ab9-tb` | the full 0.2.3 project install | arm 2 (tokenbrake) |
 
 Both branches are cut from the same commit (`338053f`) and their trees differ in that one file and nothing
 else. **Nothing is installed or uninstalled in this round at all** — the arms switch with `git checkout`.
 
 Do not run `npx tokenbrake init` at any point. If you already did last night, undo it with
-`npx --yes tokenbrake@0.2.3 uninstall` in step 0; a user-scope install would run on all three arms and void
+`npx --yes tokenbrake@0.2.4 uninstall` in step 0; a user-scope install would run on all three arms and void
 the round.
 
 ## Arm 1 — off
 
 ```powershell
-git checkout claude/ab8-off
-npx --yes tokenbrake@0.2.3 status
+git checkout claude/ab9-off
+npx --yes tokenbrake@0.2.4 status
 ```
 
 `status` should print `missing` against all three hooks and against the guard file, and must **not** print
@@ -148,9 +148,9 @@ Then `claude` in the clone, paste the task below, send nothing else, let it fini
 ## Arm 2 — tokenbrake
 
 ```powershell
-git checkout claude/ab8-tb
+git checkout claude/ab9-tb
 git branch --show-current
-npx --yes tokenbrake@0.2.3 status
+npx --yes tokenbrake@0.2.4 status
 ```
 
 `status` should now name the project scope — the three hooks present there — while user scope stays
@@ -189,8 +189,8 @@ recoverable later except from the transcript, so save it now.
 3. **Close that Claude Code session.** Then, from PowerShell:
 
 ```powershell
-npx --yes tokenbrake@0.2.3 report --all
-npx --yes tokenbrake@0.2.3 report --session=<the 8 characters> --top=8 > arm1-off-report.txt
+npx --yes tokenbrake@0.2.4 report --all
+npx --yes tokenbrake@0.2.4 report --session=<the 8 characters> --top=8 > arm1-off-report.txt
 ```
 
 **Do not trust the session id printed by step 12.** `report` with no `--session` opens the newest transcript
@@ -217,44 +217,43 @@ separate place to look and nothing else to keep.
 
 ## The task — paste verbatim, identical on both arms
 
-```
-Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write twelve lines, one per step, then paste the output of steps 11 and 12 verbatim.
+This is the **trace task**, which replaced the twelve-step audit on 2026-09-10. The audit measured a hook
+that never ran: in ab8 every shell result on both arms was under the trim threshold, so the guard's main
+feature fired zero times in a $9 experiment. This one is built from measured output sizes so the trim can
+act four times, a step fails with real output, the Read cap gets a case where it can help rather than only
+hurt, and the steps depend on each other so an arm cannot batch them even if it decides to.
+`AB-TASK.md` carries the reasoning, the measurements and the **ground truth for every answer** — check the
+arms against it, because two arms agreeing on a wrong answer is not a passing round.
 
-1. Run `npm test` and report the number of checks that passed and failed.
-2. Run `node build.mjs` and report the zip name it prints.
-3. Read extension/content.js in full and name the function that decides which line, if any, the label row carries.
-4. Read worker/src/index.js in full and name the constant that caps the brief's length.
-5. Read extension/background.js in full and say how long a staged brief lives before it expires.
-6. Read worker/test.mjs in full and count the lines that begin with two spaces followed by `t(`.
-7. Read scripts/screenshots/capture.mjs in full and name the Playwright call that opens the browser.
-8. Run `git log --stat -40` and name the file that appears most often in it.
-9. Run `grep -rn "Start fresh" publishing/` and count the matching lines.
+```
+Read-only trace of this repository. Each step depends on the answer to the one before it, so do them strictly in order and do not start a step until the previous one has an answer. Do not modify any file. Run exactly one tool call per turn. At the end write twelve numbered lines, one per step, then paste the output of steps 11 and 12 verbatim.
+
+1. Run `cd worker && node test.mjs`. Report how many checks passed, and the exact text of the last check that ran.
+2. Find that exact check text in worker/test.mjs with grep -n. Report the line number.
+3. Read worker/test.mjs around that line. Name the function in worker/src/index.js that the check is about.
+4. Find that function's definition in worker/src/index.js. Report the line it is defined on, and the constant defined on the line immediately above it, with its value.
+5. Read CHANGELOG.md in full. Report how many of its lines mention the function from step 3, and quote the last such line.
+6. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
+7. Run `git log --stat -40`. Report which file appears on the most changed-file lines in it.
+8. Run `sed -n '1,400p' CHANGELOG.md`. Report how many lines in that excerpt begin with "## ".
+9. Run `grep -rn "<the function from step 3>" extension/ worker/src/ CHANGELOG.md`. Report the match count in each of the three locations separately.
 10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
-11. Run `npx --yes tokenbrake@0.2.3 status` and paste its output.
-12. Run `npx --yes tokenbrake@0.2.3 report --top=8` and paste its full output.
+11. Run `npx --yes tokenbrake@0.2.4 status` and paste its output.
+12. Run `npx --yes tokenbrake@0.2.4 report --top=8` and paste its full output.
 
-Run exactly one tool call per turn. Do not issue two tool calls in the same turn, even for steps that do not depend on each other.
-
-Do not write or commit an `ab-results/real/` file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
+Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
-The one-tool-call-per-turn line is the reason this round is being run again. In ab7 an arm read
-"one step at a time, and do not skip or batch steps", announced it would run the independent steps in
-parallel, and came in at 4.6 tool results per request against the other arm's 1.1. Everything measured then
-followed from that rather than from the guard.
-
-Notes on the task. Step 10 has a file to read on both arms — the guard copy stays on the off branch, only its registration is emptied — so; "the file does
-not exist" is the correct answer and the arms should say so rather than hunting for it. Step 11 reports which arm this
-was, from the tool's own status, which is why it is that command and not a look at `~/.claude` — see "ab6, first
-attempt" in `AB-TASK.md` for what that cost. Step 12 is the measuring instrument and works on all three arms: it reads
-the Claude Code transcript, not tokenbrake's ledger, so on the rtk arm it still says what entered and what was
-carried, which is the quantity rtk's own claims are about.
+Step 5 is the one to watch. `CHANGELOG.md` is 237 KB, about 59k tokens, and Claude Code's Read tool refuses
+a file over roughly 25k — so on the **off** arm expect an error and a second, bounded attempt, and on the
+**guarded** arm expect 300 lines handed back immediately. That is the only place any round has ever given
+the Read cap a chance to save rather than cost, and it is the reason this task exists.
 
 ## After both arms
 
 ```powershell
-npx --yes tokenbrake@0.2.3 report --all                    # session ids, newest first
-npx --yes tokenbrake@0.2.3 report --compare OFFID TBID
+npx --yes tokenbrake@0.2.4 report --all                    # session ids, newest first
+npx --yes tokenbrake@0.2.4 report --compare OFFID TBID
 ```
 
 Use the two session ids without angle brackets. `--compare` prints both sessions side by side with a change
@@ -266,7 +265,7 @@ Every row comes from the per-arm report file you saved under "After each arm". N
 a usage page or any other tool — the line each number sits on is named in the left column.
 
 ```
-ab8 — <date>, <model>, Claude Code <version>, Node <version>, commit 338053f, Windows
+ab9 — <date>, <model>, Claude Code <version>, Node <version>, commit 338053f, Windows
 
                                                     off        tokenbrake 0.2.3
 requests                    ("N requests")
