@@ -1,4 +1,4 @@
-# The A/B at the keyboard — current round: ab9, the trace task
+# The A/B at the keyboard — current round: ab9, the review task
 
 **Two arms: no hooks, and tokenbrake 0.2.4.** Two Claude Code sessions on one clone of `33kain/contexa`,
 the same twelve-step audit, differing only in whether the guard is in front of the tools. Windows,
@@ -217,37 +217,47 @@ separate place to look and nothing else to keep.
 
 ## The task — paste verbatim, identical on both arms
 
-This is the **trace task**, which replaced the twelve-step audit on 2026-09-10. The audit measured a hook
-that never ran: in ab8 every shell result on both arms was under the trim threshold, so the guard's main
-feature fired zero times in a $9 experiment. This one is built from measured output sizes so the trim can
-act four times, a step fails with real output, the Read cap gets a case where it can help rather than only
-hurt, and the steps depend on each other so an arm cannot batch them even if it decides to.
-`AB-TASK.md` carries the reasoning, the measurements and the **ground truth for every answer** — check the
-arms against it, because two arms agreeing on a wrong answer is not a passing round.
+This is the **review task**. It replaced the twelve-step audit, and then replaced a trace task that was
+only a harder version of the same quiz. The audit measured a hook that never ran: in ab8 every shell
+result on both arms sat under the trim threshold, so the guard's main feature fired zero times in a nine-
+dollar experiment. This one is real work -- a release review and a mechanism trace -- built from measured
+output sizes so that four steps land in the band where the trim actually acts, one step fails with 17k
+already printed, and one step gives the Read cap the only chance in nine rounds to *save* rather than cost.
+
+`AB-TASK.md` carries the reasoning and the **ground truth for every answer**. Check both arms against it:
+two arms agreeing on a wrong answer is not a passing round, and step 5 is one an arm can fail while
+sounding perfectly fluent.
 
 ```
-Read-only trace of this repository. Each step depends on the answer to the one before it, so do them strictly in order and do not start a step until the previous one has an answer. Do not modify any file. Run exactly one tool call per turn. At the end write twelve numbered lines, one per step, then paste the output of steps 11 and 12 verbatim.
+Read-only review of this repository before a release. Work through the parts in order; part 2 and part 3 depend on what you find in part 1. Do not modify any file. Run exactly one tool call per turn. At the end produce the report described at the bottom.
 
-1. Run `cd worker && node test.mjs`. Report how many checks passed, and the exact text of the last check that ran.
-2. Find that exact check text in worker/test.mjs with grep -n. Report the line number.
-3. Read worker/test.mjs around that line. Name the function in worker/src/index.js that the check is about.
-4. Find that function's definition in worker/src/index.js. Report the line it is defined on, and the constant defined on the line immediately above it, with its value.
-5. Read CHANGELOG.md in full. Report how many of its lines mention the function from step 3, and quote the last such line.
-6. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
-7. Run `git log --stat -40`. Report which file appears on the most changed-file lines in it.
-8. Run `sed -n '1,400p' CHANGELOG.md`. Report how many lines in that excerpt begin with "## ".
-9. Run `grep -rn "<the function from step 3>" extension/ worker/src/ CHANGELOG.md`. Report the match count in each of the three locations separately.
+Part 1 — what changed.
+1. Run `git log --stat -40`. Name the three files that appear on the most changed-file lines, with their counts.
+2. Run `git diff HEAD~3`. Name every file it touches and say in one line what the change does.
+3. Read CHANGELOG.md in full. Report the version number of its most recent entry, and how many of the file's lines mention `MAX_BRIEF_CHARS`.
+
+Part 2 — trace the mechanism.
+4. A "brief" travels from the extension page to the worker and back. Starting at `weightLine` in extension/content.js, list every named numeric limit the thread or the brief passes on that path, in the order it meets them, giving for each: constant name, value, file, and line number.
+5. One of those limits is enforced in two different files, by two copies of the same function. Name the constant, name the function, and give both file:line pairs for each.
+6. For a thread of 15,000 tokens whose brief is 3,000 characters: say which limits from step 4 apply, in order, and what the brief's final length is. Then say what happens instead for a thread of 5,000 tokens, and why.
+
+Part 3 — verify.
+7. Run `cd worker && node test.mjs`. Report how many checks passed and the exact text of the last check that ran.
+8. Run `grep -rn "MAX_BRIEF_CHARS" extension/ worker/src/`. Report the match count in each of the two locations separately.
+9. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
 10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
 11. Run `npx --yes tokenbrake@0.2.4 status` and paste its output.
 12. Run `npx --yes tokenbrake@0.2.4 report --top=8` and paste its full output.
 
+The report: one numbered line per step above, then the outputs of steps 11 and 12 pasted verbatim, then two sentences saying whether you would sign off on the release and what you would want changed first.
+
 Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
 ```
 
-Step 5 is the one to watch. `CHANGELOG.md` is 237 KB, about 59k tokens, and Claude Code's Read tool refuses
-a file over roughly 25k — so on the **off** arm expect an error and a second, bounded attempt, and on the
-**guarded** arm expect 300 lines handed back immediately. That is the only place any round has ever given
-the Read cap a chance to save rather than cost, and it is the reason this task exists.
+Step 3 is the one to watch. `CHANGELOG.md` is 237 KB, about 59k tokens, and Claude Code's Read tool
+refuses a file over roughly 25k -- so on the **off** arm expect an error and a second, bounded attempt, and
+on the **guarded** arm expect 300 lines handed back by the PreToolUse cap before the tool runs. Every round
+so far has given the Read cap opportunities to hurt and none to help; this is the first that asks.
 
 ## After both arms
 
