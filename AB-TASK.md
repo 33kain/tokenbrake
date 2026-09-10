@@ -1328,3 +1328,30 @@ null.
 - On-arm requests four or more above the off arm: a loss, recorded as one.
 - Answers differing anywhere: void, and the answers matter more than the bill.
 
+### The report can read the wrong session, and on Windows it did — 2026-09-10
+
+`report` with no `--session` opens the newest transcript on disk. Run from *inside* a live session, that
+is normally the session itself. On Windows it twice was not.
+
+- ab7, arm 1: the arm's step-12 report described a session the arm believed was not its own. It was its
+  own, and the caveat was a false alarm — which taught the wrong lesson, because it made the same caveat
+  easy to dismiss the next time.
+- ab8, arm 1: the arm's step-12 report described `acb853e1`, the *previous* round's tokenbrake arm, at its
+  final state. The arm said "this session made more calls than that" and was right. Its own session,
+  `460d9673`, was on disk and newer.
+
+The tell that settles it in one line: **the off arm's report said `tokenbrake trimmed 1 of them`.** An arm
+running with no hooks at either scope cannot have a trim. Any report whose trim line disagrees with the
+arm's configuration is a report of a different session, and that check costs nothing.
+
+The likely mechanism is Windows file modification times: a transcript being written by a live process can
+carry a stale mtime until the handle is flushed, so a session that finished an hour ago can look newer than
+the one running now. That is a property of the platform rather than of the format, and the cloud rounds
+never hit it.
+
+What follows for the protocol: an arm's step-12 report stays in the task, because producing a large tool
+result is part of the workload being measured, but **its header is not the record**. The record is
+`report --session=<id>` run from the shell after the session is closed, with the id taken from
+`report --all` — the newest row carrying the repository's path — and confirmed against the arm's
+configuration by the trim line. The runbook says so now.
+

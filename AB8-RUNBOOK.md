@@ -193,6 +193,14 @@ npx --yes tokenbrake@0.2.3 report --all
 npx --yes tokenbrake@0.2.3 report --session=<the 8 characters> --top=8 > arm1-off-report.txt
 ```
 
+**Do not trust the session id printed by step 12.** `report` with no `--session` opens the newest transcript
+on disk, and on Windows a live session's transcript can have a stale modification time, so the report an arm
+runs *inside itself* can describe a different session entirely. It has happened twice: once giving a false
+alarm, once giving plausible wrong numbers that would have gone straight into the table. Find the id from
+`report --all` after closing the session — the arm is the newest row with this repository's path — and
+sanity-check the arm you think it is: **the off arm must say `tokenbrake trimmed none`**, and the
+tokenbrake arm must say it trimmed something. An off arm with a trim is the wrong session, full stop.
+
 **This last report, not the one from step 12, is the number that goes in the table.** Step 12 runs while the
 session is still going, so it prices and counts the session as it stood at that moment — it misses the
 requests that came after. Run from PowerShell once the session is closed, the same command reads the
