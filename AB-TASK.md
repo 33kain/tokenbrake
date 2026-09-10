@@ -1736,3 +1736,51 @@ hardcodes `6000` and `2000` where the worker uses named constants, so drift ther
 `build.mjs`; and three faults in the task that the next round fixes. It is one run. It is not a number for
 the README yet.
 
+
+## An outside test plan, reviewed — 2026-09-10
+
+A test plan for tokenbrake arrived from outside the project: four phases, vitest, assertions against
+`processCommandOutput`, `compressCodeFile` and `optimizeForClaude` in `src/backend/index.js`. **None of
+those exist.** tokenbrake is one `guard.js`, two hooks, no dependencies, no backend, no proxy and no
+`src/`; the suite is a hand-rolled `test.mjs`, not vitest; and the model id it counts tokens against,
+`claude-3-5-sonnet-latest`, is two generations stale. Written against a different product.
+
+Its *premises* are another matter. Three of the five are worth having, and two of them were checkable
+against the real guard in a few minutes. Measured, not argued:
+
+| phase | claim | what the guard actually does |
+|---|---|---|
+| 1 | progress bars and ANSI should be stripped | **Gap, confirmed.** A 400-line install log with progress bars kept **65 progress lines and 144 ANSI escape sequences**, spending nearly the whole 6,000-character budget on them. The final status line survived only because it sits in the tail. |
+| 2 | compress function bodies to a skeleton | **Refused, and not only for scope.** See below. |
+| 3 | count tokens with the Anthropic tokenizer; require ≥ 40% savings | Half. The tokenizer instead of chars/4 is a real improvement and is optional work. The ≥ 40% gate is the error this whole page exists to refute. |
+| 4.1 | a stack trace must survive | **Already true.** `Error: Cannot find module 'express'` and three frames survived 400 lines of passing noise, line-numbered as `L203:     at Function…`. |
+| 4.2 | JSON and fenced blocks must not be broken | **Real, and previously unmeasured.** Both fences survived — they are head and tail — and the JSON between them **no longer parses.** |
+
+**Why phase 2 is refused rather than deferred.** Replacing function bodies with `// ... internal logic ...`
+would hand the model a file that looks complete and is not. tokenbrake's Read cap is safe today precisely
+because a capped read is *obviously* partial and `Edit` still needs an exact string match, so a truncated
+view cannot cause a wrong edit; a skeletonised view removes that protection. It is also the output-reduction
+bet the JetBrains benchmark and this page's own `readMaxBytes` round both lost money on. It is not a
+smaller version of what tokenbrake does; it is the thing tokenbrake was built to argue against.
+
+**Why phase 3's gate is refused.** `expect(savings).toBeGreaterThanOrEqual(40)` makes a test fail unless
+output shrinks by 40%. rtk advertises 60–90% output reduction and cost **+7.6%** on the bill at JetBrains.
+A test like that does not measure the tool, it steers it toward the behaviour that loses money. The 30 ms
+processing budget in the same phase is reasonable and worth having; the guard already spends 50–100 ms per
+call on process spawn, which is the number that actually matters and is not what the plan measures.
+
+**What was built from it.** Phase 4.1 and 4.2 are now tests in `test.mjs`, under "what the trim keeps and
+what it breaks". The first pins behaviour that already works so a budget change cannot silently lose it.
+The second **pins a limitation rather than a feature**: it asserts that the JSON does *not* parse, so the
+day someone makes the trim structure-aware the test fails and has to be updated deliberately. Writing the
+first version of those tests, two of my four assertions were wrong about the guard's own output shape — the
+frames come back line-numbered and the gap is marked `[tokenbrake] N lines omitted here`, not with an
+ellipsis — which is its own small argument for probing before asserting.
+
+**What phase 1 becomes.** It is the shape-filter work `LANDSCAPE.md` has had planned since the first week
+and never built: collapse repeated lines with a count, strip ANSI, collapse passing-test lines, compact
+JSON that parses, at a threshold well below `maxChars`. The measurement above is the first evidence that it
+would do anything — 65 progress lines and 144 escape sequences of a single 6,000-character budget. It is a
+guard change, so it ships default-off behind a config flag and is A/B'd before any default moves, which is
+the rule that has governed every other change here.
+
