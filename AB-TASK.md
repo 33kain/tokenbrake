@@ -1185,7 +1185,7 @@ The round is `ab7`, and nulls go in with the same care as anything else.
 
 ### ab7 — the runbook
 
-Lifted out to **[`AB8-RUNBOOK.md`](AB8-RUNBOOK.md)** so it can be read beside a terminal instead of
+Lifted out to **[`AB-RUNBOOK.md`](AB-RUNBOOK.md)** so it can be read beside a terminal instead of
 scrolled to through this file. It is self-contained: the commands per arm, the audit text, the checks, and
 the table to fill in. It is the only document needed to run the round; this page is what the result comes
 back to.
@@ -1417,4 +1417,181 @@ not cost the 10% the `readMaxBytes` round did, and it did not save anything eith
 run on a real machine rather than in a container, and the tightest agreement between arms yet measured.
 Across ab4, ab5, ab7 and ab8 — Opus 5, Fable 5.1 in the cloud and Fable 5.1 on Windows — 0.2.3 has not
 shown a saving on the read-heavy audit, and every arm of every round has given identical answers.
+
+
+## Real sessions, everything recorded so far — n=3, 2026-09-10
+
+The Saturday plan asked for a week of ordinary sessions with median, min and max. The inventory found eight
+files that are not eight sessions: `ced42a1a` appears three times as one session reported while it grew
+(421, 505, 617 requests — the last is used), `acb853e1` is an ab7 A/B arm, and `c5ad7352` and `ca84ebdd`
+ran outside `33kain/contexa`. Three ordinary contexa sessions remain, and one of those is five requests
+long. This is the table of what exists, printed as n=3 rather than dressed as a distribution.
+
+| session | requests | entered | carried | trims | kept out | not carried | kept-out / entered | not-carried / carried |
+|---|---|---|---|---|---|---|---|---|
+| `ced42a1a` | 617 | 265k | 31.8M | 10 | 12k | 1.3M | 4.5% | 4.1% |
+| `c905b53d` | 150 | 40k | 3.6M | 4 | 4k | 625k | 10% | 17% |
+| `22afe55e` | 5 | 933 | 2k | 0 | 0 | 0 | 0% | 0% |
+
+**No median is printed and none should be.** Three sessions, one of them trivial, from one repository and
+mostly one author. The honest sentence is "on the two substantial sessions recorded, the guard kept out
+4.5% and 10% of what entered", and that is a smaller claim than the plan expected to make.
+
+**And the larger caveat, which was not anticipated: every one of these files predates the guard that
+ships.** `c905b53d`'s four trims are visible in its own report — `sed -n '1,110p'
+publishing/website/index.html` trimmed from 3k to 2k, `sed -n '120,420p' publishing/website/site.css` from
+2k to 1k. Those are file excerpts, and **0.2.3 stopped trimming file excerpts**: it treats them as reads,
+because ab3 showed that trimming them taught the model to read in eighty-line chunks and cost twice the
+no-hook bill. So the 10% and 17% in that row are a saving the current guard would not produce, from a
+behaviour deliberately removed. `ced42a1a`'s ten trims are from the same period and may be the same shape;
+its report does not say which.
+
+**What that leaves.** The table describes a guard that no longer exists. It is published because the
+numbers are real and were collected honestly, and because a table showing that the recorded evidence does
+not apply to the shipping version is worth more than no table. What it means practically is that the
+real-session evidence for 0.2.3 is **zero sessions**, and that collecting it starts now: contexa's
+`CLAUDE.md` pinned the report to 0.2.3 on 2026-09-09, and 0.2.4 adds the `Read caps fired` line the
+`readMaxBytes` decision needs. A table worth a median needs eight or nine sessions recorded from here on.
+
+**The post's paragraph, to replace the `[TABLE]` slot**, says exactly this and no more:
+
+> On real sessions the evidence is thin and I would rather say so than pad it. Three ordinary sessions on
+> one repository have left a report behind: 617 requests, 150, and 5. On the two substantial ones the
+> hook kept 4.5% and 10% of entering tokens out of context. Both were recorded under a guard version that
+> trimmed file excerpts — a behaviour I removed in 0.2.3 after measuring that it taught the model to read
+> in eighty-line chunks and doubled the bill on one task — so even those two numbers describe something
+> that no longer ships. The honest state of real-session evidence for the current version is zero
+> sessions, and collecting it is what `tokenbrake report` is for. Run it on your own last session; that
+> number is the one that matters to you, and it is the only one I would act on.
+
+
+## The twelve-step audit was measuring a hook that never ran — the diagnosis, 2026-09-10
+
+The owner's complaint about the audit task is right, and the reason is worse than "the questions are easy".
+
+**In ab8, both arms reported `Under the trim threshold: 10 of 10 shell results`.** Every shell result on
+both arms was under 6,000 characters. The PostToolUse trim — the guard's main feature, the thing the
+package is named for — **fired zero times, on both arms, in a $9 experiment.** The Read cap fired once and
+the file came in through another door. So the round measured the cost of running two hooks that did
+nothing, which is why it produced half a percent, and why every round before it hovered around zero for
+the same reason nobody checked.
+
+Three properties of the task cause it, and all three are fixable:
+
+1. **It forbids the saving by construction.** Steps that say "read X in full" mean the model must see the
+   whole file, so anything the cap withholds it fetches again. This was noticed once, in the `readMaxBytes`
+   round, and written down there — "a task that says read in full forbids the behaviour change by
+   construction" — and then the same task went on being used for five more rounds.
+2. **Nothing produces large output.** `node build.mjs` prints 283 characters. The greps the task asks for
+   print two or three thousand. The only step over the threshold is `npm test`, at 50,520 characters on
+   this repository, which is *above* Claude Code's own ~30,000-character ceiling — so it is persisted and
+   previewed, and the hook's replacement is never applied. There is no step in the twelve where the trim
+   can act.
+3. **Nothing fails and nothing depends on anything.** `PostToolUseFailure` is never reached. And every step
+   is independent, which is what let ab7's arm run them in parallel and void the round; the fix there was
+   an instruction, where the task's own shape should have made batching impossible.
+
+**Measured on this repository, at commit `338053f`, so the replacement can be built on facts:**
+
+| command | characters | exit | what it exercises |
+|---|---|---|---|
+| `cd worker && node test.mjs` | 23,089 | 0 | over the threshold, **under** Claude Code's ceiling — the trim applies |
+| `git log --stat -40` | 23,995 | 0 | same |
+| `grep -rn "brief" extension/ worker/src/` | 17,162 | 0 | same |
+| `sed -n '1,400p' CHANGELOG.md` | 18,074 | 0 | a file excerpt over the threshold — 0.2.3 must leave it alone |
+| the same grep, then a grep that matches nothing | 17,162 | **1** | `PostToolUseFailure` with real output |
+| `npm test` | 50,520 | 0 | above Claude Code's ceiling — persisted, hook ignored |
+| `node build.mjs` | 283 | 0 | nothing |
+| `CHANGELOG.md` as a whole file | 237,608 (≈ 59k tokens) | | Claude Code's Read **refuses** it — the cap's one chance to *help* |
+
+That last row is the one the old task never had. Claude Code's Read tool refuses a file over about 25k
+tokens; `CHANGELOG.md` is more than twice that. Without the hook the model gets an error and must come
+back bounded — a wasted round trip. With the hook the PreToolUse cap rewrites the request before the tool
+runs and hands back 300 lines immediately. **Every round so far has given the Read cap opportunities to
+hurt and none to help.** A benchmark that only measures a feature where it cannot win is not measuring it.
+
+## ab9 — the trace task, written 2026-09-10 before the run
+
+A replacement for the twelve-step audit, built from the measurements above. Same protocol, same two arms,
+same repository at the same commit; the workload is new, so **ab9's numbers do not compare to ab4, ab5 or
+ab8** — it is a new benchmark, and the old one's results stay on this page as what they are.
+
+**What it is designed to do, point by point against the diagnosis.**
+
+- **The trim can fire.** Four steps produce between 17k and 24k characters — over the 6,000 threshold and
+  under Claude Code's ~30,000 ceiling, the band where a hook's replacement is actually delivered. The old
+  task had none.
+- **A step fails with real output.** Step 6 ends in a grep that matches nothing, so the command exits 1
+  with 17k characters already printed. That reaches `PostToolUseFailure`, which no round has exercised
+  with substantial output, and which the ledger records even though Claude Code ignores the replacement.
+- **The Read cap gets a chance to help, not only to hurt.** Step 5 asks for `CHANGELOG.md` whole. Claude
+  Code's Read refuses a file that size; the off arm eats an error and a return trip, the guarded arm is
+  handed 300 lines. If the cap is worth anything anywhere, it is here, and this is the first task that asks.
+- **Batching is impossible by construction, not by instruction.** Steps 1→2→3→4→5 each take their input
+  from the previous step's *answer*. An arm cannot run them in parallel because it does not know what to
+  grep for until the step before has finished. ab7 was voided by an arm that read "do not batch" and
+  batched anyway; this removes the option instead of repeating the request.
+- **The excerpt rule is exercised.** Step 8 is a `sed -n` range of 18k characters — over the trim
+  threshold, and 0.2.3 must pass it through untouched. If a future guard change breaks that, this step
+  catches it on the bill rather than in a unit test.
+
+**The task, to be pasted verbatim, identical on both arms.**
+
+```
+Read-only trace of this repository. Each step depends on the answer to the one before it, so do them strictly in order and do not start a step until the previous one has an answer. Do not modify any file. Run exactly one tool call per turn. At the end write twelve numbered lines, one per step, then paste the output of steps 11 and 12 verbatim.
+
+1. Run `cd worker && node test.mjs`. Report how many checks passed, and the exact text of the last check that ran.
+2. Find that exact check text in worker/test.mjs with grep -n. Report the line number.
+3. Read worker/test.mjs around that line. Name the function in worker/src/index.js that the check is about.
+4. Find that function's definition in worker/src/index.js. Report the line it is defined on, and the constant defined on the line immediately above it, with its value.
+5. Read CHANGELOG.md in full. Report how many of its lines mention the function from step 3, and quote the last such line.
+6. Run `grep -rn "brief" extension/ worker/src/; grep -rn "zzz-not-present" extension/`. Report how many lines the first grep matched and the exit code of the whole command.
+7. Run `git log --stat -40`. Report which file appears on the most changed-file lines in it.
+8. Run `sed -n '1,400p' CHANGELOG.md`. Report how many lines in that excerpt begin with "## ".
+9. Run `grep -rn "<the function from step 3>" extension/ worker/src/ CHANGELOG.md`. Report the match count in each of the three locations separately.
+10. Run `cat .claude/hooks/tokenbrake/guard.js` and quote its first line.
+11. Run `npx --yes tokenbrake@0.2.4 status` and paste its output.
+12. Run `npx --yes tokenbrake@0.2.4 report --top=8` and paste its full output.
+
+Do not write or commit an ab-results/real/ file for this session and do not open a pull request; this is a measurement arm, not an ordinary session.
+```
+
+**Ground truth, computed on `338053f` before either arm runs**, so that two arms agreeing on a wrong
+answer is caught rather than counted:
+
+| step | answer |
+|---|---|
+| 1 | 151 checks; `cleanBrief lives inside the injected helper block` |
+| 2 | 1026 |
+| 3 | `cleanBrief` |
+| 4 | line 634; `const MAX_BRIEF_CHARS = 1800;` on line 633 |
+| 5 | 2 lines; ``from the same twenty. `cleanBrief` is in the injected helper block, so the`` |
+| 6 | 148 matches; exit code 1 |
+| 7 | `CLAUDE.md` |
+| 8 | 19 |
+| 9 | extension/ 18, worker/src/ 5, CHANGELOG.md 2 |
+| 10 | `#!/usr/bin/env node` |
+
+Step 7's answer moves as the repository gains commits; it is fixed within a round because both arms run
+from one commit, and it is not comparable across rounds. Steps 1–6 and 8–10 are stable at that commit.
+
+**Expectation, fixed before the run.** For the first time, not a null. The trim will act on four results
+worth 17k–24k characters each, where every previous round gave it nothing, and the Read cap will act where
+the alternative is an error. If the guard saves anything anywhere, this is the workload where it shows,
+and the honest prediction is a real difference in what enters — entered tokens lower on the guarded arm by
+something like 20k — with requests close to level. If entered falls and requests rise, that is the return
+trip again and the guard is neutral at best on this shape too.
+
+**Decision rule, fixed before the run.** The validity gate first: tool results ÷ requests near 1 on both
+arms and within 1.5 of each other, and identical answers, checked against the ground truth above.
+
+- Entered lower on the guarded arm **and** requests within three **and** cost not worse: the first
+  workload on which this guard demonstrably works. It stays inside this file until a second run on another
+  day reproduces it, and only then does the README get a number.
+- Entered lower and requests four or more higher: the return trip, again, now on a task built to favour
+  the guard. That would be the strongest evidence yet that trimming does not pay on the bill, and it
+  should be said that plainly.
+- Entered level: the guard is not acting even here, and the reason goes in this file before anything else
+  is built.
+- Answers differing from the ground truth on either arm: void, and the answers matter more than the bill.
 
