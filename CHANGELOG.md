@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 — 2026-09-10
 
 - **`report` says whether the Read cap fired, and which half of it.** A capped Read is an ordinary short
   result carrying no marker, so the trim line could never see it and nothing in the report said the cap had
