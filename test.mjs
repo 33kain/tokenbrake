@@ -194,6 +194,16 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = cli(['status', '--project']);
   t('status --project resolves the placeholder and spawns', /PostToolUse spawn test \(node\): ok \(/.test(r.stdout), r.stdout.split('\n').find(l => /PostToolUse spawn/.test(l)));
 
+  /* The other scope carrying the guard while this one does not is the ordinary case — a project install,
+     `status` run without --project — and it runs the guard exactly once. The warning used to fire on the
+     other scope alone and say "runs twice per call", which on the first ab7 arm read as a second install
+     to hunt down. */
+  cli(['uninstall']);
+  r = cli(['status']);
+  t('project scope alone is reported as running once, not as a double install',
+    /installed at project scope instead/.test(r.stdout) && !/runs twice per call/.test(r.stdout),
+    r.stdout.split('\n').find(l => /project scope/.test(l)));
+
   r = cli(['uninstall']);
   const after = JSON.parse(readFileSync(join(CFG, 'settings.json'), 'utf8'));
   t('uninstall removes only our groups', after.hooks.PostToolUse.length === 1 && after.hooks.PostToolUse[0].hooks[0].command === 'echo theirs' && !after.hooks.PreToolUse);
