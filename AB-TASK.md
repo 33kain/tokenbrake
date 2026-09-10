@@ -1910,3 +1910,56 @@ default is still `false`, and none of this reached a real session.
 - **Only then a lower threshold or shape filters on by default.** Correct sequencing and exactly the rule
   this page already runs on. Nothing moves until an A/B moves it.
 
+
+## ab10 — the benchmark, pair 1 (Fable 5.1 [1m], guard 98b3c07)
+
+The benchmark now lives at [33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), private,
+so it can be fixed by commit instead of by hand on one desktop. Every measured arm records the benchmark
+commit beside the guard commit; without both, a number is not reproducible.
+
+### Pre-registration, written before the ON arm
+
+- **Primary expectation: null.** The OFF arm's transcript says the trim has almost nothing to bite on —
+  6 of 8 shell results are under the 6,000-char threshold, the host had already persisted 3 previews, and
+  the results under the threshold account for 5% of carried tokens. Two candidate results is not a lever.
+- **Secondary hypothesis, named in advance.** The model is `claude-fable-5-1[1m]` and **3 of its 7
+  requests crossed 200k input tokens**. On a >200k-context model those requests are billed at
+  long-context rates for the *whole* request. That is a step, not a slope: a guard that pulls a request
+  back under the threshold saves far more than its token count implies, and one that does not saves
+  nothing despite removing the same tokens. On this model the step is plausibly the only mechanism by
+  which the hook can move the bill at all.
+- **Decision rule.** Cost is read only after `prices.json` carries the published long-context rates, on
+  both arms from the same table; until then every figure is a declared lower bound and the aggregate says
+  `COST NOT PRICED` instead of a verdict. `requests_over_threshold` is reported as its own column, per
+  pair. **Moving from 3 to 2 does not confirm the hypothesis if the total stays inside the OFF/OFF band.
+  The band still decides.**
+
+### B-pair1-off — the OFF arm
+
+Session `aac143d4`, 7 requests, 40 tool results, 982k processed (78% cache read), 0 compactions, 2
+recovery reads. **38 / 38, zero critical errors.** Cost is not stated here: it is a lower bound until the
+surcharge is priced.
+
+### What the first run measured was this harness
+
+Three defects, all found by running it once, all recorded in the bench's `results/DEVIATIONS.md`:
+
+1. **The scorer reported 2 / 38 for a perfect answer.** It scanned for the last `{...}` containing the
+   substring `affected` and matched **"unaffected"** inside an evidence object the session wrote to rule
+   out a distractor — then scored that fragment, every field `undefined`, with five critical errors, which
+   under the verdict rule blocks any claim of safe savings. A confident wrong number is worse than a
+   crash: it would have entered the tables as a correctness result and blocked the guard for a reason
+   having nothing to do with the guard. Now the candidate with the most schema keys wins, and an answer
+   carrying none is **refused** (exit 65, `capture_invalid`) rather than scored zero.
+   I first blamed the operator's hand-copied capture. That was wrong, and the hand copy scores 38 / 38 too.
+2. **Cost omitted the long-context surcharge** — see the hypothesis above; the lever was in the part that
+   was not being measured.
+3. **The validity gate would have voided every run.** It failed any run with `tool results ÷ requests`
+   over 2.5; this one measured 5.71. The cap came from ab7/ab8, whose prompt was twelve numbered steps and
+   forced one call per turn. This benchmark deliberately lets the agent batch — batching is recorded as an
+   outcome, not forced — so the cap contradicted the design it was meant to protect. What ab7 caught was
+   *one arm batching and the other not*; that between-arms test stays, as a ratio (`max/min > 1.5`).
+   This is an amendment to a pre-registration after the first session, made with no ON arm in existence,
+   and it is flagged as an amendment wherever the verdict is quoted.
+
+Every one of the three is now covered by a test that fails if the defect returns.
