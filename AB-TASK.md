@@ -1189,3 +1189,24 @@ Lifted out to **[`AB7-RUNBOOK.md`](AB7-RUNBOOK.md)** so it can be read beside a 
 scrolled to through this file. It is self-contained: the commands per arm, the audit text, the checks, and
 the table to fill in. It is the only document needed to run the round; this page is what the result comes
 back to.
+
+Revised 2026-09-10 after its first real use, which went badly and for reasons that were the page's fault:
+
+- It said to confirm rtk with "rtk's own status command" without naming one, because this project has never
+  run rtk. The check is now `type $HOME\.claude\settings.json`, read with your own eyes — the file both
+  tools write to, needing neither tool's CLI, showing every hook whichever installed it.
+- It never said what to keep from an arm before starting the next. There is now an "After each arm" section:
+  save the answer, note the session id, close the session, and run
+  `report --session=<id>` **from the shell**, because step 12's in-session report counts only the requests
+  made before it ran. That file is every row of the record; the record's rows now name the report line each
+  comes from, and the two rows that asked for cache-read and cache-write token counts are gone, since the
+  local report does not print them and only the cloud's session records ever did.
+- tokenbrake is no longer installed and uninstalled between arms at all. `claude/ab7-off` and
+  `claude/ab7-tb` on `33kain/contexa` carry the two configurations, cut from the same commit and differing
+  in `.claude/settings.json` alone, so the arms switch with `git checkout` and rtk is the only thing
+  installed either way. Install and uninstall was the hardest part of the first attempt and most of it was
+  unnecessary.
+
+The general lesson, which belongs with the other methodology findings in `LANDSCAPE.md`: a protocol
+document is not finished when it is correct, it is finished when someone who was not in the room can follow
+it. Every hole above was invisible to its author and cost the first runner an evening.
