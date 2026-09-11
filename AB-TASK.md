@@ -1970,3 +1970,34 @@ Three defects, all found by running it once, all recorded in the bench's `result
    and it is flagged as an amendment wherever the verdict is quoted.
 
 Every one of the three is now covered by a test that fails if the defect returns.
+
+### ab10 result — five paired runs, and the mechanism
+
+Full tables: [tokenbrake-bench `results/RESULTS-TABLES.md`](https://github.com/33kain/tokenbrake-bench/blob/main/results/RESULTS-TABLES.md).
+Sixteen paid sessions, Fable 5.1 [1m], guard `98b3c07`, one day.
+
+The pre-registered rule fired: **COST REDUCTION, median −28.8%, outside the ±18.4% OFF/OFF band.** What
+has to be said in the same breath: **two of the five pooled pairs sit inside that band** (−17.7%, −8.0%),
+the range is −39.5% to −8.0%, and the conservative unpaired reading is **−19.9%**. All sixteen runs are
+from one day and one usage window, and the pre-registration requires a second day before the number is
+quoted. **Nothing is published yet.**
+
+**Correctness: sixteen runs, sixteen 38/38, zero critical errors.** No ON arm made an error its OFF arm
+did not.
+
+Three things the round established that the project did not know before:
+
+- **The saving is in carried tokens, not in the trimmed result.** Median carried 197k (OFF) against 118k
+  (ON). A trimmed result is smaller once and then cheaper in every later request of the session; that
+  compounding is the whole effect. `carried` was already the right column — this is the first evidence
+  that it is the *only* one that matters.
+- **The number of trims does not predict the saving.** Two trims gave −39.0% and −39.5%; seven trims gave
+  −28.8% and −12.5%; three gave −8.0%. Which result is trimmed, and how early, dominates how many.
+  Any future tuning aimed at "trim more" is aimed at the wrong quantity.
+- **The failure mode has been seen.** Pair 5's ON arm ran 9 requests against 6, made 4 recovery reads, and
+  ended with **330,936 carried tokens — more than any run in the experiment, either arm** — for the
+  smallest saving, −8.0%. Every ON arm made more recovery reads than its OFF arm. When the model goes back
+  for what the trim removed, the session lengthens and the saving pays for the recovery.
+
+Also, first time outside a test: **the Read cap fired in every ON run**, one to four times per session.
+ab8 recorded that `readMaxBytes` had never been observed to fire in a real session; that is now false.
