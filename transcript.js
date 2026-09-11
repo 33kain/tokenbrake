@@ -54,6 +54,19 @@ function describe(name, input) {
 /* The identity of a read, for the repeat-reads line: a Read of one path and range, or a shell command that
    only prints one file (cat, sed -n, head, tail). Two results with the same key in the same compaction
    window put the same text into context twice. Anything else has no key and is never called a repeat. */
+/* The file a result came from, when the call names one: a Read's path, or the single path a plain
+   cat/sed/head/tail read. Separate from readKey because a recovery read is the SAME file at a DIFFERENT
+   offset, so it needs the path without the range that readKey deliberately includes. */
+function readFileOf(name, input) {
+  const i = input || {};
+  if (i.file_path) return String(i.file_path);
+  if ((name === 'Bash' || name === 'PowerShell') && typeof i.command === 'string') {
+    const m = /^\s*(?:cat(?: -n)?|sed -n\s+'?[0-9,]+p'?|head(?: -n?\s*\d+)?|tail(?: -n?\s*\d+)?)\s+(\S+)\s*$/.exec(i.command);
+    if (m) return m[1].replace(/^['"]|['"]$/g, '');
+  }
+  return null;
+}
+
 function readKey(name, input) {
   const i = input || {};
   if (name === 'Read' && i.file_path) return `Read ${i.file_path} ${i.offset || 0} ${i.limit || 0}`;
@@ -114,6 +127,7 @@ function parseTranscript(file) {
           name: use.name,
           what: describe(use.name, use.input),
           key: readKey(use.name, use.input),
+          file: readFileOf(use.name, use.input),
           marker: /\[tokenbrake\]/.test(text),   // the guard's replacement is what the model saw
           chars: text.length,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
@@ -231,7 +245,7 @@ function smallResults(parsed) {
 const HOST_CEILING = 30000;
 function reach(parsed, wasTrimmed) {
   const B = () => ({ n: 0, tokens: 0, carried: 0 });
-  const out = { window: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
+  const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
   const add = (b, r) => { b.n++; b.tokens += r.tokens; b.carried += r.carried || 0; };
   const trimmed = new Set(wasTrimmed || []);
   for (const r of parsed.results) {
@@ -239,13 +253,48 @@ function reach(parsed, wasTrimmed) {
     /* A result the guard rewrote is in the window by proof, whatever its delivered size says. Sizes here
        are what the model received, so a trimmed result now measures under the threshold — classifying by
        size alone would put every success in the "untouched" bucket and leave the window empty. */
-    if (trimmed.has(r)) { add(out.window, r); continue; }
+    if (trimmed.has(r)) { add(out.window, r); add(out.acted, r); continue; }
     const shell = r.name === 'Bash' || r.name === 'PowerShell';
     if (!shell) { add(out.nonShell, r); continue; }
     if (r.isError) { add(out.failed, r); continue; }
     if (r.chars >= HOST_CEILING) { add(out.persisted, r); continue; }
     if (r.chars <= TRIM_CHARS) { add(out.under, r); continue; }
-    add(out.window, r);
+    add(out.window, r); add(out.untouched, r);
+  }
+  return out;
+}
+
+/* Money, not token counts. ab10 (AB-TASK.md) measured where a hook's effect actually lands: not in the
+   size of any one result but in `carried` — a result is paid for again in every later request that
+   re-reads it. So price the first appearance once at the cache-write rate and every re-read at the
+   cache-read rate, at the session's own model and at list price. A token count is not a bill, and this
+   package's whole claim is about the bill. */
+function dominantModel(parsed) {
+  const n = {};
+  for (const q of parsed.requests) if (q.model) n[q.model] = (n[q.model] || 0) + 1;
+  let best = null, most = 0;
+  for (const m of Object.keys(n)) if (n[m] > most) { best = m; most = n[m]; }
+  return best;
+}
+function usdOfTokens(first, carriedTotal, price) {
+  if (!price) return null;
+  const later = Math.max(0, (carriedTotal || 0) - (first || 0));
+  return ((first || 0) * price.write + later * price.read) / 1e6;
+}
+const usd = (x) => x == null ? null : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
+
+/* The guard's own cost, and the reason ab10's pair 5 saved only 8%: a trim can send the model back for
+   what was cut. A recovery read is a read of a file this session had already read at a different offset
+   in the same context window — distinct from a repeat read, which returns the same slice again. Every ON
+   arm of ab10 made more of these than its OFF arm. Reporting the saving without this is dishonest. */
+function recoveryReads(parsed) {
+  const windowOf = (r) => parsed.compactions.filter(c => c <= r.afterReq).length;
+  const seen = new Map(); const out = { n: 0, tokens: 0, carried: 0, files: [] };
+  for (const r of parsed.results) {
+    const f = r.file; if (!f) continue;
+    const k = windowOf(r) + '|' + f;
+    if (seen.has(k)) { out.n++; out.tokens += r.tokens; out.carried += r.carried || 0; if (out.files.indexOf(f) < 0 && out.files.length < 5) out.files.push(f); }
+    seen.set(k, r.afterReq);
   }
   return out;
 }
@@ -357,9 +406,12 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
   const trimmed = parsed.results.filter(trimmedOf);
   const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
   const saved = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }, 0);
+  const price = priceOf(dominantModel(parsed));
   if (trimmed.length) {
     const savedCarried = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN) * (r.carriedTurns + 1); }, 0);
-    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ≈ ${kfmt(saved)} tokens kept out, ≈ ${kfmt(savedCarried)} token-reads not carried`);
+    const money = usdOfTokens(saved, savedCarried, price);
+    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ≈ ${kfmt(saved)} tokens kept out, ≈ ${kfmt(savedCarried)} token-reads not carried`
+      + (money == null ? '' : ` — ≈ ${usd(money)} off this session at list price`));
   } else if (ledger.length) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
@@ -401,6 +453,21 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
     if (rc.persisted.n) oor.push(`${rc.persisted.n} past the host's ceiling (persisted, replacement never applied)`);
     if (oor.length) lines.push(`  Out of reach: ${oor.join('; ')} — ≈ ${kfmt(rc.total.carried - rc.window.carried)} carried, ${pct(rc.total.carried - rc.window.carried)}% of all carried`);
     lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` — ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
+    /* What is left on the table, in money. The share of *carried* is the honest weight: ab10 found the
+       count of trims does not predict the saving — two trims beat seven — because which result is cut,
+       and how early, decides how many later requests re-read it. */
+    if (rc.untouched.n) {
+      const left = usdOfTokens(rc.untouched.tokens, rc.untouched.carried, price);
+      lines.push(`  Still within reach: ${rc.untouched.n} result${rc.untouched.n === 1 ? '' : 's'} the guard could have trimmed and did not (≈ ${kfmt(rc.untouched.carried)} carried${left == null ? '' : `, ≈ ${usd(left)}`})`);
+    }
+  }
+
+  /* The guard's own cost, reported next to its saving and never omitted when the saving is shown. */
+  const rec = recoveryReads(parsed);
+  if (rec.n) {
+    const cost = usdOfTokens(rec.tokens, rec.carried, price);
+    lines.push(`  Recovery reads: ${rec.n} — the model came back for more of a file it had already read (≈ ${kfmt(rec.tokens)} tokens re-entered, ≈ ${kfmt(rec.carried)} carried${cost == null ? '' : `, ≈ ${usd(cost)}`})`
+      + (trimmed.length ? ` — some of these are what the trim sent it back for` : ''));
   }
 
   const rep = repeatReads(parsed);
@@ -506,4 +573,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, recoveryReads, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
