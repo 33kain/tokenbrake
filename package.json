@@ -1,6 +1,6 @@
 {
   "name": "tokenbrake",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Claude Code hooks that trim oversized tool output and cap unbounded file reads before they hit your context window, and a report of what ate a session's context. Zero dependencies, Windows-friendly.",
   "repository": {
     "type": "git",
