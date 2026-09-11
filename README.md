@@ -61,6 +61,34 @@ cost. Two debugging rounds and a feature round were flat. The best figure ever r
 of eight on that shape and is not reproducible; the worst, +100%, came from a guard behaviour since
 removed.
 
+**And now the number behind that sentence: two identical sessions without the hook differ by up to 30%
+on the bill.** A 22-session pre-registered benchmark
+([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)) ran a synthetic incident review
+five times with the hook and five times without, plus three OFF-against-OFF control pairs — the same
+configuration on both sides, no hook at all. Those controls came out **5.7%, 18.4% and 30.3% apart**, and
+on tokens entered, **42.6% apart**. The paired runs with the hook showed a median 28.8% lower cost and
+35.7% fewer tool-result tokens, and **both sit inside that noise**. The agent simply reads differently
+every time.
+
+So the honest reading of that round is not that the hook does nothing. It is that **five pairs cannot
+resolve an effect of this size against variation of this size**, and anyone claiming a percentage saving
+from a handful of sessions — this package included — is measuring the agent's mood. The round's own
+verdict flipped from "cost reduction" to "no measurable difference" when the third control was added, and
+both the flip and the flaw found in the rule that caused it are in that repository's `DEVIATIONS.md`.
+
+One thing in that round is sharp rather than inconclusive, and it is the most useful sentence here:
+**tokens entering context fell in every single pair, while tokens *carried* — size times the number of
+later requests that re-read them — fell in only four of six and rose in two, once by 72.6%.** Carried is
+where the money is, since a result is paid for again on every later request. So the hook reliably shrinks
+what enters and does not reliably shrink what is carried: when a trim sends the model back for what was
+cut, the session lengthens and carried climbs past where it started. That is the whole null, in one line.
+(Post-hoc, not pre-registered, and recorded as such.)
+
+What the same 22 runs did establish: **the hook never cost a correct answer.** Every run scored 38 of 38
+against a hidden answer key, with zero critical errors, on a task with more than twenty warning-shaped
+distractors. And **every run with the hook made more recovery reads than its partner without** — the model
+going back for what was cut — which is the mechanism's own price, now reported by `report`.
+
 **Real-session evidence for the current version is zero sessions.** Every `ab-results/real/` file on record
 predates 0.2.3, and the only one showing substantial savings got them from the excerpt trimming that 0.2.3
 removed.
@@ -70,9 +98,13 @@ out, until the first Windows run caught it; and on Windows a live transcript's m
 so `report` run from inside a session picked a different session — twice, once producing plausible wrong
 numbers. Both are fixed and both are recorded.
 
-**The report tells you this about your own sessions.** Since 0.2.5 it prints `Within the guard's reach`,
-`Out of reach` and `Acted on`: how many of your tool results the hooks could ever touch, why the rest are
-beyond them, and what share of your carried context that is. On the session that produced the count above
+**The report tells you this about your own sessions, in dollars.** Since 0.2.5 it prints `Within the
+guard's reach`, `Out of reach`, `Acted on`, `Still within reach` and `Recovery reads`: how many of your
+tool results the hooks could ever touch, why the rest are beyond them, what share of your carried context
+that is, what the trims took off this session's bill at list price, what is left untrimmed and what that
+is worth — and what the model's return trips for trimmed content cost you. The benchmark found the saving
+lives in *carried* tokens rather than in the size of any one result, and that the number of trims does not
+predict it: two trims produced a 39% paired difference where seven produced 12%. On the session that produced the count above
 it read 2 of 450 results, 8% of everything carried, acted on none. No other tool in this space reports its
 own inapplicability, and it is the only number that answers "would this have helped me".
 

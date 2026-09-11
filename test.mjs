@@ -613,6 +613,37 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      result whose text merely mentioned the marker against a window computed from delivered sizes. */
   const acted = (text.match(/Acted on: (\d+) of those — (\d+)%/) || []);
   t('acted-on never exceeds what was reachable', !acted[2] || Number(acted[2]) <= 100, acted[0] || 'no acted line');
+  t('the window splits into what was acted on and what is still available',
+    rc.acted.n + rc.untouched.n === rc.window.n && rc.acted.n === 1 && rc.untouched.n === 1,
+    JSON.stringify({ acted: rc.acted.n, untouched: rc.untouched.n, window: rc.window.n }));
+
+  console.log('\n-- the bill, and the guard\'s own cost');
+  /* ab10 measured that the saving lives in `carried`, so the report has to price a re-read, not a byte. */
+  const px = T.priceOf('claude-opus-5');
+  t('a re-read is priced at the cache-read rate and the first pass at the write rate',
+    Math.abs(T.usdOfTokens(1e6, 3e6, px) - (1 * px.write + 2 * px.read)) < 1e-9,
+    String(T.usdOfTokens(1e6, 3e6, px)));
+  t('carried below the first pass never prices negative', T.usdOfTokens(1e6, 0, px) === 1 * px.write,
+    String(T.usdOfTokens(1e6, 0, px)));
+  t('an unpriced model yields no dollar figure, never a guess', T.usdOfTokens(1e6, 2e6, T.priceOf('some-other-model')) === null);
+  t('the dominant model is the one most requests ran on',
+    T.dominantModel({ requests: [{ model: 'a' }, { model: 'b' }, { model: 'b' }] }) === 'b');
+
+  /* A recovery read is the same file at a different offset — the cost a trim can create. Distinct from a
+     repeat read, which returns the same slice again (ab10 pair 5: 4 recovery reads, the smallest saving). */
+  const recTx = {
+    requests: [{}, {}, {}], compactions: [],
+    results: [
+      { name: 'Read', file: '/a/settle.js', tokens: 100, carried: 300, afterReq: 0 },
+      { name: 'Bash', file: '/a/settle.js', tokens: 50, carried: 100, afterReq: 1 },
+      { name: 'Bash', file: '/a/other.js', tokens: 40, carried: 80, afterReq: 1 },
+      { name: 'Bash', file: null, tokens: 10, carried: 20, afterReq: 2 },
+    ],
+  };
+  const rec = T.recoveryReads(recTx);
+  t('coming back to a file already read counts once, and only for the return',
+    rec.n === 1 && rec.tokens === 50 && rec.carried === 100, JSON.stringify(rec));
+  t('a result naming no file is never a recovery read', rec.files.length === 1 && rec.files[0] === '/a/settle.js', JSON.stringify(rec.files));
 }
 
 /* ---- shape filters, off by default ---------------------------------------

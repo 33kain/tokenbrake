@@ -75,6 +75,20 @@ space hits all three, and none is about any tool's design.
    a hook that works on the write side are different products, and a saving measured on one model is not
    evidence about another. The category's habit of quoting one percentage, model-free, is the thing to
    stop doing first.
+4. **The noise is the same size as every saving anyone advertises.** A 22-session pre-registered benchmark
+   ([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)) ran three OFF-against-OFF
+   control pairs — identical configuration on both sides, no hook anywhere, the same task. They came out
+   **5.7%, 18.4% and 30.3% apart on cost**, and **42.6% apart on tool-result tokens**. The agent reads
+   differently every time, and nothing in the setup varied.
+   That is the number to hold every claim in this category against, this repository's included. A "30%
+   saving" from five paired sessions is indistinguishable from two identical sessions disagreeing with
+   each other, and a claim from one or two sessions is not evidence of anything. The benchmark's own cost
+   verdict flipped from *cost reduction* to *no measurable difference* when the third control was added:
+   the effect did not change, the estimate of the noise did.
+   The lesson is not "measure more". When noise and effect are the same order, extra paired sessions
+   mostly buy a better measurement of the agent's mood. The lever is **variance**: fixed invocations over
+   fixed inputs measure a mechanism reproducibly, and a free-reading agent measures a distribution.
+   Anyone publishing a percentage for this category owes a control pair alongside it.
 
 ## Behind
 

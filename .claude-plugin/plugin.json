@@ -1,7 +1,7 @@
 {
   "name": "tokenbrake",
   "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Two hooks, no dependencies.",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "author": {
     "name": "Mili",
     "url": "https://github.com/33kain"

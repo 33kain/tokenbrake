@@ -1910,3 +1910,137 @@ default is still `false`, and none of this reached a real session.
 - **Only then a lower threshold or shape filters on by default.** Correct sequencing and exactly the rule
   this page already runs on. Nothing moves until an A/B moves it.
 
+
+## ab10 — the benchmark, pair 1 (Fable 5.1 [1m], guard 98b3c07)
+
+The benchmark now lives at [33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), private,
+so it can be fixed by commit instead of by hand on one desktop. Every measured arm records the benchmark
+commit beside the guard commit; without both, a number is not reproducible.
+
+### Pre-registration, written before the ON arm
+
+- **Primary expectation: null.** The OFF arm's transcript says the trim has almost nothing to bite on —
+  6 of 8 shell results are under the 6,000-char threshold, the host had already persisted 3 previews, and
+  the results under the threshold account for 5% of carried tokens. Two candidate results is not a lever.
+- **A secondary hypothesis, raised and then withdrawn before the run.** 3 of the OFF arm's 7 requests
+  crossed 200k input tokens, and I argued that a long-context surcharge — a step rather than a slope —
+  was plausibly the only mechanism by which the hook could move the bill on this model. I had not checked.
+  The pricing page, *Long context pricing*, read 2026-09-10: Claude 4.6 and later bill the full 1M window
+  at standard rates, "a 900k-token request is billed at the same per-token rate as a 9k-token request".
+  **There is no step.** The hypothesis is dead before it cost a session, and the null expectation now
+  stands alone with one fewer route to a saving.
+- **Decision rule.** The OFF/OFF band decides, as always. `requests_over_threshold` is reported per run
+  as context, never as a price. `prices.json` now records, per model and with a verification date,
+  whether the long window bills at standard rates, at a published surcharge, or is unrecorded — and an
+  unrecorded model makes the run a declared lower bound rather than being assumed cheap.
+
+  Base rates were re-checked against the same page: Fable 5.1 $10 in / $50 out / $0.25 cache read (the
+  0.025x multiplier, not 0.1x) / $20 for a 1h cache write. `$5.7349` is the cost of the OFF arm, not a
+  lower bound. At that rate the pre-registered 16 sessions are roughly **$90**, not the $30 I estimated.
+
+### B-pair1-off — the OFF arm
+
+Session `aac143d4`, 7 requests, 40 tool results, 982k processed (78% cache read), 0 compactions, 2
+recovery reads. **38 / 38, zero critical errors.** Cost is not stated here: it is a lower bound until the
+surcharge is priced.
+
+### What the first run measured was this harness
+
+Three defects, all found by running it once, all recorded in the bench's `results/DEVIATIONS.md`:
+
+1. **The scorer reported 2 / 38 for a perfect answer.** It scanned for the last `{...}` containing the
+   substring `affected` and matched **"unaffected"** inside an evidence object the session wrote to rule
+   out a distractor — then scored that fragment, every field `undefined`, with five critical errors, which
+   under the verdict rule blocks any claim of safe savings. A confident wrong number is worse than a
+   crash: it would have entered the tables as a correctness result and blocked the guard for a reason
+   having nothing to do with the guard. Now the candidate with the most schema keys wins, and an answer
+   carrying none is **refused** (exit 65, `capture_invalid`) rather than scored zero.
+   I first blamed the operator's hand-copied capture. That was wrong, and the hand copy scores 38 / 38 too.
+2. **Long-context billing was asserted, not checked.** `measure.mjs` printed "list price WITHOUT
+   long-context surcharge", wording that claims a surcharge exists, against a page that says the opposite.
+   Now `prices.json` carries the answer per model with a date and a source, and the three-state
+   distinction that matters: priced, surcharged, or *unrecorded and therefore a declared lower bound*.
+   An unknown is never quietly treated as standard — the same error as this one, made cheaply.
+3. **The validity gate would have voided every run.** It failed any run with `tool results ÷ requests`
+   over 2.5; this one measured 5.71. The cap came from ab7/ab8, whose prompt was twelve numbered steps and
+   forced one call per turn. This benchmark deliberately lets the agent batch — batching is recorded as an
+   outcome, not forced — so the cap contradicted the design it was meant to protect. What ab7 caught was
+   *one arm batching and the other not*; that between-arms test stays, as a ratio (`max/min > 1.5`).
+   This is an amendment to a pre-registration after the first session, made with no ON arm in existence,
+   and it is flagged as an amendment wherever the verdict is quoted.
+
+Every one of the three is now covered by a test that fails if the defect returns.
+
+### ab10 result — five paired runs, and the mechanism
+
+Full tables: [tokenbrake-bench `results/RESULTS-TABLES.md`](https://github.com/33kain/tokenbrake-bench/blob/main/results/RESULTS-TABLES.md).
+Sixteen paid sessions, Fable 5.1 [1m], guard `98b3c07`, one day.
+
+The pre-registered rule fired **COST REDUCTION, median −28.8%, outside the ±18.4% band** — and then a
+third control pair, pre-registered hours later with the rule that it counts whichever way it falls, came
+out at ±30.3% and **retracted it**. The standing verdict is **NO MEASURABLE COST DIFFERENCE: the paired
+median sits inside the control band; tool-result tokens entered fell −35.7%; a token reduction without a
+cost reduction, reported as exactly that.**
+
+Reading that result exposed a flaw in the band itself. It was defined as the **maximum** control
+difference, and a maximum grows with sample size — the three controls went 5.7%, 18.4%, 30.3%, each
+larger than the last — so the band widens forever and any effect eventually vanishes, real or not. Under
+the **median** of the same three controls the band is ±18.4% and the verdict would be COST REDUCTION.
+The statistic decides the answer, and the flaw was noticed only when it cost the result. Round 1 is not
+re-scored: it stands under the rule in force when its sessions were paid for. A median band over at least
+four controls is pre-registered for round 2, before any round-2 session exists. Against the
+±30.3% band, four of the five pooled pairs are inside it; the range is −39.5% to −8.0%; the unpaired
+reading is −19.9% and also inside. All twenty-two runs are from one day and one usage window.
+**Nothing is published.**
+
+**What does not depend on the band: tool-result tokens entered fell between 19% and 62% in every pair,
+median −35.7%. And twenty-two runs, twenty-two 38/38, zero critical errors.** No ON arm made an error its OFF arm
+did not.
+
+Three things the round established that the project did not know before:
+
+- **The saving is in carried tokens, not in the trimmed result.** Median carried 197k (OFF) against 118k
+  (ON). A trimmed result is smaller once and then cheaper in every later request of the session; that
+  compounding is the whole effect. `carried` was already the right column — this is the first evidence
+  that it is the *only* one that matters.
+- **The number of trims does not predict the saving.** Two trims gave −39.0% and −39.5%; seven trims gave
+  −28.8% and −12.5%; three gave −8.0%. Which result is trimmed, and how early, dominates how many.
+  Any future tuning aimed at "trim more" is aimed at the wrong quantity.
+- **The failure mode has been seen.** Pair 5's ON arm ran 9 requests against 6, made 4 recovery reads, and
+  ended with **330,936 carried tokens — more than any run in the experiment, either arm** — for the
+  smallest saving, −8.0%. Every ON arm made more recovery reads than its OFF arm. When the model goes back
+  for what the trim removed, the session lengthens and the saving pays for the recovery.
+
+Also, first time outside a test: **the Read cap fired in every ON run**, one to four times per session.
+ab8 recorded that `readMaxBytes` had never been observed to fire in a real session; that is now false.
+
+### ab10 closed — what $75 and twenty-two sessions bought
+
+Tokens were then tested as a second endpoint, beside the cost result and against a band built the same
+way. They did not rescue it: `entered` −35.7% against a ±42.6% band, **inside**; `carried` −45.5% against
+±44.9%, outside by 0.6 points on the estimator already recorded as unsound, with a range reaching
+**+72.6%** — one pair whose ON arm carried most of all.
+
+**The finding is not that the hook does nothing. It is that this experiment cannot tell.**
+
+Two identical OFF sessions — same fixtures, same prompt, no guard — differ by up to **30.3% in cost** and
+**42.6% in tokens entered**. The agent reads differently every time, and that variation is the same size
+as the effect. Five pairs cannot resolve a difference of that size against noise of that size.
+
+That is worth more than either verdict this round produced, because it says what to do next: **not more
+sessions of the same kind.** When noise and effect are the same order, extra pairs mostly measure the
+agent's mood. The lever is variance, and cutting it is exactly what Experiment A already does — fixed
+invocations, fixed fixtures, no freedom for the agent, the mechanism measured directly.
+
+So the defensible shape, today, with no further spend:
+
+- **Mechanism (Experiment A):** the guard rewrites specific outputs by measured amounts, reproducibly,
+  with no session noise. This is what the package may claim.
+- **Natural task (Experiment B):** the effect on a real session is not separable from the difference
+  between two identical sessions without the guard. Nothing about cost may be quoted.
+- **Correctness:** twenty-two runs, twenty-two 38/38, zero critical errors.
+
+The day-2 replication is **withdrawn as designed**. Fourteen more sessions of a design that has just
+demonstrated it lacks the power would buy a second inconclusive result at twice the price. A round 2, if
+there is one, changes the design first: a lower-variance endpoint, a task that constrains reading, or a
+model whose pricing puts more weight on what the hook actually moves.

@@ -1,6 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.2.5 — 2026-09-11
+
+- **`report` says what the guard did to the bill, and what the mechanism cost.** Four lines gain money,
+  priced at the session's own model and at list rate, with the first appearance of a result paid once at
+  the cache-write rate and every later re-read at the cache-read rate: the trim line ends with what it
+  took off the session; `Still within reach` names what the guard could have trimmed and did not, weighted
+  by carried tokens rather than by size; and a new `Recovery reads` line counts the model coming back for
+  more of a file it had already read, with its cost. A model with no published rate yields no figure
+  rather than a guess.
+  The benchmark is why. It measured that the saving lives in `carried` — a result is paid for again in
+  every later request that re-reads it — that the number of trims does not predict it (two trims produced
+  a 39% paired difference where seven produced 12%), and that **every run with the guard made more
+  recovery reads than its partner without**. Showing a saving without the cost that produced it would be
+  dishonest, so the two lines now sit together.
+- **A 22-session pre-registered benchmark says no cost saving may be quoted, and says why.**
+  [33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench): five paired runs and three
+  OFF-against-OFF control pairs on a synthetic incident review. The controls — identical configuration on
+  both sides, no hook anywhere — came out **5.7%, 18.4% and 30.3% apart on cost** and **42.6% apart on
+  tokens entered**. The paired runs' 28.8% lower cost and 35.7% fewer tokens both sit inside that noise.
+  The round's verdict flipped from *cost reduction* to *no measurable difference* when the third control
+  was added, and the flip is recorded rather than smoothed.
+  The sharp part of the round: **tokens entering context fell in every pair, while tokens *carried* fell
+  in only four of six and rose in two, once by 72.6%.** Carried is where the money is, so the hook
+  reliably shrinks what enters and does not reliably shrink what is paid for again on every later
+  request — a trim that sends the model back for what was cut lengthens the session past where it
+  started. What the same runs did establish: **22 runs, 22 scores of 38 of 38 against a hidden answer key,
+  zero critical errors.** The hook never cost a correct answer.
 
 - **`report` now says what the guard could ever have acted on, not only what it did.** Three lines:
   `Within the guard's reach` (shell, exit 0, over the trim threshold and under Claude Code's own inline
