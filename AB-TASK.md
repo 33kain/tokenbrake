@@ -2013,3 +2013,34 @@ Three things the round established that the project did not know before:
 
 Also, first time outside a test: **the Read cap fired in every ON run**, one to four times per session.
 ab8 recorded that `readMaxBytes` had never been observed to fire in a real session; that is now false.
+
+### ab10 closed — what $75 and twenty-two sessions bought
+
+Tokens were then tested as a second endpoint, beside the cost result and against a band built the same
+way. They did not rescue it: `entered` −35.7% against a ±42.6% band, **inside**; `carried` −45.5% against
+±44.9%, outside by 0.6 points on the estimator already recorded as unsound, with a range reaching
+**+72.6%** — one pair whose ON arm carried most of all.
+
+**The finding is not that the hook does nothing. It is that this experiment cannot tell.**
+
+Two identical OFF sessions — same fixtures, same prompt, no guard — differ by up to **30.3% in cost** and
+**42.6% in tokens entered**. The agent reads differently every time, and that variation is the same size
+as the effect. Five pairs cannot resolve a difference of that size against noise of that size.
+
+That is worth more than either verdict this round produced, because it says what to do next: **not more
+sessions of the same kind.** When noise and effect are the same order, extra pairs mostly measure the
+agent's mood. The lever is variance, and cutting it is exactly what Experiment A already does — fixed
+invocations, fixed fixtures, no freedom for the agent, the mechanism measured directly.
+
+So the defensible shape, today, with no further spend:
+
+- **Mechanism (Experiment A):** the guard rewrites specific outputs by measured amounts, reproducibly,
+  with no session noise. This is what the package may claim.
+- **Natural task (Experiment B):** the effect on a real session is not separable from the difference
+  between two identical sessions without the guard. Nothing about cost may be quoted.
+- **Correctness:** twenty-two runs, twenty-two 38/38, zero critical errors.
+
+The day-2 replication is **withdrawn as designed**. Fourteen more sessions of a design that has just
+demonstrated it lacks the power would buy a second inconclusive result at twice the price. A round 2, if
+there is one, changes the design first: a lower-variance endpoint, a task that constrains reading, or a
+model whose pricing puts more weight on what the hook actually moves.
