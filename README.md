@@ -76,6 +76,14 @@ from a handful of sessions — this package included — is measuring the agent'
 verdict flipped from "cost reduction" to "no measurable difference" when the third control was added, and
 both the flip and the flaw found in the rule that caused it are in that repository's `DEVIATIONS.md`.
 
+One thing in that round is sharp rather than inconclusive, and it is the most useful sentence here:
+**tokens entering context fell in every single pair, while tokens *carried* — size times the number of
+later requests that re-read them — fell in only four of six and rose in two, once by 72.6%.** Carried is
+where the money is, since a result is paid for again on every later request. So the hook reliably shrinks
+what enters and does not reliably shrink what is carried: when a trim sends the model back for what was
+cut, the session lengthens and carried climbs past where it started. That is the whole null, in one line.
+(Post-hoc, not pre-registered, and recorded as such.)
+
 What the same 22 runs did establish: **the hook never cost a correct answer.** Every run scored 38 of 38
 against a hidden answer key, with zero critical errors, on a task with more than twenty warning-shaped
 distractors. And **every run with the hook made more recovery reads than its partner without** — the model

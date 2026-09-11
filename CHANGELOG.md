@@ -20,9 +20,13 @@
   both sides, no hook anywhere — came out **5.7%, 18.4% and 30.3% apart on cost** and **42.6% apart on
   tokens entered**. The paired runs' 28.8% lower cost and 35.7% fewer tokens both sit inside that noise.
   The round's verdict flipped from *cost reduction* to *no measurable difference* when the third control
-  was added, and the flip is recorded rather than smoothed. What the same runs did establish: **22 runs,
-  22 scores of 38 of 38 against a hidden answer key, zero critical errors.** The hook never cost a correct
-  answer.
+  was added, and the flip is recorded rather than smoothed.
+  The sharp part of the round: **tokens entering context fell in every pair, while tokens *carried* fell
+  in only four of six and rose in two, once by 72.6%.** Carried is where the money is, so the hook
+  reliably shrinks what enters and does not reliably shrink what is paid for again on every later
+  request — a trim that sends the model back for what was cut lengthens the session past where it
+  started. What the same runs did establish: **22 runs, 22 scores of 38 of 38 against a hidden answer key,
+  zero critical errors.** The hook never cost a correct answer.
 
 - **`report` now says what the guard could ever have acted on, not only what it did.** Three lines:
   `Within the guard's reach` (shell, exit 0, over the trim threshold and under Claude Code's own inline
