@@ -1976,13 +1976,25 @@ Every one of the three is now covered by a test that fails if the defect returns
 Full tables: [tokenbrake-bench `results/RESULTS-TABLES.md`](https://github.com/33kain/tokenbrake-bench/blob/main/results/RESULTS-TABLES.md).
 Sixteen paid sessions, Fable 5.1 [1m], guard `98b3c07`, one day.
 
-The pre-registered rule fired: **COST REDUCTION, median −28.8%, outside the ±18.4% OFF/OFF band.** What
-has to be said in the same breath: **two of the five pooled pairs sit inside that band** (−17.7%, −8.0%),
-the range is −39.5% to −8.0%, and the conservative unpaired reading is **−19.9%**. All sixteen runs are
-from one day and one usage window, and the pre-registration requires a second day before the number is
-quoted. **Nothing is published yet.**
+The pre-registered rule fired **COST REDUCTION, median −28.8%, outside the ±18.4% band** — and then a
+third control pair, pre-registered hours later with the rule that it counts whichever way it falls, came
+out at ±30.3% and **retracted it**. The standing verdict is **NO MEASURABLE COST DIFFERENCE: the paired
+median sits inside the control band; tool-result tokens entered fell −35.7%; a token reduction without a
+cost reduction, reported as exactly that.**
 
-**Correctness: sixteen runs, sixteen 38/38, zero critical errors.** No ON arm made an error its OFF arm
+Reading that result exposed a flaw in the band itself. It was defined as the **maximum** control
+difference, and a maximum grows with sample size — the three controls went 5.7%, 18.4%, 30.3%, each
+larger than the last — so the band widens forever and any effect eventually vanishes, real or not. Under
+the **median** of the same three controls the band is ±18.4% and the verdict would be COST REDUCTION.
+The statistic decides the answer, and the flaw was noticed only when it cost the result. Round 1 is not
+re-scored: it stands under the rule in force when its sessions were paid for. A median band over at least
+four controls is pre-registered for round 2, before any round-2 session exists. Against the
+±30.3% band, four of the five pooled pairs are inside it; the range is −39.5% to −8.0%; the unpaired
+reading is −19.9% and also inside. All twenty-two runs are from one day and one usage window.
+**Nothing is published.**
+
+**What does not depend on the band: tool-result tokens entered fell between 19% and 62% in every pair,
+median −35.7%. And twenty-two runs, twenty-two 38/38, zero critical errors.** No ON arm made an error its OFF arm
 did not.
 
 Three things the round established that the project did not know before:
