@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.7 — 2026-09-12
 
 - **`report` says where you actually read, which is the only evidence that can set `readLimitLines`.**
   When the model asks for a *range* — a `Read` with an `offset`, a `sed -n '320,345p'` — it has said where
@@ -140,11 +140,35 @@
   mechanism is essentially absent on that person's work, at or above 20% it is present and worth having, and
   between them there is a number and no claim. Under 10 sessions or 200 shell results it prints **no verdict**
   rather than a number that looks like one.
+  **What it returned on the machine it was built for: no verdict.** The guard was recording in 8 of 40 sessions
+  on disk, against a minimum of 10 fixed before the run -- so the numbers are printed and the claim is not.
+  Over those 8: 4.4% of carried tokens sat in the window, and the guard reached 22% of the carried tokens it
+  could have. Two corrections to how that was read, both caught before either became a finding: the first
+  version pooled all 40 sessions on disk and reported **16.5%**, averaging in 32 sessions the guard was never
+  installed in -- where "untouched" means absent, not inert -- and one line below that fix the per-tool table
+  was still pooling all 40 while the verdict came from 8. The scoring of the prediction was retracted, not the
+  prediction. The suspicion the number points at stays unresolved and written down rather than settled: 0.2.6's
+  excerpt exemption may have taken most of the guard's reach, because a `sed` range is exactly what it exempted.
 
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a
   trimmed result is unchanged, because that text goes to the model as JSON, not to a console.
+
+- **One event is counted once when two installs logged it twice.** A guard installed at both user and project
+  scope runs twice on every call, so the ledger holds two rows for one trim and `--ledger`'s totals -- results
+  trimmed, characters removed, reads capped -- read double. Rows carrying a `tool_use_id` now dedupe on
+  `(session, id)`, and the number dropped is printed with its reason instead of folded in. Rows written before
+  the guard recorded ids keep their old behaviour: a row that cannot be matched is not guessed at.
+  Not a corner case on this project -- `.claude/settings.json` is a project-scope install and the owner now
+  runs a user-scope one beside it, so every session in this repository logs each event twice.
+
+- **`status` says when the installed guard is not the one this checkout ships.** `init` *copies* `guard.js` into
+  the hooks directory and nothing kept the copy in step afterwards; the suite pinned only the project-scope
+  copy. The failure that allows is silent, and it is a measurement failure rather than a crash: the ledger
+  records what the installed copy did while the report reads it as this checkout's guard, so a number comes out
+  of two different programs. `status` now hashes the installed copy against `guard.js` and prints either that it
+  matches or `STALE` with both hashes and the one command that fixes it.
 
 ## 0.2.6 — 2026-09-12
 

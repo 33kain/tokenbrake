@@ -188,6 +188,7 @@ npx tokenbrake report --top=25            # widen the ranking
 npx tokenbrake report --where             # where your ranged reads land -- the evidence for readLimitLines
 npx tokenbrake report --caps              # every file the Read cap fired on
 npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
+npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -220,6 +221,15 @@ prints how many of your reads each candidate trigger would catch, how much of ea
 withhold, and how deep your targets sit **as a share of the file**, which is what says whether an absolute
 line cap is even the right shape. The withholding is arithmetic and exact; whether the model comes back for
 what a cap withheld is behavioural, is not in any transcript, and the report says so.
+
+`--reach` asks a different question from the other three: not what a knob should be, but whether the mechanism
+has anything to do on your work at all. It reports what share of your **carried** tokens sits where the trim can
+act -- a shell result, exit 0, over `maxChars`, under Claude Code's inline ceiling -- and names the tools that put
+results there, grouped by the program invoked rather than by the command string. Handed a CLI that can slice a
+log, a model slices and the trim has nothing to rewrite; handed tools that only dump, it has plenty. Which of
+those your work looks like is not a thing to reason about either. It counts only sessions the guard was actually
+recording in, because in a session without it "untouched" means the guard was absent rather than idle, and under
+10 such sessions or 200 shell results it prints no verdict instead of a number that looks like one.
 
 ## Against Claude Code's compaction
 

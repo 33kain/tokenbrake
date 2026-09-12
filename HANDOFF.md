@@ -523,7 +523,7 @@ strength". The three things worth carrying forward:
   the trigger starts capping files whose target is past the cap more often than not.
 
 `report --where` and `report --caps` are the tools that produced all of this and they are the shipped answer to
-"where do my files keep what the model wants" — per person, from their own sessions. Both under `## Unreleased`.
+"where do my files keep what the model wants" — per person, from their own sessions. Both shipped in 0.2.7.
 
 **One method note that cost a wrong prediction.** I predicted the confound would be large and it was 2.7%,
 because I took round 1's one-to-four caps per run as the rate on real work. Round 1 is the benchmark. The
@@ -667,6 +667,25 @@ Two things to remember while that accumulates:
   `--ledger` all dedupe, and `status` reports the overlap. `status` also now hashes the installed copy against
   this checkout's `guard.js` and says **STALE** when they differ: `init` copies the guard and nothing keeps the
   copy in step, and a stale copy would answer the reach question about the wrong guard.
+
+## 0.2.7 is cut — 2026-09-12
+
+Ten entries, all of them read-side, plus one log-only guard change. `package.json`, `.claude-plugin/plugin.json`
+and `.claude-plugin/marketplace.json` are at 0.2.7 and the suite pins the three to each other, so a forgotten
+one fails the build rather than shipping a plugin that reports a version the package does not have.
+
+**What is in it:** the four report views that set the Read cap's knobs from a person's own sessions (`--where`,
+`--caps`, `--reads`, `--reach`), the confound correction that made `--where` usable, the line-numbering
+subtraction that made `--reads` size files correctly, the off-the-end length source, the `read-whole` ledger
+row, the double-install dedupe, the `status` staleness check and the ASCII conversion.
+
+**What is not in it:** any change to what the guard trims or caps. No default moved -- `readMaxBytes` stays
+60,000, `readLimitLines` stays 300 with 800 decided and held -- so 0.2.7 owes no A/B and no measurement. The
+guard's only change writes a ledger row and returns exactly as before.
+
+**To publish:** Actions -> `Publish tokenbrake` -> Run workflow. It runs the suite, refuses a version already on
+the registry, and publishes with provenance. Nothing else is needed; the plugin marketplace reads the version
+from the repository, so it follows the merge rather than the npm publish.
 
 ## Then — round 2 on CI logs, and the Saturday table
 
