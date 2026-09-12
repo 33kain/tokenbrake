@@ -459,6 +459,19 @@ a session that reads a 40 KB file once and moves on, where the sweep's 40%
 applies with no return trip. The default stays at 60,000 until a run of that
 shape says otherwise.
 
+**2026-09-12 — the band is measurable now.** That open question could not be
+answered by the benchmark either: its fixtures ran 7, 12, 14, 16, 68 and 144 KB,
+**nothing between 25 and 60 KB**, so both triggers capped the same two files and
+the knob had nothing to move. Two generated sources now sit in the band at 30 KB
+and 45 KB, each with a decisive line past 300, and a `cap-sweep` section runs
+every fixture through `readMaxBytes` × `readLimitLines` recording whether the cap
+fired, how many lines the model receives, and **whether the decisive line is among
+them** — 180 rows, no paid session
+([tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), `results/DEVIATIONS.md`).
+The column that matters is the last one: bytes withheld and answer withheld are
+different numbers, and reading them as one is what made lowering the trigger look
+like a saving before the A/B and a 10% loss after it.
+
 ## Feature round — run 2026-09-07, Opus 5 both arms
 
 The audit is reading without writing and the debugging round is a test loop;
