@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.6 — 2026-09-12
 
 - **The excerpt exemption now survives how models actually write a read.** It exempted a read of one file
   from the trim — because head, tail and error lines are the wrong summary of a range the model had already
