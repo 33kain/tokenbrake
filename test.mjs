@@ -656,6 +656,29 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     rc.acted.n + rc.untouched.n === rc.window.n && rc.acted.n === 1 && rc.untouched.n === 1,
     JSON.stringify({ acted: rc.acted.n, untouched: rc.untouched.n, window: rc.window.n }));
 
+  console.log('\n-- where the model actually reads');
+  /* The only evidence that can settle readLimitLines for a given person, and it comes from their own
+     sessions: when the model asks for a RANGE it has said where it expects to find something. A cap that
+     keeps the first N lines hides the target whenever that start line is past N (AB-TASK.md, "The Read
+     cap's trigger"). `cat` and `head` ask for the top and are not position choices, so they do not count. */
+  const { readTargets } = await import('./transcript.js');
+  const mk = (rows) => ({ results: rows });
+  const tx = mk([
+    { readFrom: 10 }, { readFrom: 46 }, { readFrom: 250 }, { readFrom: 411 }, { readFrom: 820 },
+    { readFrom: null }, { readFrom: null },
+  ]);
+  const tt = readTargets(tx, [300, 500, 800]);
+  t('only ranged reads count as targets', tt.n === 5, JSON.stringify(tt));
+  t('the deepest target is reported, not the average', tt.max === 820, String(tt.max));
+  t('a cap at 300 hides the two targets past it', tt.past[300] === 2, JSON.stringify(tt.past));
+  t('a deeper cap hides fewer, and a target past the cap still counts', tt.past[500] === 1 && tt.past[800] === 1, JSON.stringify(tt.past));
+  t('no targets means no claim', readTargets(mk([{ readFrom: null }]), [300]).n === 0);
+  /* The distinction the line rests on: a range is a position choice, the top of a file is not. */
+  const { readFileOf: _rf } = await import('./transcript.js');
+  const startOf = (cmd) => { const m = /sed\s+-n\s+['"]?(\d+),(\d+)p/.exec(cmd); return m ? Number(m[1]) : null; };
+  t('a sed range is a target at its first line', startOf("sed -n '320,345p' settle.js") === 320);
+  t('cat and head are not position choices', startOf('cat settle.js') === null && startOf('head -n 300 settle.js') === null);
+
   console.log('\n-- the bill, and the guard\'s own cost');
   /* ab10 measured that the saving lives in `carried`, so the report has to price a re-read, not a byte. */
   const px = T.priceOf('claude-opus-5');

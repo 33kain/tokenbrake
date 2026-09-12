@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **`report` says where you actually read, which is the only evidence that can set `readLimitLines`.**
+  When the model asks for a *range* — a `Read` with an `offset`, a `sed -n '320,345p'` — it has said where
+  it expects to find something. A cap keeping the first N lines hides that target whenever the start line
+  is past N, and the model comes back for it. The report now gives the distribution of those start lines
+  and, against the cap you actually run, how often it would have hidden what the model went for.
+  On the session that prompted it: 92 targeted reads, median start line 50, 90th percentile 464, deepest
+  820 — and the default 300-line cap would have hidden the target in **23% of them**, against 10% at 500
+  and 1% at 800. That is a per-person number, and nobody else's default can supply it.
+  Labelled as the inference it is: these reads were already bounded, so the guard never capped them. What
+  they establish is where the model expects to find things, not what the cap did.
+
 ## 0.2.6 — 2026-09-12
 
 - **The excerpt exemption now survives how models actually write a read.** It exempted a read of one file

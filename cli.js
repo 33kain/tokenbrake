@@ -209,7 +209,10 @@ function report() {
   }
   let parsed;
   try { parsed = transcript.parseTranscript(file); } catch (e) { console.log('Could not read ' + file + ': ' + e.message); return; }
-  console.log(transcript.renderReport(parsed, ledger, { top }));
+  /* The report's "Where you read" line compares against the cap the user actually runs, not the default. */
+  let readLimitLines = 300;
+  try { const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8')); if (c.readLimitLines) readLimitLines = c.readLimitLines; } catch {}
+  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
 

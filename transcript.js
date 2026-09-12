@@ -80,6 +80,32 @@ function readFileOf(name, input) {
   return null;
 }
 
+/* The line a ranged read starts at: a Read's `offset`, or the first number of a `sed -n 'A,Bp'`. Only
+   explicit position choices count — `cat` and `head` ask for the top, which says nothing about where the
+   model expected to find anything. This is the empirical answer to the only question that decides whether
+   the Read cap can help a given person: when the model goes looking, how deep into the file does it go? */
+function readStartLine(name, input) {
+  const i = input || {};
+  if (i.file_path && i.offset) return Number(i.offset) || null;
+  if ((name === 'Bash' || name === 'PowerShell') && typeof i.command === 'string') {
+    const m = /sed\s+-n\s+['"]?(\d+),(\d+)p/.exec(i.command);
+    if (m) return Number(m[1]) || null;
+  }
+  return null;
+}
+
+/* Where this session's targeted reads actually landed, and what a cap keeping the first N lines would
+   have withheld. An inference, and labelled as one in the report: these are reads the model ALREADY
+   bounded, which the guard never caps. What they establish is where the model expects to find things —
+   so if it had read unbounded and been capped at N, this is how often it would have had to come back. */
+function readTargets(parsed, caps) {
+  const starts = parsed.results.map((r) => r.readFrom).filter((n) => n != null).sort((a, b) => a - b);
+  const q = (f) => starts.length ? starts[Math.min(starts.length - 1, Math.floor(starts.length * f))] : null;
+  const past = {};
+  for (const n of (caps || [300, 500, 800])) past[n] = starts.filter((x) => x > n).length;
+  return { n: starts.length, median: q(0.5), p90: q(0.9), max: starts.length ? starts[starts.length - 1] : null, past };
+}
+
 function readKey(name, input) {
   const i = input || {};
   if (name === 'Read' && i.file_path) return `Read ${i.file_path} ${i.offset || 0} ${i.limit || 0}`;
@@ -140,6 +166,7 @@ function parseTranscript(file) {
           what: describe(use.name, use.input),
           key: readKey(use.name, use.input),
           file: readFileOf(use.name, use.input),
+          readFrom: readStartLine(use.name, use.input),
           marker: /\[tokenbrake\]/.test(text),   // the guard's replacement is what the model saw
           chars: text.length,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
@@ -386,7 +413,7 @@ const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.rou
 
 /* The report, as lines. Pure: takes parsed data, returns text, so the test can read it without a
    console. `top` is how many results to name. */
-function renderReport(parsed, ledger, { top = 10 } = {}) {
+function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
   carry(parsed);
   const u = usageTotals(parsed);
   const lines = [];
@@ -480,6 +507,18 @@ function renderReport(parsed, ledger, { top = 10 } = {}) {
     const cost = usdOfTokens(rec.tokens, rec.carried, price);
     lines.push(`  Recovery reads: ${rec.n} — the model came back for more of a file it had already read (≈ ${kfmt(rec.tokens)} tokens re-entered, ≈ ${kfmt(rec.carried)} carried${cost == null ? '' : `, ≈ ${usd(cost)}`})`
       + (trimmed.length ? ` — some of these are what the trim sent it back for` : ''));
+  }
+
+  /* The only line here that answers "should I change readLimitLines", and it answers it from this session
+     rather than from a default someone picked. AB-TASK.md, "The Read cap's trigger": readMaxBytes decides
+     WHICH reads get capped, readLimitLines decides how much a capped read withholds — and a cap that
+     withholds what the model was going for buys a return trip that costs more than the cut saved. */
+  const tgt = readTargets(parsed, [readLimitLines, 500, 800].filter((v, i, a) => v && a.indexOf(v) === i).sort((a, b) => a - b));
+  if (tgt.n >= 5) {
+    const pcts = Object.entries(tgt.past).map(([n, k]) => `${n} lines → ${k} (${Math.round(100 * k / tgt.n)}%)`);
+    lines.push(`  Where you read: ${tgt.n} targeted reads, median start line ${tgt.median}, 90th percentile ${tgt.p90}, deepest ${tgt.max}`);
+    lines.push(`  A Read cap keeping the first … would have hidden what the model went for: ${pcts.join('; ')}`);
+    lines.push(`    (inferred: these reads were already bounded, so the guard never capped them — they say where the model expects to find things)`);
   }
 
   const rep = repeatReads(parsed);
@@ -585,4 +624,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
