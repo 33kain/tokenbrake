@@ -404,7 +404,7 @@ function readsReport() {
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
   let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
   const sources = { ledger: 0, ledgerWhole: 0, ledgerPost: 0, numbering: 0, text: 0 };
-  const bySource = { session: 0, ledger: 0, disk: 0 };
+  const bySource = { session: 0, ledger: 0, eof: 0, disk: 0 };
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
     let p;
@@ -496,10 +496,13 @@ function readsReport() {
     + (unresolved ? ', ' + unresolved + ' unresolved and left out' : ''));
   if (depths.length) {
     console.log('    line length known from: ' + bySource.session + ' a whole-file read in the same session, '
-      + bySource.ledger + ' the ledger, ' + bySource.disk + ' the file on disk now (may have changed)');
+      + bySource.ledger + ' the ledger, ' + bySource.eof + ' a read that ran off the end of the file,'
+      + '\n      ' + bySource.disk + ' the file on disk now (may have changed -- excluded from the verdict below)');
     const d2 = { n: depths.length, rows: depths };
     const cv = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length;
       return m ? Math.sqrt(xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1)) / m : null; };
+    /* Exact means the length was established at the time of the read: a whole-file read in the session, a
+       ledger row the guard wrote, or a read that ran off the end. The file on disk today is none of those. */
     const exact = depths.filter(r => r.source !== 'disk');
     const absCV = depths.length > 1 ? cv(depths.map(r => r.start)) : null;
     const frCV = depths.length > 1 ? cv(depths.map(r => r.depth)) : null;

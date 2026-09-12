@@ -537,7 +537,8 @@ Three reads could not be sized. They were checked before the rule was applied, b
 exactly where they could swing the withholding median: all three failed for reasons other than Claude Code's
 size refusal, so they are failures and not large files, and the grid is complete.
 
-**Q2: no verdict.** The rule requires 20 reads whose file length came from an exact source. There is **1** —
+**Q2: no verdict on the first attempt, and the reason was fixable.** The rule requires 20 reads whose file
+length came from an exact source. There was **1** —
 the other 42 lengths were read off disk today, which the rule excludes because a file may have changed since
 the read. The numbers exist (absolute CV 1.21, fractional 1.05, so the fraction is 13% tighter, short of the
 25% the rule demands) and are **not admissible**. The shape question stays open, and the expectation that the
@@ -545,7 +546,19 @@ absolute spread would be tighter is neither confirmed nor refuted: the test did 
 
 Worth a second look, from the inadmissible source and so a lead rather than a finding: target depth is
 **bimodal** — 21 reads in the first 10% of a file, then 15 at 50-60%. Two habits, "read the top" and "read the
-middle", which one cap value cannot serve.
+middle", which one cap value cannot serve. **Caveat added the same day:** that histogram was built from
+disk-today lengths, which are systematically too long because files grow, so every depth in it is too shallow.
+It is a lead about shape, not a measurement of it.
+
+**Two exact sources added afterwards, so the rule can actually run.** First, the guard now writes a
+`read-whole` ledger row for every unbounded Read it does not cap, with the statSync size and a newline count.
+Second, and retroactively over transcripts that already exist: **a read that ran off the end of its file says
+exactly how long that file was.** A `sed -n 'A,Bp'` or an offset+limit `Read` that comes back short ended at
+EOF, and the last delivered line is the file's length. On this repo's transcripts 40 of 163 sed ranges
+qualified; the report's own session went from 1 exact length to 17. A result the guard trimmed is refused
+outright -- it is short because the guard cut it, and without that check every capped read would read as a
+short file, which is the same error that has now been caught five times today and always in the guard's
+favour.
 
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on

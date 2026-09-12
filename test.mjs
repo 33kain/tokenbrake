@@ -901,6 +901,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       readFileSync(ledgerAt, 'utf8').trim().split('\n').length === 1);
     rmSync(dir, { recursive: true, force: true });
   }
+  /* A read that ran off the end of its file says exactly how long that file was, and it was in every
+     transcript already. `sed -n '375,480p'` asking for 106 lines and getting 105 means the file ended at 479.
+     On this repo's own transcripts 40 of 163 sed ranges ran off the end -- against one exact file length in
+     forty-three from every other source combined, which is why the shape question had no evidence. */
+  t('a sed range that ran off the end gives the file\'s exact length',
+    T.eofLength('Bash', { command: "sed -n '375,480p' a.js" }, Array(105).fill('x').join('\n'), false) === 479);
+  t('a Read with offset and limit does the same',
+    T.eofLength('Read', { file_path: 'a.js', offset: 300, limit: 100 }, Array(48).fill('1\tx').join('\n'), false) === 347);
+  t('a range that filled up says only that the file is at least that long, so it says nothing here',
+    T.eofLength('Bash', { command: "sed -n '1,30p' a.js" }, Array(30).fill('x').join('\n'), false) === null);
+  /* The one way this would lie, and it would lie systematically: a result the guard trimmed is short because
+     the guard cut it, not because the file ended -- which would report every capped read as a short file. */
+  t('a result the guard trimmed is refused outright, not read as a short file',
+    T.eofLength('Bash', { command: "sed -n '1,999p' a.js" }, 'x\n[tokenbrake] capped at 300 lines', true) === null);
+  t('a range beginning past the end is a bound, not a length',
+    T.eofLength('Bash', { command: "sed -n '900,910p' a.js" }, '', false) === null);
+  t('an off-the-end length resolves a ranged read, and counts as exact',
+    (() => {
+      const p5 = { cwd: '/w', sessionId: 'w4', requests: [{}], compactions: [], results: [
+        { file: '/w/a.js', whole: false, chars: 10, lines: 5, shape: null, readFrom: 200, askedAt: 1, at: 1, eofAt: 479 },
+        { file: '/w/a.js', whole: false, chars: 10, lines: 5, shape: null, readFrom: 100, askedAt: 2, at: 2, eofAt: null }] };
+      const d5 = T.readDepths(p5, [], { sessionId: 'w4' });
+      return d5.n === 2 && d5.bySource.eof === 2 && d5.exactN === 2 && Math.abs(d5.rows[0].depth - 200 / 479) < 1e-9;
+    })());
   t('a file length from one of those rows resolves a ranged read exactly, instead of off disk today',
     (() => {
       const p3 = { cwd: '/w', sessionId: 'w2', requests: [{}], compactions: [],
