@@ -10,7 +10,7 @@
    that; this file pins the shape so it cannot regress unnoticed. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -869,6 +869,58 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     T.startHistogram([1, 0, 60, 250, 400, 900, 5000]).reduce((n, b) => n + b.n, 0) === 7);
 
   console.log('\n-- what you read whole, and how deep the targets sit');
+  /* The guard now records a whole-file read it did NOT cap. Until it did, the trigger's own evidence was all
+     inference: sizes came from the delivered text, which Claude Code line-numbers, and file lengths were read
+     off disk today -- one ranged read in forty-three could be resolved exactly, so whether the cap should be a
+     line count or a fraction of the file could not be answered at all. This is a log-only change: the guard
+     writes the row and returns, exactly as before, and emits nothing. */
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-whole-'));
+    const small = join(dir, 'small.js');
+    writeFileSync(small, Array.from({ length: 120 }, (_, i) => 'line ' + i).join('\n'));
+    const spawnRead = (env) => spawnSync(process.execPath, ['./guard.js', 'read-pre'],
+      { input: JSON.stringify({ session_id: 'w1', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: small } }),
+        encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir, ...env } });
+    const g1 = spawnRead({});
+    const ledgerAt = join(dir, 'tokenbrake', 'ledger.jsonl');
+    const rows = readFileSync(ledgerAt, 'utf8').trim().split('\n').map(x => JSON.parse(x));
+    t('a whole-file read under the trigger is recorded, with the size statSync saw',
+      rows.length === 1 && rows[0].ev === 'read-whole' && rows[0].bytes === statSync(small).size && rows[0].lines === 119,
+      JSON.stringify(rows[0]));
+    t('recording it changes nothing the model sees: no output, exit 0',
+      g1.stdout === '' && g1.status === 0, JSON.stringify(g1.stdout));
+    /* A bounded read still returns before anything is stat'd, so it must not appear in the ledger either. */
+    const g2 = spawnSync(process.execPath, ['./guard.js', 'read-pre'],
+      { input: JSON.stringify({ session_id: 'w1', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: small, offset: 40 } }),
+        encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    t('a read the model already bounded is still not recorded at all',
+      g2.stdout === '' && readFileSync(ledgerAt, 'utf8').trim().split('\n').length === 1);
+    writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ logAllTools: false }));
+    spawnRead({});
+    t('logAllTools: false keeps it out, like every other non-event row',
+      readFileSync(ledgerAt, 'utf8').trim().split('\n').length === 1);
+    rmSync(dir, { recursive: true, force: true });
+  }
+  t('a file length from one of those rows resolves a ranged read exactly, instead of off disk today',
+    (() => {
+      const p3 = { cwd: '/w', sessionId: 'w2', requests: [{}], compactions: [],
+        results: [{ file: '/w/a.js', whole: false, chars: 10, lines: 5, shape: null, readFrom: 300, askedAt: 1, at: 1 }] };
+      const led = [{ t: 1, ev: 'read-whole', session: 'w2', tool: 'Read', what: '/w/a.js', bytes: 40000, lines: 900 }];
+      const d3 = T.readDepths(p3, led, { sessionId: 'w2' });
+      return d3.rows.length === 1 && d3.rows[0].lines === 900 && d3.rows[0].source === 'ledger' && d3.exactN === 1;
+    })());
+  t('the largest sighting of a file wins, so a file that grew is not measured at its shortest',
+    T.wholeReadIndex([
+      { ev: 'read-whole', session: 'w2', what: '/w/a.js', bytes: 1000, lines: 20 },
+      { ev: 'read-whole', session: 'w2', what: '/w/a.js', bytes: 4000, lines: 90 }], 'w2').byFile.get('/w/a.js').lines === 90);
+  t('a whole-file read takes the ledger size over anything the delivered text can say',
+    (() => {
+      const p4 = { cwd: '/w', sessionId: 'w3', requests: [{}], compactions: [],
+        results: [{ file: '/w/a.js', whole: true, chars: 24132, lines: 352, shape: T.fileShape('1\tx'), readFrom: null }] };
+      const u4 = T.unboundedReads(p4, [{ t: 1, ev: 'read-whole', session: 'w3', what: '/w/a.js', bytes: 22833, lines: 352 }], {});
+      return u4.reads[0].bytes === 22833 && u4.reads[0].source === 'ledger-whole';
+    })());
+
   /* The trigger's half of the question, which is arithmetic and needs no session: how many of a person's
      whole-file reads a lower readMaxBytes would catch, and how much of each a limit would then withhold.
      And the shape question underneath it -- readLimitLines is an absolute line count, but whether it hides

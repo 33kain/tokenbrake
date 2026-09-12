@@ -403,7 +403,7 @@ function readsReport() {
   let reads = [], depths = [];
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
   let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
-  const sources = { ledger: 0, ledgerPost: 0, numbering: 0, text: 0 };
+  const sources = { ledger: 0, ledgerWhole: 0, ledgerPost: 0, numbering: 0, text: 0 };
   const bySource = { session: 0, ledger: 0, disk: 0 };
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
@@ -455,7 +455,8 @@ function readsReport() {
      numbering is its own, not the file's -- 5-6% of the delivered text on a 350-line file, and growing with
      the line count. readMaxBytes is compared against statSync().size, so leaving the numbering in overstates
      every file and overstates long ones most, right at the boundary this grid is about. */
-  console.log('    Sized from: ' + sources.ledger + ' a ledger cap row (statSync, exact), ' + sources.ledgerPost
+  console.log('    Sized from: ' + (sources.ledger + sources.ledgerWhole) + ' a ledger row the guard wrote at the'
+    + ' moment of the read (statSync, exact), ' + sources.ledgerPost
     + ' a ledger post row (a cat the guard capped -- its size before the cap), ' + sources.numbering
     + '\n      the Read\'s own line numbering (subtracted), ' + sources.text + ' the delivered text as-is (an uncapped cat).');
   if (capped) console.log('    ' + capped + ' read(s) the guard had already capped: the delivered text was the cap\'s first N lines,'

@@ -97,6 +97,18 @@
   the result: every read over the trigger is in a guard-less session, so in the 11 sessions where the guard
   *was* running, **not one whole-file read reached 60,000.**
 
+- **The guard now records a whole-file read it did *not* cap, and that is what makes the trigger's evidence
+  stop being an inference.** Until now the ledger held a row only when the cap fired, so on real work almost
+  every size in `report --reads` was derived from the delivered text -- which Claude Code line-numbers, making
+  every file read 5-6% large and the long ones worse -- and `report --where` could establish a file's true
+  length for **one ranged read in forty-three**, the rest coming off disk today, which is why the question of
+  whether the cap should be a line count or a fraction of the file could not be answered at all.
+  `statSync` has already run at that point, so the size is free; the line count costs one read of a file that
+  is under the trigger by definition. Both reports prefer these rows over anything the delivered text can say.
+  **Log-only, and tested as such:** the guard writes the row and returns exactly as before, emits nothing,
+  exits 0; a read the model had already bounded is still not recorded at all, because the guard still returns
+  before it stats anything; and `logAllTools: false` keeps the row out like every other non-event row.
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a
