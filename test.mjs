@@ -359,6 +359,21 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     && /16%.*\/x\.js/.test(r.stdout), r.stdout.split('\n').filter(l => /x\.js|Source files/.test(l)).join(' | '));
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
+  /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code
+     delivers them, so the sizes the grid works from are the files' own and not what the reads cost. */
+  r = run(['--reads']);
+  t('cli: --reads pools the real session and skips the benchmark',
+    /realsess \(/.test(r.stdout) && /benchses\s+benchmark session/.test(r.stdout) && !/benchses \(/.test(r.stdout),
+    r.stdout.split('\n')[0]);
+  t('cli: --reads says where each size came from, because they are not equally good',
+    /Sized from: .*line numbering \(subtracted\)/.test(r.stdout),
+    (r.stdout.match(/Sized from:[^\n]*/) || [])[0]);
+  t('cli: --reads prints the trigger grid and marks the configured readMaxBytes',
+    /<- your readMaxBytes/.test(r.stdout) && /trigger   reads  bytes/.test(r.stdout));
+  t('cli: --reads keeps the miss rate out of the grid and labels it as the other population',
+    /DIFFERENT population from the whole-file reads/.test(r.stdout));
+  t('cli: --reads reports depth as a share of the file, which is the shape question',
+    /How deep the targets sit/.test(r.stdout) && /fraction of file/.test(r.stdout));
   r = run(['--caps', '--session=nope']);
   t('cli: --caps with an unknown session prefix says so', /No session in the ledger starts with "nope"/.test(r.stdout));
   r = run(['--ledger']);
@@ -383,7 +398,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      Nothing pinned the conversion, so this does. The guard's own ellipsis inside a trimmed result is exempt:
      that text goes to the model as JSON, not to a terminal. */
   const nonAscii = (out) => out.split('\n').filter(l => !/^[\x20-\x7e]*$/.test(l));
-  for (const argv of [[], ['--where'], ['--caps'], ['--ledger'], ['--all']]) {
+  for (const argv of [[], ['--where'], ['--caps'], ['--reads'], ['--ledger'], ['--all']]) {
     const o = run(argv);
     t('cli: report ' + (argv.join(' ') || '(default)') + ' prints ASCII only', nonAscii(o.stdout).length === 0,
       nonAscii(o.stdout).slice(0, 2).join(' | '));
@@ -831,6 +846,111 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     T.capBandSpike([300, 301, 302, 305], 300).exact === 2);
   t('the histogram bins every start exactly once',
     T.startHistogram([1, 0, 60, 250, 400, 900, 5000]).reduce((n, b) => n + b.n, 0) === 7);
+
+  console.log('\n-- what you read whole, and how deep the targets sit');
+  /* The trigger's half of the question, which is arithmetic and needs no session: how many of a person's
+     whole-file reads a lower readMaxBytes would catch, and how much of each a limit would then withhold.
+     And the shape question underneath it -- readLimitLines is an absolute line count, but whether it hides
+     the target depends on where the target sits as a FRACTION of the file. */
+  t('an unbounded Read is a whole-file read; one carrying an offset or a limit is not',
+    T.readsWholeFile('Read', { file_path: '/a.js' }) === true
+    && T.readsWholeFile('Read', { file_path: '/a.js', offset: 40 }) === false
+    && T.readsWholeFile('Read', { file_path: '/a.js', limit: 300 }) === false);
+  t('a bare cat is a whole-file read; head, tail, sed -n and grep are bounded requests and are not',
+    T.readsWholeFile('Bash', { command: 'cat /a.js' }) === true
+    && T.readsWholeFile('Bash', { command: 'cd /w && cat a.js' }) === true
+    && T.readsWholeFile('Bash', { command: 'head -n 300 /a.js' }) === false
+    && T.readsWholeFile('Bash', { command: "sed -n '10,40p' /a.js" }) === false
+    && T.readsWholeFile('Bash', { command: 'grep foo /a.js' }) === false
+    && T.readsWholeFile('Bash', { command: 'cat /a.js | head -5' }) === false);
+
+  /* Claude Code numbers every line it delivers, so the delivered text is not the file. Verified on this
+     repo's own transcripts: an unchanged guard.js came back as 22,076 characters and its numbering strips to
+     20,832 bytes against 20,831 on disk -- exact to the trailing newline, and 5-6% off if left in. It grows
+     with the line count, so it is worst on exactly the long files the trigger question is about. */
+  const numbered = (from, to, text) => Array.from({ length: to - from + 1 }, (_, i) => (from + i) + '\t' + text).join('\n');
+  const sh = (t) => T.fileShape(t);
+  t('the delivered text is not the file: Claude Code\'s line numbering is subtracted',
+    sh(numbered(1, 3, 'abcd')).bytes === 15 && sh(numbered(1, 3, 'abcd')).lines === 3,
+    JSON.stringify(sh(numbered(1, 3, 'abcd'))));
+  t('the last line number is the file\'s length, which is better than counting newlines',
+    sh(numbered(1, 352, 'x')).lines === 352 && sh(numbered(380, 479, 'x')).from === 380);
+  t('unnumbered text is the file itself -- a shell cat has nothing to subtract',
+    sh('plain\ntext').numbered === false && sh('plain\ntext').bytes === Buffer.byteLength('plain\ntext'));
+  t('leading numbers that do not run consecutively are data, not numbering',
+    sh('1\ta\n1\tb').numbered === false);
+
+  const U0 = Date.parse('2026-09-12T08:00:00.000Z');
+  const R = (file, whole, text, readFrom, dt, extra) => ({ file, whole, chars: text.length,
+    lines: text.split('\n').length, shape: T.fileShape(text), readFrom: readFrom || null,
+    askedAt: U0 + (dt || 0), at: U0 + (dt || 0), ...(extra || {}) });
+  const up = {
+    cwd: '/w', sessionId: 'usess', requests: [{}], compactions: [],
+    results: [
+      R('/w/small.js', true, numbered(1, 100, 'x'.repeat(38)), null, 0),
+      R('/w/big.js', true, numbered(1, 300, 'x'.repeat(38)), null, 1000),
+      R('/w/host.txt', true, numbered(1, 2000, 'x'.repeat(38)), null, 2000),
+      R('/w/small.js', false, numbered(60, 89, 'x'), 60, 3000),
+      R('/w/nolen.js', false, numbered(200, 229, 'x'), 200, 4000),
+    ],
+  };
+  const uled = [{ t: U0 + 900, ev: 'read-cap', session: 'usess', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false }];
+  const ur = T.unboundedReads(up, uled, { sessionId: 'usess' });
+  /* The correction the whole count turns on. big.js was capped, so its delivered 12,000 chars are the cap's
+     300 lines, not the file. Believing the transcript there would count a capped read as a small file -- and
+     argue for a lower trigger using the cap's own output as the evidence for it. */
+  t('a capped read is counted at the ledger\'s true size, not at what the cap delivered',
+    ur.reads.find(r => /big/.test(r.file)).bytes === 80000 && ur.reads.find(r => /big/.test(r.file)).source === 'ledger',
+    JSON.stringify(ur.reads.map(r => [r.file, r.bytes, r.source])));
+  t('a read recorded as the model wrote it is told apart from one recorded as the guard rewrote it',
+    ur.recordedOriginal === 1 && ur.recordedRewritten === 0, JSON.stringify({ o: ur.recordedOriginal, r: ur.recordedRewritten }));
+  t('a cap row with no matching unbounded read still enters the population, at its true size',
+    (() => { const x = T.unboundedReads({ ...up, results: up.results.filter(r => !/big/.test(r.file)) }, uled, {});
+      return x.recordedRewritten === 1 && x.reads.some(r => r.bytes === 80000); })());
+  /* An unbounded read that stops at a round host limit says nothing about the file's length. Whether Claude
+     Code really has such a limit is not documented and no transcript here reaches one, so the flag asserts
+     nothing -- it stays at zero if the limit is not real, and catches the case if it is. */
+  t('an unbounded read stopping at exactly the host line limit is a floor, not a file length',
+    ur.reads.find(r => /host/.test(r.file)).ceiling === 'host-lines' && ur.hostLines === 1);
+  t('a read that could not be sized is out of the grid, not silently in it',
+    ur.sized.length === 2 && ur.n === 3, JSON.stringify({ sized: ur.sized.length, n: ur.n }));
+  t('a read of a spilled output is the other knob and never enters the population',
+    T.unboundedReads({ ...up, results: [R('/w/t/tool-results/a.txt', true, 'x', null, 0)] }, [], {}).persistedSkipped === 1);
+  t('an image is never a whole-file read: the cap returns on it before it stats anything',
+    T.readsWholeFile('Read', { file_path: '/a.png' }) === false && T.readsWholeFile('Read', { file_path: '/a.ipynb' }) === false);
+
+  const grid = T.triggerGrid(ur.sized, [3000, 60000], [300, 800]);
+  t('a lower trigger catches more reads, and the byte share is reported with the count',
+    grid[0].caught === 2 && grid[1].caught === 1 && Math.abs(grid[1].byteShare - 80000 / (80000 + 3900)) < 1e-9,
+    JSON.stringify(grid.map(g => [g.trigger, g.caught, g.byteShare.toFixed(3)])));
+  t('a file exactly at the trigger is not caught -- the guard returns on <=, not <',
+    T.triggerGrid([{ bytes: 60000, lines: 10 }, { bytes: 60001, lines: 10 }], [60000], [300])[0].caught === 1);
+  t('the withheld share is the median over the reads the trigger caught',
+    Math.abs(grid[1].byLimit[300] - (1900 - 300) / 1900) < 1e-9, String(grid[1].byLimit[300]));
+  t('a limit at or above the file\'s length withholds nothing -- the cap fires and is a no-op',
+    T.triggerGrid([{ bytes: 70000, lines: 600 }], [10000], [800])[0].byLimit[800] === 0);
+
+  /* Depth: the same start line means different things in files of different lengths, and nothing before this
+     paired the two. Line lengths come from three sources and the weakest (the file on disk now) is excluded
+     from the verdict, because it may not be the length the model saw. */
+  const dep = T.readDepths(up, uled, { sessionId: 'usess', linesOnDisk: (f) => (/nolen/.test(f) ? 400 : null) });
+  t('a file length taken from a host-truncated read is not used as a length at all',
+    !dep.rows.some(r => /host/.test(r.file)));
+  t('depth is the start line over the file\'s length, and the source of that length is recorded',
+    dep.rows.find(r => /small/.test(r.file)).depth === 0.6 && dep.rows.find(r => /small/.test(r.file)).source === 'session',
+    JSON.stringify(dep.rows.map(r => [r.file, r.depth, r.source])));
+  t('a length that could only be read off disk now is used but marked as the weaker source',
+    dep.bySource.disk === 1 && dep.exactN === 1, JSON.stringify(dep.bySource));
+  t('a read whose file length cannot be established is unresolved, never imputed',
+    T.readDepths(up, uled, { sessionId: 'usess' }).unresolved === 1);
+  t('a start line past the end of the file is unresolved rather than a depth over 1',
+    T.readDepths({ ...up, results: [R('/w/small.js', true, numbered(1, 50, 'x'), null, 0),
+      R('/w/small.js', false, numbered(900, 904, 'x'), 900, 1)] }, [], {}).unresolved === 1);
+  t('the two spreads are both reported, so the shape question has an answer either way',
+    typeof T.readDepths({ ...up, results: [
+      R('/w/a.js', true, numbered(1, 100, 'x'), null, 0), R('/w/b.js', true, numbered(1, 1000, 'x'), null, 1),
+      R('/w/a.js', false, numbered(50, 54, 'x'), 50, 2), R('/w/b.js', false, numbered(500, 504, 'x'), 500, 3)] },
+      [], {}).fracCV === 'number');
 
   /* The ledger view. One count for both Read-cap halves told the owner nothing about which default it was
      evidence for: readMaxBytes governs a large source file, persistedLimitLines a spilled output. */

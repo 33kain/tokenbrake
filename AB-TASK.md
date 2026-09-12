@@ -472,6 +472,50 @@ The column that matters is the last one: bytes withheld and answer withheld are
 different numbers, and reading them as one is what made lowering the trigger look
 like a saving before the A/B and a 10% loss after it.
 
+## The Read cap's trigger — pre-registered 2026-09-12, before the numbers
+
+`readMaxBytes` decides *which* reads get capped. The record against moving it: the 2026-09-07 A/B lowering it
+to 25,000 cost **+10%**, 34 requests against 25 — on a task that said "read in full". The record for moving it:
+in a real 40-request audit the six unbounded reads ran 1, 8, 15, 16, 31 and 34 KB, **none reached 60,000**, and
+the two largest carried half the Read total. And as of today, the source-file cap has fired **zero** times on
+real work, so at 60,000 the trigger catches nothing this owner does.
+
+**The sweep is confirmatory only, and that is settled without running it.** Computed directly from the bench's
+`fixtures/manifest.json`: `F15_band_30k` is 30,004 bytes / 684 lines / 43.9 B per line with its decisive line
+at 411, 60% deep; `F16_band_45k` is 45,006 / 1,040 / 43.3 with its decisive line at 633, 61% deep. The trigger
+never changes what a capped read withholds — every value below the file's size gives the same number — and the
+*safe* limit is pinned by how deep the decisive line sits, which in these fixtures is the constant `0.62` in
+`fixtures/lib/sources.mjs:1085`. "A safe limit withholds at most ~38%" is `1 − 0.62` restated, not a
+measurement. `results/DEVIATIONS.md` already warns about exactly this.
+
+**What `report --reads` adds, and what it cannot.** It measures the withholding half from the owner's own
+reads — with Claude Code's line numbering stripped, without which every file is overstated by 5-6% and the
+long ones more. It cannot measure the saving: whether the model comes back for what a cap withheld is
+behavioural and is in no transcript. This mode does not replace the paid session; it decides whether one is
+worth running.
+
+**Q1, the trigger — decision rule.** Lower `readMaxBytes` from 60,000 to the largest candidate T satisfying
+**all three**: it catches at least **5** whole-file reads; those carry at least **20%** of all bytes read
+whole; and at `readLimitLines` 800 — this morning's answer, which travels with any trigger change — the median
+withholding on the newly-caught reads is at least **25%**. If no candidate satisfies all three, **60,000
+stays** and the argument it never had gets written down: below roughly 55 KB a limit safe at this owner's
+target depth delivers the whole file, so a lower trigger fires more often and saves nothing. A candidate that
+passes earns the paid test, it does not skip it.
+
+**Q2, the shape — decision rule.** Compare the coefficient of variation of target depth as a **fraction**
+against the same in **absolute lines**, over reads whose file length came from an exact source (not from disk
+now). If the fractional spread is at least **25% tighter**, targets scale with file length, `readLimitLines`
+is the wrong shape, and the fractional cap gets its own pre-registration — not the same change. If the
+absolute spread is tighter, a fixed line count is the right shape and that is the first evidence for it. Under
+**20** reads with an exact length: no verdict.
+
+**Written expectation.** I expect the absolute spread to be tighter, and Q1 to fail its third condition,
+leaving 60,000 in place. The specific risk, named because this morning's prediction failed for a reason of
+exactly this kind: his whole-file reads may be dominated by one or two large files, and the medians would then
+be one file's shape rather than a workload's.
+
+**Result:** _pending — the owner runs `report --reads` on their own machine._
+
 ## The Read cap's strength — pre-registered 2026-09-12, before the numbers
 
 `readLimitLines` is the other half of the Read cap: `readMaxBytes` decides *which* reads get capped,

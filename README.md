@@ -186,7 +186,8 @@ npx tokenbrake report --all               # one line per session on disk
 npx tokenbrake report --session=<prefix>  # a particular one; --transcript=<path> for a file
 npx tokenbrake report --top=25            # widen the ranking
 npx tokenbrake report --where             # where your ranged reads land -- the evidence for readLimitLines
-npx tokenbrake report --caps              # every file the Read cap fired on -- the evidence for readMaxBytes
+npx tokenbrake report --caps              # every file the Read cap fired on
+npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -209,6 +210,16 @@ measure itself. `--caps` is the other half — every file the cap has actually f
 sessions, with the source-file and spilled-output halves counted apart and the share of each file delivered.
 Whether the cap is a daily event or a rarity on your work is what decides `readMaxBytes`, and it is not a
 thing to reason about.
+
+`--reads` is the third, and it is the one `readMaxBytes` turns on: every file you read **whole** — an
+unbounded `Read`, or a bare `cat` — at its own size, with **Claude Code's line numbering subtracted**. That
+numbering is Claude Code's and not the file's: it runs 5–6% of the delivered text on a 350-line file and grows
+with the line count, and `readMaxBytes` is compared against the file's real size, so leaving it in overstates
+every file and overstates long ones most — right at the boundary the question is about. From those sizes it
+prints how many of your reads each candidate trigger would catch, how much of each file a limit would then
+withhold, and how deep your targets sit **as a share of the file**, which is what says whether an absolute
+line cap is even the right shape. The withholding is arithmetic and exact; whether the model comes back for
+what a cap withheld is behavioural, is not in any transcript, and the report says so.
 
 ## Against Claude Code's compaction
 
