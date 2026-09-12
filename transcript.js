@@ -1282,13 +1282,19 @@ function renderCompare(A, B, ledger) {
   return lines.join('\n');
 }
 
-/* One line per session, for --all: enough to pick the one worth opening. */
-function renderSummaryLine(parsed) {
+/* One line per session, for --all: enough to pick the one worth opening.
+   `marks` adds the two columns the question "which of these may a claim about ordinary work rest on" turns
+   on: whether the guard was recording there, and whether the cwd is the benchmark's. Both are omitted
+   entirely when the caller has not established them -- a column reading "no guard" for a caller that never
+   opened the ledger would be a claim about the guard made from nothing. */
+function renderSummaryLine(parsed, marks) {
   carry(parsed);
   const u = usageTotals(parsed);
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
   const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8);
-  return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
+  const m = marks || {};
+  const cols = m.guard == null ? '' : '  ' + (m.guard ? 'guard' : '     ') + '  ' + String(m.tag || '').padEnd(5);
+  return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
 module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,

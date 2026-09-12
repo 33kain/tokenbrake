@@ -474,6 +474,38 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --ledger counts the two Read-cap halves apart',
     /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a shell cat of one/.test(r.stdout)
     && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));
+  /* --all listed the newest 30 under a header that said 65 and said nothing about the 35 it dropped; a
+     conclusion about which sessions exist was drawn from the visible part within the hour of it being read.
+     And the question those lines are read for -- which sessions may a claim about ordinary work rest on --
+     needs the ledger, which the line never carried. */
+  r = run(['--all']);
+  t('cli: --all marks the sessions the guard was recording in',
+    /realsess\.\.\..*carried\s+guard\s/.test(r.stdout), (r.stdout.match(/ +realsess[^\n]*/) || [])[0]);
+  const benchLine = (r.stdout.match(/ +benchses[^\n]*/) || [''])[0];
+  t('cli: --all leaves the column blank where it was not, rather than calling it off',
+    !/guard/.test(benchLine) && /carried\s+bench\s/.test(benchLine), benchLine);
+  t('cli: --all tags the benchmark cwd the other views skip', /bench\s+C:.Desktop.tokenbrake-bench/.test(r.stdout), benchLine);
+  r = run(['--all', '--top=1']);
+  t('cli: --all stops truncating silently and says how to see the rest',
+    /Sessions, newest first \(3, newest 1 shown\)/.test(r.stdout)
+    && /2 older session\(s\) not listed -- add --top=3 for every one/.test(r.stdout),
+    (r.stdout.match(/[^\n]*not listed[^\n]*/) || [])[0]);
+  /* The counts are the point of the block and they are taken over every session, not the printed ones: a
+     count whose population is smaller than the header says is the defect one line above. */
+  t('cli: --all counts over every session, not the ones it printed',
+    /Of 3 readable session\(s\): 1 benchmark, 2 with guard records, 2 with guard records outside the benchmark/.test(r.stdout),
+    (r.stdout.match(/[^\n]*readable session[^\n]*/) || [])[0]);
+  t('cli: --all says the count is still not eligibility, because an A/B arm looks like ordinary work',
+    /not a count of eligible sessions/.test(r.stdout) && /A.B arm is ordinary work by its cwd/.test(r.stdout));
+  {
+    const p1 = T.parseTranscript(join(cfg, 'projects', '-c-work-realrepo', 'realsess.jsonl'));
+    const bare = T.renderSummaryLine(p1);
+    t('renderSummaryLine adds no columns when the caller established nothing',
+      !/guard/.test(bare) && /carried\s+C:.work.realrepo$/.test(bare), bare);
+    t('and carries both columns before the cwd when it did',
+      /carried\s+guard\s+bench\s+C:.work.realrepo$/.test(T.renderSummaryLine(p1, { guard: true, tag: 'bench' })),
+      T.renderSummaryLine(p1, { guard: true, tag: 'bench' }));
+  }
   rmSync(join(cfg, 'projects', '-c-work-realrepo'), { recursive: true, force: true });
   rmSync(join(cfg, 'projects', '-c-desktop-tokenbrake-bench-work-kestrel'), { recursive: true, force: true });
 
