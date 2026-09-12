@@ -514,7 +514,44 @@ leaving 60,000 in place. The specific risk, named because this morning's predict
 exactly this kind: his whole-file reads may be dominated by one or two large files, and the medians would then
 be one file's shape rather than a workload's.
 
-**Result:** _pending — the owner runs `report --reads` on their own machine._
+**Result — 2026-09-12, run on the owner's machine.**
+
+**Q1: no candidate passes, so 60,000 stays.** 33 whole-file reads of 27 files, 701,372 bytes, median 18,293,
+90th percentile 59,374, largest **62,476** — his whole-file reads stop just above the trigger. The grid:
+
+| trigger | reads caught | share of bytes | withheld at limit 800 |
+|---|---|---|---|
+| 10,000 | 16 | 95% | **8%** |
+| 25,000 | 13 | 88% | **8%** |
+| 30,000 | 12 | 84% | **17%** |
+| 45,000 | 8 | 64% | **17%** |
+| 60,000 | 2 | 18% | 20% |
+
+Conditions one and two pass down to 45,000 and condition three fails everywhere: nothing reaches 25%. **The
+argument 60,000 never had, now measured rather than estimated:** the limit that keeps this owner's targets
+makes the cap nearly a no-op on every file he reads, so a lower trigger fires more often and saves almost
+nothing. The self-cancelling arithmetic predicted from an assumed 50 bytes per line holds on his real files.
+The written expectation — that Q1 would fail its third condition — was right this time.
+
+Three reads could not be sized. They were checked before the rule was applied, because unsized reads sit
+exactly where they could swing the withholding median: all three failed for reasons other than Claude Code's
+size refusal, so they are failures and not large files, and the grid is complete.
+
+**Q2: no verdict.** The rule requires 20 reads whose file length came from an exact source. There is **1** —
+the other 42 lengths were read off disk today, which the rule excludes because a file may have changed since
+the read. The numbers exist (absolute CV 1.21, fractional 1.05, so the fraction is 13% tighter, short of the
+25% the rule demands) and are **not admissible**. The shape question stays open, and the expectation that the
+absolute spread would be tighter is neither confirmed nor refuted: the test did not run.
+
+Worth a second look, from the inadmissible source and so a lead rather than a finding: target depth is
+**bimodal** — 21 reads in the first 10% of a file, then 15 at 50-60%. Two habits, "read the top" and "read the
+middle", which one cap value cannot serve.
+
+**And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
+work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
+this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`
+now separates them from the ledger: a session with no ledger row never had the guard; a session the guard was
+recording in, whose over-trigger read still went through, is a defect. Unresolved until that line is read.
 
 ## The Read cap's strength — pre-registered 2026-09-12, before the numbers
 

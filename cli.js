@@ -398,7 +398,8 @@ function readsReport() {
     diskCache.set(f, n);
     return n;
   };
-  const pooled = [], skipped = [];
+  const pooled = [], skipped = [], missed = [];
+  const ledgerSessions = new Set(ledger.map(r => r && r.session).filter(Boolean));
   let reads = [], depths = [];
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
   let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
@@ -418,6 +419,14 @@ function readsReport() {
     const sessionId = p.sessionId || f.session;
     const u = transcript.unboundedReads(p, ledger, { sessionId });
     const d = transcript.readDepths(p, ledger, { sessionId, linesOnDisk });
+    /* The product's own self-check, and the reason it exists: a read over readMaxBytes that was NOT capped
+       means either the guard was not running in that session or it did not fire. Those are the same evidence
+       and opposite conclusions -- "the cap is inert on this workload" against "the cap is not running on this
+       workload" -- and nothing in this repo could tell them apart. The ledger settles it: if it holds no row
+       at all for a session, the guard was not there; if it holds rows and the read still went through
+       unbounded, the cap had its chance and missed. */
+    const over = u.reads.filter(r => !r.capped && !r.ceiling && (r.bytes || 0) > cfg.readMaxBytes);
+    if (over.length) missed.push([id, over.length, ledgerSessions.has(sessionId)]);
     if (!u.n && !d.n) { skipped.push([id, 'no whole-file reads and no resolvable targets']); continue; }
     pooled.push([id, u.n, cwd]);
     reads = reads.concat(u.reads);
@@ -506,6 +515,21 @@ function readsReport() {
       const to = b.to > 100 ? '100%' : String(b.to) + '%';
       console.log('    ' + (String(b.from) + '%').padStart(5) + '..' + to.padEnd(5) + String(b.n).padStart(5) + '  ' + b.bar);
     }
+  }
+  if (missed.length) {
+    const withGuard = missed.filter(([, , had]) => had);
+    const without = missed.filter(([, , had]) => !had);
+    const total = missed.reduce((t, [, n]) => t + n, 0);
+    console.log('\n  ' + total + ' read(s) over your readMaxBytes of ' + fmt(cfg.readMaxBytes) + ' that were NOT capped:');
+    if (without.length) console.log('    ' + without.reduce((t, [, n]) => t + n, 0) + ' in ' + without.length
+      + ' session(s) with no ledger row at all -- the guard was not running there, so the cap never had a chance:'
+      + '\n      ' + without.map(([i, n]) => i + ' (' + n + ')').join('  '));
+    if (withGuard.length) console.log('    ' + withGuard.reduce((t, [, n]) => t + n, 0) + ' in ' + withGuard.length
+      + ' session(s) the guard WAS recording in -- it had its chance on these and did not fire, which is a'
+      + '\n      defect and not a tuning question:  ' + withGuard.map(([i, n]) => i + ' (' + n + ')').join('  '));
+    console.log('    Why this line exists: a read over the trigger with no cap is the same evidence for "the cap');
+    console.log('    is inert on this workload" and for "the cap is not running on this workload", and those are');
+    console.log('    opposite conclusions. The ledger is what tells them apart.');
   }
   if (capped) {
     console.log('\n  What the transcript records when the guard caps a Read -- settled from your machine, not assumed:');

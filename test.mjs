@@ -295,9 +295,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
      real work would set readLimitLines from a fixture design. */
   const T0 = Date.parse('2026-09-12T10:00:00.000Z');
-  const mkSession = (dir, name, offsets, cwd) => {
+  const mkSession = (dir, name, offsets, cwd, wholes) => {
     mkdirSync(join(cfg, 'projects', dir), { recursive: true });
     const rows = [];
+    (wholes || []).forEach((w, n) => {
+      const at = new Date(T0 + 500 + n).toISOString();
+      const lines = Math.ceil(w.bytes / 60);
+      const text = Array.from({ length: lines }, (_, i) => (i + 1) + '\t' + 'x'.repeat(58 - String(i + 1).length)).join('\n');
+      rows.push(JSON.stringify({ type: 'assistant', uuid: 'w' + n, requestId: 'w' + n, cwd, timestamp: at,
+        message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'tool_use', id: 'tw' + n, name: 'Read', input: { file_path: '/big' + n + '.js' } }] } }));
+      rows.push(JSON.stringify({ type: 'user', cwd, timestamp: at,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tw' + n, content: text }] } }));
+    });
     offsets.forEach((offset, n) => {
       const at = new Date(T0 + n * 1000).toISOString();
       rows.push(JSON.stringify({ type: 'assistant', uuid: 'x' + n, requestId: 'x' + n, cwd, timestamp: at,
@@ -357,6 +367,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --caps lists the files the Read cap fired on, with the delivered share',
     /Read caps fired -- 1 across 1 session/.test(r.stdout) && /Source files, Read cap \(readLimitLines\):\s+1 caps/.test(r.stdout)
     && /16%.*\/x\.js/.test(r.stdout), r.stdout.split('\n').filter(l => /x\.js|Source files/.test(l)).join(' | '));
+  /* The self-check. A read over readMaxBytes that was never capped is the same evidence for "the cap is inert
+     on this workload" and for "the cap is not running on this workload" -- opposite conclusions. The ledger
+     tells them apart: no row at all for a session means the guard was not there. */
+  mkSession('-c-work-bigrepo', 'bigsess', [], 'C:\\work\\bigrepo', [{ bytes: 90000 }]);
+  r = run(['--reads']);
+  t('cli: --reads flags a read over the trigger that was never capped',
+    /read\(s\) over your readMaxBytes of 60,000 that were NOT capped/.test(r.stdout),
+    (r.stdout.match(/[^\n]*NOT capped[^\n]*/) || [])[0]);
+  t('cli: --reads says whether the guard was even running there, because that is the whole question',
+    /the guard was not running there/.test(r.stdout) && /opposite conclusions/.test(r.stdout));
+  rmSync(join(cfg, 'projects', '-c-work-bigrepo'), { recursive: true, force: true });
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code

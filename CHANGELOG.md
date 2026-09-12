@@ -84,6 +84,16 @@
   the guard's own output. Its ledger `post` row carries the size *before* the cap, and that is used instead --
   the same defect this release already fixed for `Read`, arriving through a different door.
 
+- **`report --reads` now tells "the cap is inert here" apart from "the cap is not running here".** Those are
+  opposite conclusions from identical evidence, and nothing in this repo could distinguish them: a whole-file
+  read larger than `readMaxBytes` with no cap recorded against it. The ledger settles it — a session with no
+  ledger row at all never had the guard, while a session the guard *was* recording in, whose over-trigger read
+  still went through unbounded, is a **defect and not a tuning question**. Both are printed with the session
+  ids, counted apart.
+  It exists because the owner's own numbers disagreed: 2 whole-file reads over 60,000 bytes on real work, and
+  0 caps on real work from either path. Every conclusion drawn about this feature so far assumed the first
+  reading without checking the second.
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a
