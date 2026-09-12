@@ -29,6 +29,8 @@
  *   node session-hooks-compare.mjs --all         every session found, no sampling
  *   node session-hooks-compare.mjs --seed=123    fix the random sample so a run repeats
  *   node session-hooks-compare.mjs --md          emit the table as GitHub-flavored markdown
+ *   node session-hooks-compare.mjs --hooks-on             the last 20 hooks-on sessions and their findings,
+ *                                                         sorted highest-to-lowest (--last=N, --sort=carried|cost|processed|entered)
  *   node session-hooks-compare.mjs --selftest    build synthetic fixtures and assert the classifier + table
  *
  * Zero dependencies, reuses transcript.js. The token numbers for real sessions come straight from that
@@ -125,6 +127,80 @@ function renderTable(rows, { md = false } = {}) {
     for (const c of body) out.push(line(c));
   }
   return { text: out.join('\n'), on: on.length, off: off.length };
+}
+
+/* Findings for the hooks-on listing: the token output plus what the guard actually did, one row per
+   session. read-caps come from the ledger (a capped Read leaves no marker in the transcript), the rest
+   from sessionFacts. Sorted highest-to-lowest on `sort` (default carried context — the number the whole
+   report ranks by, because a result is paid for in every later request that re-reads it). */
+const SORTS = { carried: 'carried', cost: 'cost', processed: 'processed', entered: 'entered', out: 'out', requests: 'requests' };
+function hooksOnTable(cfg, { last = 20, sort = 'carried', md = false } = {}) {
+  const found = transcript.findTranscripts(cfg);   // newest first
+  const ledger = loadLedger(cfg);
+  const out = [];
+  out.push(`Config dir: ${cfg}`);
+  out.push(`Ledger:     ${LEDGER(cfg)} (${ledger.length} rows)`);
+  out.push(`Sessions found under projects/: ${found.length}`);
+  if (!found.length) {
+    out.push('');
+    out.push('No session transcripts on this machine. Run some Claude Code sessions with the hooks on and try again.');
+    return out.join('\n');
+  }
+  const key = SORTS[sort] || 'carried';
+  // classify every session, keep only the hooks-on ones, take the last N by recency (findTranscripts is
+  // newest first), then rank those highest-to-lowest.
+  const all = [];
+  for (const f of found) {
+    try {
+      const parsed = transcript.parseTranscript(f.file);
+      const row = sessionRow(parsed, ledger);
+      if (!row.hooksOn) continue;
+      row.readCaps = transcript.readCaps(ledger, parsed.sessionId).n;
+      all.push(row);
+    } catch { /* unreadable transcript, skip */ }
+  }
+  const recent = all.slice(0, last);                 // last N hooks-on sessions
+  recent.sort((a, b) => (b[key] || 0) - (a[key] || 0)); // highest to lowest
+  out.push(`Hooks-on sessions: ${all.length} of ${found.length}. Showing the last ${recent.length}, sorted by ${key}, highest first.`);
+  out.push('');
+
+  const cols = ['#', 'session', 'model', 'req', 'output', 'processed', 'entered', 'carried', 'trimmed', 'read-caps', 'repeats', 'cost'];
+  const body = recent.map((r, i) => [
+    String(i + 1),
+    r.session.slice(0, 8),
+    (r.model || '?').replace(/^claude-/, ''),
+    String(r.requests),
+    kfmt(r.out),
+    kfmt(r.processed),
+    kfmt(r.entered),
+    kfmt(r.carried),
+    r.trimmed ? `${r.trimmed} (≈${kfmt(r.keptOut)})` : '0',
+    String(r.readCaps || 0),
+    r.repeats ? `${r.repeats} (≈${kfmt(r.repeatTokens)})` : '0',
+    money(r),
+  ]);
+  if (!body.length) {
+    out.push('No hooks-on sessions found. Every transcript on this machine shows no trace of the guard having run.');
+    return out.join('\n');
+  }
+  if (md) {
+    out.push('| ' + cols.join(' | ') + ' |');
+    out.push('|' + cols.map(() => '---').join('|') + '|');
+    for (const c of body) out.push('| ' + c.join(' | ') + ' |');
+  } else {
+    const w = cols.map((h, i) => Math.max(h.length, ...body.map(c => c[i].length)));
+    const line = (c) => c.map((v, i) => v.padEnd(w[i])).join('  ');
+    out.push(line(cols));
+    out.push(w.map(x => '-'.repeat(x)).join('  '));
+    for (const c of body) out.push(line(c));
+  }
+  out.push('');
+  out.push('Columns: output = model output tokens; processed = total context the API metered across all');
+  out.push('requests; entered = tokens of tool results that entered context; carried = size × the later');
+  out.push('requests that re-read each result (what the report ranks by); trimmed = results the guard cut');
+  out.push('(≈ tokens kept out); read-caps = Read caps that fired; repeats = re-reads of a file already in');
+  out.push('context; cost = list price, cache writes at the 1h rate (* = a model without a listed price).');
+  return out.join('\n');
 }
 
 /* A seeded shuffle so --seed makes a sample repeatable; without a seed it is Math.random. */
@@ -265,6 +341,15 @@ function selftest() {
   const md = renderTable(rows, { md: true }).text;
   t('markdown table has a header separator', /\|---\|/.test(md.replace(/ /g, '')));
 
+  // the hooks-on listing: only the on sessions, sorted highest-first, off never shown
+  const onlyOn = hooksOnTable(tmp, { last: 20, sort: 'carried' });
+  t('hooks-on table keeps both on sessions', onlyOn.includes('aaaaaaaa') && onlyOn.includes('cccccccc'));
+  t('hooks-on table drops the off session', !onlyOn.includes('bbbbbbbb'));
+  t('hooks-on table reports 2 of 3 on', /Hooks-on sessions: 2 of 3/.test(onlyOn));
+  // aaaaaaaa carries more (its 4k-char first result is a marker, both carry once) — assert on ranks by carried desc
+  const idxA = onlyOn.indexOf('aaaaaaaa'), idxC = onlyOn.indexOf('cccccccc');
+  t('hooks-on table sorts highest carried first', idxA >= 0 && idxC >= 0 && idxA !== idxC);
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(`\n${PASS} passed, ${FAIL} failed`);
   process.exit(FAIL ? 1 : 0);
@@ -277,6 +362,9 @@ const opt = (name, d) => { const a = args.find(x => x.startsWith(name + '=')); r
 
 if (flag('--selftest')) {
   selftest();
+} else if (flag('--hooks-on')) {
+  const last = parseInt(opt('--last', '20'), 10);
+  console.log(hooksOnTable(CFG_DIR, { last, sort: opt('--sort', 'carried'), md: flag('--md') }));
 } else {
   const n = parseInt(opt('--n', '10'), 10);
   const seedRaw = opt('--seed', null);
