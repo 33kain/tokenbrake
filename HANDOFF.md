@@ -539,7 +539,20 @@ never had now exists, measured: the limit that keeps his targets makes the cap n
 reads, so a lower trigger fires more often and saves almost nothing. Full record in `AB-TASK.md`, "The Read
 cap's trigger — pre-registered 2026-09-12".
 
-**Q2, the shape, has no verdict and the reason is worth keeping.** Whether the cap should be an absolute line
+**Q2, the shape: the rule ran and licensed nothing, and my rule had a hole.** With the off-the-end length
+source the exact count went from 1 to 45. Absolute-line spread 1.12, fractional 0.98 — the fraction is tighter
+by 12.5% against a 25% threshold, so **not met, and `readLimitLines` stays an absolute line count.** The rule's
+second branch ("absolute tighter means a fixed line count is right") does not fire either, because the fraction
+*is* tighter, just not enough: a threshold rule needs three outcomes and mine named two. Not re-scored.
+
+The useful part is why neither shape wins. Depth is **bimodal** — 23 of 50 reads in the first 10% of a file,
+15 at 50-60%, almost nothing between. Two habits, and no single parameter of either shape serves both. So the
+open question is not "absolute or fractional" but whether **one number is the right form at all**. A next
+attempt needs its own pre-registration and a decision-relevant statistic: per candidate of each shape, miss
+rate against median withholding, then which frontier dominates. Exact arithmetic over the same 45 reads, free,
+but written down before it is computed.
+
+**Superseded note — the earlier "no verdict" and why it changed.** Whether the cap should be an absolute line
 count or a fraction of the file needs 20 reads whose file length is known exactly; there is 1, because the
 other 42 lengths came off disk today and a file may have changed since. `report --reads` resolves lengths from
 a whole-file read in the same session first, and those are rare in his sessions. The question reopens on its

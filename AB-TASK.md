@@ -560,6 +560,40 @@ outright -- it is short because the guard cut it, and without that check every c
 short file, which is the same error that has now been caught five times today and always in the guard's
 favour.
 
+**Q2, second attempt — the rule ran, and my rule had a hole in it.**
+
+With the off-the-end source the exact count went from 1 to **45**, past the 20 the rule needs. 44 of those 45
+lengths came from a read that ran off the end of its file; 1 from a whole-file read in the same session; 5 more
+reads resolved only off disk and are excluded from the verdict, as the rule requires.
+
+| spread over 45 exact reads | coefficient of variation |
+|---|---|
+| absolute start line | **1.12** |
+| depth as a fraction of the file | **0.98** |
+
+The fraction is tighter by **12.5%**. The rule demanded **25%**. **Not met, so no change to the shape is
+licensed** — and `readLimitLines` stays an absolute line count.
+
+**But the rule's two branches do not cover this, and that is my error, not the data's.** It said: fractional at
+least 25% tighter means the knob is the wrong shape; *absolute tighter* means a fixed line count is the right
+shape and is the first evidence for it. Here the fractional spread **is** tighter, just not by enough. So the
+second branch does not fire either: this is not evidence that a fixed line count is right, it is a refusal to
+act on a 12.5% lean. A rule with a threshold needs three outcomes and mine named two. **Recorded as written and
+not re-scored** — the same refusal as round 1's band statistic. What it licenses is nothing, which is the
+correct outcome of a threshold that was not met.
+
+**And the likely reason neither shape wins, which is the useful part.** Target depth is strongly **bimodal**:
+23 of 50 reads land in the first 10% of a file, then 15 cluster at 50-60%, with almost nothing between. Two
+habits -- "read the top" and "read the middle" -- and **no single parameter of either shape serves both.** A
+similar CV for the two shapes is what that looks like. This survives the disk-length caveat, because the
+off-the-end source now supplies most of the lengths.
+
+So the shape question is not "absolute or fractional" but **"is one number the right form at all"**, which
+neither this rule nor its data was built to answer. Any next attempt needs its own pre-registration, and the
+statistic should be the decision-relevant one rather than a spread: for each candidate of each shape, the miss
+rate against the median withholding, and then which shape's frontier dominates. That comparison is exact
+arithmetic over these same 45 reads and costs nothing -- but it must be written down before it is computed.
+
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
 this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`
