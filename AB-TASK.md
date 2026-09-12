@@ -554,6 +554,18 @@ down, and 56% past line 300 is exactly why the 2026-09-07 attempt to bring it do
 jackknife was run. The decision is insensitive to it today because the cap does not fire on real work at all;
 it becomes live the moment the trigger moves.
 
+**Decided 2026-09-12: 800 is the answer and it is NOT applied.** Neither the shipped default nor the owner's
+own config changes. The reasoning is the zero: a knob that has never fired on this workload cannot be improved
+by retuning it, so 800 is held and goes in **in the same step** as any move on `readMaxBytes`, which is the
+only thing that would make it fire. Deciding it now rather than then is the point — the value is fixed by a
+rule written before the numbers, so a future trigger change cannot quietly pick its own limit to look good.
+
+The cost of holding, stated so it is not a surprise: until then, an unbounded read of a file over 60 KB still
+gets 300 lines, with a 56% chance on this workload that the model has to come back for the part it wanted.
+That is one return trip on a rare event, against a default change whose blast radius includes the
+shell-excerpt path (`readLimitLines` is also what caps a `cat`/`sed`/`grep` of a large file, guard.js:292)
+where no equivalent measurement exists.
+
 ## Feature round — run 2026-09-07, Opus 5 both arms
 
 The audit is reading without writing and the debugging round is a test loop;

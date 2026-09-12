@@ -504,10 +504,35 @@ right arm, workspace, host version and a 38/38 answer. Verified 12 of 22 against
 that has shown it lacks the power buy a second inconclusive result at twice the price. **No cost percentage
 from round 1 may be quoted anywhere.**
 
+## Settled 2026-09-12 — the Read cap's strength, and the zero underneath it
+
+`readLimitLines` is answered and **deliberately not applied**: the rule returned **800** and the value is held
+until `readMaxBytes` moves, going in with it in one step. Full record in `AB-TASK.md`, "The Read cap's
+strength". The three things worth carrying forward:
+
+- **The source-file cap has never fired on the owner's real work.** Eleven of the twelve caps in his ledger are
+  benchmark sessions; the twelfth is a persisted spill file. Zero source-file caps outside the benchmark,
+  across every session on disk. That is why retuning the strength changes nothing today — and why it is
+  `readMaxBytes`, the trigger, that decides whether the Read cap is a feature at all on ordinary work.
+- **The one real cap cost three return trips.** A 112 KB spill file cut to 80 of 2,011 lines, and the model
+  came back three times for it. n=1, not a measurement, but it is the mechanism in miniature and it is the
+  only real-work observation of the Read cap that exists.
+- **56% of his ranged reads start past line 300.** Which is the mechanism of the 2026-09-07 +10%: lowering
+  the trigger starts capping files whose target is past the cap more often than not.
+
+`report --where` and `report --caps` are the tools that produced all of this and they are the shipped answer to
+"where do my files keep what the model wants" — per person, from their own sessions. Both under `## Unreleased`.
+
+**One method note that cost a wrong prediction.** I predicted the confound would be large and it was 2.7%,
+because I took round 1's one-to-four caps per run as the rate on real work. Round 1 is the benchmark. The
+workload filter in `--where` exists to stop exactly that substitution at the transcript level; I made it one
+level up, about the ledger. Any future claim about how often a guard feature fires needs `--caps` under it.
+
 ## Next session — the Read cap's trigger, free before paid
 
-Take this before the Saturday table below; it is where the last session stopped and it is the owner's own
-priority, since he wants to set the value himself.
+Take this before the Saturday table below; it is where the work now stands and it is the owner's own
+priority, since he wants to set the value himself. **`readLimitLines` = 800 travels with any change here** —
+that is pre-registered, so a trigger change cannot pick its own limit afterwards.
 
 1. **Read the sweep first — it costs nothing.** `node fixtures/gen.mjs && node mechanism/run-mechanism.mjs`
    in the bench, then read the `kind: 'cap-sweep'` rows: 180 of them, every `readMaxBytes` ×
