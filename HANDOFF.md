@@ -725,10 +725,26 @@ directly. That removes three of the four defects the 2026-09-10 inventory found,
 care: a session cannot enter three times as three snapshots, an A/B arm is not sitting in the same folder as
 ordinary work, and everything collected was written by the current report.
 
-What does **not** change: the minimum. No median is printed under eight sessions, and the first line of the
-table says how many sessions it rests on. Today the owner's disk holds 40 transcripts with the guard recording
-in **8** of them, so the table is short by the same thing the reach verdict is short by -- sessions, not work.
-Both cross their minimum on their own as he works, and neither is a task until then.
+What does **not** change: the minimum. No median is printed under eight sessions -- the rule governs the
+**median row**, not the table, so three rows and no median is a legitimate table and three rows with a median
+is not -- and the first line says how many sessions it rests on.
+
+**And eight recorded sessions are not eight eligible rows.** The disk holds 40 transcripts with the guard
+recording in 8 of them, and it is tempting to read 8 against a minimum of 8 and call it met. It is not, for a
+reason that has to be written down because the arithmetic hides it: `report --reach` skips only a session whose
+cwd contains `tokenbrake-bench` (`cli.js:423`), and until the user-scope install on 2026-09-12 the only other
+place the guard was installed was **project scope in this repository**. So those 8 are, near enough, 8 sessions
+spent developing tokenbrake -- which is real work but is one workload, and the least representative one
+available: sessions that read their own transcripts, run a 350-check suite and print reports all day. The table
+claims to describe ordinary work on a repository. The count that matters for it is sessions that are neither
+benchmark nor tokenbrake's own development and that have a guard row, and **today that count is probably zero**.
+
+That is an inference, not a measurement, and it is settled by one command: `node cli.js report --all` prints
+the cwd of every session. If all eight sit under the tokenbrake checkout, the table has no rows yet and the
+clock on it starts from the user-scope install, not from the 40 transcripts already on disk.
+
+So the table and the reach verdict wait on the same kind of thing -- sessions, not work -- but not on the same
+count, and the table's is the further away. Neither is a task until its own minimum is met.
 
 Two notes that survive the change of source. The files under `ab-results/real/` all predate 0.2.3 and describe
 versions that no longer ship; if any of them is used at all, the post says so rather than letting the reader
