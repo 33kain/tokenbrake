@@ -653,7 +653,36 @@ and 15 at 50-60% — so any single threshold that keeps the shallow group cheapl
 either shape. If that is right, the answer to "absolute or fractional" is "neither, and the question was
 wrong", which is a more useful result than picking one.
 
-**Result:** _pending — computed in the same session, after this section was committed._
+**Result — 2026-09-12, over the owner's 45 reads with an exact file length.**
+
+| shape | safest useful cap at a 25% miss budget | withholds | misses |
+|---|---|---|---|
+| absolute | first **800 lines** | **22%** | 13% |
+| fractional | first **60% of the file** | **40%** | 11% |
+
+**FRACTIONAL wins, by 18 points of withholding** — nearly twice the saving, at slightly better safety. The
+threshold was 10. **`readLimitLines` is the wrong form.** What that licenses is exactly what the rule said:
+a fractional cap gets designed under its own pre-registration and its own A/B. **Not today, and not as a value
+change.** Nothing ships from this.
+
+**My written expectation — "neither dominates" — was wrong.** I expected the bimodal depth distribution to
+defeat both shapes. It defeats the absolute one and not the fractional: the 60% cap clears the 50-60% cluster
+while still cutting 40% off every file, whereas an absolute cap loose enough to clear that cluster on a long
+file (800 lines) withholds nothing from a short one. That is the mechanism, and it is the opposite of the
+reason I gave for expecting a tie.
+
+**The hole in this rule, and it is the third of the day.** The statistic is the median share of *lines*
+withheld, which weights every file equally regardless of size. A fractional cap also cuts short files, where
+the saving in tokens is small — so part of its 18-point margin may be saving that is not worth having. A
+**token-weighted** withholding measure could narrow or reverse it. Recorded as a condition on the verdict, not
+as a reason to discount it: the rule ran as written and returned fractional, and any fractional cap design must
+carry this question into its own pre-registration and answer it before a line of it is written.
+
+**A bug in the reporting, caught by the owner's console rather than by the suite.** The block crashed after
+printing the table, and the sentence above the crash still described the *withdrawn* criterion. The shape block
+needs 20 exact lengths before it prints at all, and no test fixture ever reached that, so a green suite shipped
+both. A fixture that reaches it is now in `test.mjs`; the numbers above were computed before the crash and are
+unaffected.
 
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on

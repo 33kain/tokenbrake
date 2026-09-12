@@ -295,9 +295,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
      real work would set readLimitLines from a fixture design. */
   const T0 = Date.parse('2026-09-12T10:00:00.000Z');
-  const mkSession = (dir, name, offsets, cwd, wholes) => {
+  const mkSession = (dir, name, offsets, cwd, wholes, eofPairs) => {
     mkdirSync(join(cfg, 'projects', dir), { recursive: true });
     const rows = [];
+    /* Ranged reads that run off the end of their file: each gives an exact file length, which is what the
+       shape comparison needs and what no other fixture here supplies. */
+    for (let n = 0; n < (eofPairs || 0); n++) {
+      const at = new Date(T0 + 900 + n).toISOString();
+      const lines = 300 + 37 * n, start = n % 3 === 0 ? 8 + n : Math.floor(lines * 0.55);
+      const got = lines - start + 1;
+      rows.push(JSON.stringify({ type: 'assistant', uuid: 'e' + n, requestId: 'e' + n, cwd, timestamp: at,
+        message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'tool_use', id: 'te' + n, name: 'Bash',
+            input: { command: "sed -n '" + start + "," + (start + got + 50) + "p' /s" + n + ".js" } }] } }));
+      rows.push(JSON.stringify({ type: 'user', cwd, timestamp: at,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'te' + n, content: Array(got).fill('x').join('\n') }] } }));
+    }
     (wholes || []).forEach((w, n) => {
       const at = new Date(T0 + 500 + n).toISOString();
       const lines = Math.ceil(w.bytes / 60);
@@ -378,6 +391,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reads says whether the guard was even running there, because that is the whole question',
     /the guard was not running there/.test(r.stdout) && /opposite conclusions/.test(r.stdout));
   rmSync(join(cfg, 'projects', '-c-work-bigrepo'), { recursive: true, force: true });
+  /* The shape block needs 20 reads with an EXACT file length before it prints at all, so no CLI fixture ever
+     reached it -- and a crash plus wording left over from the withdrawn criterion shipped past a green suite
+     into the owner's console. A fixture that reaches it is the test that was missing. */
+  mkSession('-c-work-shaperepo', 'shapesess', [], 'C:\\work\\shaperepo', [], 24);
+  r = run(['--reads']);
+  t('cli: --reads prints the shape comparison once there are enough exact lengths',
+    /Which SHAPE of cap serves your reading/.test(r.stdout) && /Safest useful cap of each shape/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Which SHAPE[^\n]*/) || [])[0]);
+  t('cli: --reads names a winning shape by what it saves at the same safety, not by domination',
+    /Verdict: (FRACTIONAL|ABSOLUTE) saves more at the same safety, by \d+ points|Verdict: a TIE|Verdict: NEITHER shape can be/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Verdict:[^\n]*/) || [])[0]);
+  t('cli: --reads does not crash printing the verdict', r.status === 0 && !/TypeError/.test(r.stderr), r.stderr.slice(0, 120));
+  rmSync(join(cfg, 'projects', '-c-work-shaperepo'), { recursive: true, force: true });
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code

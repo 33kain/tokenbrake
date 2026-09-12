@@ -527,15 +527,25 @@ function readsReport() {
       line('no cap at all', front.none);
       for (const p of front.absolute) line('first ' + p.param + ' lines', p);
       for (const p of front.fractional) line('first ' + Math.round(100 * p.param) + '% of the file', p);
-      console.log('    Verdict: ' + (v.verdict === 'neither'
-        ? 'NEITHER shape dominates. One number is not the right form for this reading --'
-          + '\n    any single threshold that keeps the shallow targets cheaply must miss the deeper ones.'
-        : v.verdict === 'no verdict'
-          ? 'no verdict -- the two shapes never met at a comparable price.'
-          : v.verdict.toUpperCase() + ' dominates: no higher miss at any matched withholding level, and'
-            + '\n    at least 10 points lower at one of them.'));
-      console.log('    Matched at ' + v.absolute.pairs.length + ' withholding level(s) within 5 points; a miss rate is only');
-      console.log('    comparable between two caps that cost about the same, or the cheaper one wins by doing less.');
+      const name = (p) => !p ? 'nothing' : p.shape === 'none' ? 'no cap at all'
+        : p.shape === 'absolute' ? 'the first ' + p.param + ' lines'
+        : 'the first ' + Math.round(100 * p.param) + '% of the file';
+      const at = (p) => !p ? '' : name(p) + ' (withholds ' + Math.round(100 * p.withheld) + '%, misses '
+        + Math.round(100 * p.miss) + '%)';
+      console.log('    Safest useful cap of each shape, at a miss budget of ' + Math.round(100 * v.maxMiss) + '%:');
+      console.log('      absolute:   ' + at(v.absolute));
+      console.log('      fractional: ' + at(v.fractional));
+      console.log('    Verdict: ' + (v.verdict === 'tie'
+        ? 'a TIE -- the two shapes save within ' + Math.round(100 * v.edge) + ' points of each other at the same'
+          + '\n    safety, so nothing here argues for changing the form.'
+        : v.verdict === 'neither can be safe and useful'
+          ? 'NEITHER shape can be both safe and useful. The only cap of either shape that stays inside'
+            + '\n    the miss budget is no cap at all, so one number is the wrong form and no value fixes it.'
+          : v.verdict.toUpperCase() + ' saves more at the same safety, by '
+            + Math.round(100 * Math.abs((v.fractional ? v.fractional.withheld : 0) - (v.absolute ? v.absolute.withheld : 0)))
+            + ' points of withholding.'));
+      console.log('    Safety is held fixed and saving compared, because that is the trade a cap makes. A miss');
+      console.log('    rate on its own is beaten by any cap that withholds less, down to withholding nothing.');
     }
     console.log('\n  Target depth as a share of the file:');
     for (const b of transcript.startHistogram(depths.map(r => Math.round(100 * r.depth)), [0, 10, 20, 30, 40, 50, 60, 80, 101])) {
