@@ -402,6 +402,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reads names a winning shape by what it saves at the same safety, not by domination',
     /Verdict: (FRACTIONAL|ABSOLUTE) saves more at the same safety, by \d+ points|Verdict: a TIE|Verdict: NEITHER shape can be/.test(r.stdout),
     (r.stdout.match(/[^\n]*Verdict:[^\n]*/) || [])[0]);
+  t('cli: --reads prices the same comparison in tokens, as Step A requires',
+    /Priced in tokens instead of in share of lines/.test(r.stdout) && /Verdict on tokens:/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Verdict on tokens:[^\n]*/) || [])[0]);
   t('cli: --reads does not crash printing the verdict', r.status === 0 && !/TypeError/.test(r.stderr), r.stderr.slice(0, 120));
   rmSync(join(cfg, 'projects', '-c-work-shaperepo'), { recursive: true, force: true });
   r = run(['--caps', '--cwd=whatever']);
@@ -977,6 +980,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       T.frontierVerdict(T.capFrontier(uniform)).verdict === 'tie'
       && Math.abs(T.frontierVerdict(T.capFrontier(uniform)).absolute.withheld
         - T.frontierVerdict(T.capFrontier(uniform)).fractional.withheld) < 1e-9);
+    /* Priced in tokens rather than in share of lines, which is Step A of the fractional cap's
+       pre-registration. A share of a file's lines weights a 200-line file like a 2,000-line one, and a
+       fractional cap's extra saving lands mostly on short files -- where it is cheap. The two measures must be
+       able to disagree, or the re-test is theatre. */
+    const mixed = [];
+    for (let i = 0; i < 30; i++) mixed.push({ start: 5, lines: 150, bpl: 20 });      // short, cheap, shallow
+    for (let i = 0; i < 15; i++) mixed.push({ start: 1100, lines: 2000, bpl: 55 });  // long, dear, deep
+    const fm = T.capFrontier(mixed);
+    t('the same data can say fractional by share of lines and a tie by tokens',
+      T.frontierVerdict(fm).verdict === 'fractional'
+      && T.frontierVerdict(fm, { measure: 'tokens' }).verdict === 'tie',
+      JSON.stringify([T.frontierVerdict(fm).verdict, T.frontierVerdict(fm, { measure: 'tokens' }).verdict]));
+    t('a fractional cap withholds the same share of tokens as of lines, since it cuts every file alike',
+      fm.fractional.every(p => Math.abs(p.withheldTokens - (1 - p.param)) < 0.02),
+      JSON.stringify(fm.fractional.map(p => [p.param, p.withheldTokens.toFixed(2)])));
+    t('a read with no bytes-per-line is outside the token measure and counted, not estimated in',
+      T.capFrontier([{ start: 5, lines: 100, bpl: 20 }, { start: 5, lines: 100 }]).priced === 1);
+    t('with nothing priced at all the token measure is zero everywhere rather than a guess',
+      T.capFrontier([{ start: 5, lines: 100 }]).absolute.every(p => p.withheldTokens === 0));
+    /* Zero everywhere would otherwise read as "neither shape can be safe and useful", which is a finding this
+       data cannot support: nothing was measured, so nothing is concluded. */
+    t('a token verdict with nothing priced is no verdict, not a finding about the shapes',
+      T.frontierVerdict(T.capFrontier([{ start: 5, lines: 100 }]), { measure: 'tokens' }).verdict === 'no verdict'
+      && T.frontierVerdict(T.capFrontier([{ start: 5, lines: 100 }])).verdict !== 'no verdict');
     /* The strongest finding the rule can return: targets sitting at the end of their files, where the only
        safe cap is no cap and no value of either shape saves anything. */
     const deep = Array.from({ length: 40 }, (_, i) => ({ lines: 2000 + 50 * i, start: Math.floor((2000 + 50 * i) * 0.95) }));
