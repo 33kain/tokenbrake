@@ -901,6 +901,63 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       readFileSync(ledgerAt, 'utf8').trim().split('\n').length === 1);
     rmSync(dir, { recursive: true, force: true });
   }
+  /* Which SHAPE of cap, not which value. An absolute cap withholds most of a long file and nothing from a
+     short one; a fractional cap withholds the same share of every file. A coefficient of variation cannot
+     tell those apart, because it measures concentration rather than what one threshold of that shape costs.
+     AB-TASK.md, "The Read cap's form" -- rule and thresholds committed before it was first computed. */
+  {
+    const shallow = Array.from({ length: 40 }, (_, i) => ({ start: 5 + (i % 20), lines: 200 + 10 * i }));
+    const fs2 = T.capFrontier(shallow);
+    t('a cap is scored on both what it withholds and what it hides',
+      fs2.absolute[0].miss === 0 && Math.abs(fs2.absolute[0].withheld - 0.75) < 0.02,
+      JSON.stringify(fs2.absolute[0]));
+    t('no cap at all is on the list, because a shape that cannot beat doing nothing is not worth having',
+      fs2.none.miss === 0 && fs2.none.withheld === 0);
+    t('a fractional cap withholds the same share of every file, whatever its length',
+      fs2.fractional.every(p => Math.abs(p.withheld - (1 - p.param)) < 0.02),
+      JSON.stringify(fs2.fractional.map(p => [p.param, p.withheld.toFixed(2)])));
+    /* The verdict holds SAFETY fixed and compares SAVING: among the candidates of a shape whose miss rate is
+       at or under the budget, the most any withholds. The first criterion asked for no higher miss at every
+       matched withholding level and could not discriminate -- a fractional cap is all-or-nothing on targets at
+       a fixed depth while an absolute one degrades gradually, so two curves of different curvature are almost
+       never one uniformly below the other. It returned "neither" for data built to favour each shape in turn.
+       Found on these fixtures before it ran on real data, withdrawn, and recorded as withdrawn. The three
+       fixtures below are what an instrument has to separate before it is allowed to measure anything. */
+    const proportional = Array.from({ length: 40 }, (_, i) => ({ lines: 100 + 50 * i, start: Math.floor((100 + 50 * i) * 0.55) }));
+    t('targets at a fixed DEPTH: the fractional shape saves more at the same safety',
+      T.frontierVerdict(T.capFrontier(proportional)).verdict === 'fractional',
+      JSON.stringify(T.frontierVerdict(T.capFrontier(proportional)).verdict));
+    t('and an absolute cap cannot be safe there at all without withholding nothing',
+      T.frontierVerdict(T.capFrontier(proportional)).absolute.withheld === 0);
+    /* Two habits at once -- some targets at the top, some in the middle. An absolute cap can still hold the
+       deeper group by keeping a fixed number of lines that is a small share of a long file; a fraction cannot
+       be small and deep at once. */
+    const bimodal = Array.from({ length: 40 }, (_, i) => (i % 8 < 5
+      ? { lines: 300 + 40 * i, start: 6 + (i % 4) }
+      : { lines: 300 + 40 * i, start: Math.floor((300 + 40 * i) * 0.55) }));
+    t('a bimodal habit is separated too, and does not collapse to no answer',
+      T.frontierVerdict(T.capFrontier(bimodal)).verdict === 'absolute');
+    /* Shallow targets in files of every length: a small absolute cap and a small fraction are nearly the same
+       thing, and the 10-point edge refuses to call a 4-point difference a win. */
+    const fixedLine = Array.from({ length: 40 }, (_, i) => ({ lines: 400 + 60 * i, start: 90 + (i % 5) }));
+    t('when both shapes serve equally the answer is a tie, not the larger number',
+      T.frontierVerdict(T.capFrontier(fixedLine)).verdict === 'tie',
+      JSON.stringify([T.frontierVerdict(T.capFrontier(fixedLine)).absolute.withheld,
+        T.frontierVerdict(T.capFrontier(fixedLine)).fractional.withheld]));
+    /* Files all one length make the two shapes the same thing by construction, so a tie there is arithmetic
+       rather than a finding -- worth pinning, because it is the case that would make a real tie meaningless. */
+    const uniform = Array.from({ length: 40 }, (_, i) => ({ lines: 1000, start: 10 + 24 * i }));
+    t('when every file is the same length the two shapes ARE the same cap, and the answer is a tie',
+      T.frontierVerdict(T.capFrontier(uniform)).verdict === 'tie'
+      && Math.abs(T.frontierVerdict(T.capFrontier(uniform)).absolute.withheld
+        - T.frontierVerdict(T.capFrontier(uniform)).fractional.withheld) < 1e-9);
+    /* The strongest finding the rule can return: targets sitting at the end of their files, where the only
+       safe cap is no cap and no value of either shape saves anything. */
+    const deep = Array.from({ length: 40 }, (_, i) => ({ lines: 2000 + 50 * i, start: Math.floor((2000 + 50 * i) * 0.95) }));
+    t('targets at the end of their files means neither shape can be safe and useful, and it says so',
+      T.frontierVerdict(T.capFrontier(deep)).verdict === 'neither can be safe and useful',
+      JSON.stringify(T.frontierVerdict(T.capFrontier(deep)).verdict));
+  }
   /* A read that ran off the end of its file says exactly how long that file was, and it was in every
      transcript already. `sed -n '375,480p'` asking for 106 lines and getting 105 means the file ended at 479.
      On this repo's own transcripts 40 of 163 sed ranges ran off the end -- against one exact file length in

@@ -503,7 +503,7 @@ function readsReport() {
       return m ? Math.sqrt(xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1)) / m : null; };
     /* Exact means the length was established at the time of the read: a whole-file read in the session, a
        ledger row the guard wrote, or a read that ran off the end. The file on disk today is none of those. */
-    const exact = depths.filter(r => r.source !== 'disk');
+    const exact = depths.filter(r => r.source !== 'disk' && r.lines > 0 && r.start > 0);
     const absCV = depths.length > 1 ? cv(depths.map(r => r.start)) : null;
     const frCV = depths.length > 1 ? cv(depths.map(r => r.depth)) : null;
     const eAbs = exact.length > 1 ? cv(exact.map(r => r.start)) : null;
@@ -514,6 +514,29 @@ function readsReport() {
     console.log('    The tighter one is the shape the cap should have. readLimitLines is an absolute line count,');
     console.log('    so if the fraction is markedly tighter the knob is the wrong shape -- too tight on a short');
     console.log('    file and too loose on a long one -- and no value of it is right everywhere.');
+    /* The form question, computed only from lengths established at the time of the read. AB-TASK.md,
+       "The Read cap's form": the rule and its thresholds were committed before this ran. */
+    const rows = exact.map(r => ({ start: r.start, lines: r.lines }));
+    const front = transcript.capFrontier(rows);
+    if (front.n >= 20) {
+      const v = transcript.frontierVerdict(front);
+      console.log('\n  Which SHAPE of cap serves your reading -- over the ' + front.n + ' reads with an exact file length:');
+      console.log('    cap                    withholds   misses');
+      const line = (label, p) => console.log('    ' + label.padEnd(22)
+        + (Math.round(100 * p.withheld) + '%').padStart(8) + (Math.round(100 * p.miss) + '%').padStart(9));
+      line('no cap at all', front.none);
+      for (const p of front.absolute) line('first ' + p.param + ' lines', p);
+      for (const p of front.fractional) line('first ' + Math.round(100 * p.param) + '% of the file', p);
+      console.log('    Verdict: ' + (v.verdict === 'neither'
+        ? 'NEITHER shape dominates. One number is not the right form for this reading --'
+          + '\n    any single threshold that keeps the shallow targets cheaply must miss the deeper ones.'
+        : v.verdict === 'no verdict'
+          ? 'no verdict -- the two shapes never met at a comparable price.'
+          : v.verdict.toUpperCase() + ' dominates: no higher miss at any matched withholding level, and'
+            + '\n    at least 10 points lower at one of them.'));
+      console.log('    Matched at ' + v.absolute.pairs.length + ' withholding level(s) within 5 points; a miss rate is only');
+      console.log('    comparable between two caps that cost about the same, or the cheaper one wins by doing less.');
+    }
     console.log('\n  Target depth as a share of the file:');
     for (const b of transcript.startHistogram(depths.map(r => Math.round(100 * r.depth)), [0, 10, 20, 30, 40, 50, 60, 80, 101])) {
       const to = b.to > 100 ? '100%' : String(b.to) + '%';

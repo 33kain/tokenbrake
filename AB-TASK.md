@@ -617,17 +617,36 @@ Candidates: `L ∈ {100, 200, 300, 500, 800, 1200}` and `f ∈ {0.1, 0.2, 0.3, 0
 **no cap at all** (miss 0, withholding 0) as the anchor, because a shape that cannot beat doing nothing is not
 a shape worth having.
 
-**The rule.** One shape **dominates** the other if, at every withholding level the other reaches — matched to
-the nearest candidate within **5 percentage points** — its miss rate is **no higher**, and is **lower by at
-least 10 percentage points at one or more** of them.
+**The rule — WITHDRAWN 2026-09-12, before it was ever run on real data, and replaced below.** One shape
+dominates the other if, at every withholding level the other reaches — matched to the nearest candidate within
+5 percentage points — its miss rate is no higher, and is lower by at least 10 points at one or more of them.
 
-- Fractional dominates → `readLimitLines` is the wrong **form**; a fractional cap gets designed under its own
+**Why it was withdrawn.** It cannot discriminate. A fractional cap is all-or-nothing on targets that sit at a
+fixed depth — it misses everything below that depth and nothing above it — while an absolute cap degrades
+gradually. Two curves of different curvature are almost never one uniformly below the other, so a single bad
+level at the aggressive end (where both miss nearly everything and the result is useless either way) breaks
+domination. Run against synthetic data **built to favour each shape in turn**, it returned "neither" for both.
+An instrument that returns the same answer whatever it measures is not measuring.
+
+Found on those fixtures **before** it touched the owner's data, which is the only reason replacing it is not
+re-scoring. The fixtures are in `test.mjs` and the replacement must separate all four of them: targets at a
+fixed depth, targets at a fixed line, a bimodal habit, and targets at the end of their files.
+
+**The rule, replacing it.** Hold **safety** fixed and compare **saving**, which is the trade the cap actually
+makes. For each shape, among its candidates whose miss rate is at or under **25%** — the same budget the
+strength rule used — take the **most any of them withholds**. `no cap` is always on that list at zero
+withholding, so a shape whose best safe candidate withholds nothing cannot be both safe and useful here.
+A shape wins by withholding at least **10 percentage points** more than the other.
+
+- Fractional wins → `readLimitLines` is the wrong **form**; a fractional cap gets designed under its own
   pre-registration and its own A/B. Not today, and not as a value change.
-- Absolute dominates → the current form is right, and this is the first evidence for it in the project.
-- **Neither dominates** → one number is not the right form for this workload. Record it and stop tuning the
-  shape; the next idea has to be something other than a single threshold.
+- Absolute wins → the current form is right, and this is the first evidence for it in the project.
+- Within 10 points of each other → **a tie**, and no change. Note that if every file were the same length the
+  two shapes would be the same cap and a tie would be arithmetic rather than a finding; his files are not.
+- **Neither can be safe and useful** — both best-safe candidates withhold nothing → one number is the wrong
+  form for this workload, and no value of either shape fixes it. Record it and stop tuning the shape.
 
-Fewer than **3** matched withholding levels, or fewer than **20** reads with an exact length: no verdict.
+Fewer than **20** reads with an exact length: no verdict.
 
 **Written expectation.** Neither dominates. Target depth is bimodal — 23 of 50 reads in the first 10% of a file
 and 15 at 50-60% — so any single threshold that keeps the shallow group cheaply must miss the middle group, in
