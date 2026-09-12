@@ -1780,7 +1780,7 @@ what was measured: two arms is the design every other round on this page uses. T
 check that the binary exists before arm 1 is a real hole in the runbook, and it is fixed, but it cost a
 discovery mid-round rather than a result.
 
-**The round is void for exactly one reason: the two arms did not do the same task.** The pasted instruction
+**The round is void for two reasons. The first, found on the day: the two arms did not do the same task.** The pasted instruction
 says "one step at a time, and do not skip
 or batch steps". Arm 1 obeyed it: 17 tool results across 15 requests, 1.1 per request. Arm 3 opened with
 "I'll work through the twelve items, running the independent ones in parallel" and batched: 23 tool results
@@ -1789,6 +1789,29 @@ context five times instead of fifteen, so carried context falls from 224k to 84k
 for 10k of it; and five requests reuse the cache less, 67% against 92%, so on a model that lists cache
 writes at eighty times its reads the bill goes *up* 31% while requests go *down* 67%. The requests column,
 which the decision rule says decides, was decided by the batching.
+
+**The second reason, found 2026-09-12 and not on the day: arm 1 was not off.** Its session, `01139ae6`,
+has tokenbrake ledger rows -- `report --all` marks it `guard` -- so the hooks were firing in the arm whose
+whole job was to run without them. The evidence was in the table above the entire time, read as a zero:
+**"trimmed by the guard | 0 (2 offered, not applied)"** on the off arm. A guard that was not installed offers
+nothing.
+
+Three things checked before writing that down, because an accusation against one's own record is worth the
+same scrutiny as a finding. It is the same session: the ab7 table says 15 requests, 1.3M processed and 224k
+carried, and `--all` reports 15, 1.3M and 224k for `01139ae6`. It is not an artefact of how `status` tests
+itself: that spawn sends a payload with no `session_id` (`cli.js:101-103`), so a row it writes cannot carry a
+real session's id, and rows without one are dropped before the join. And it did not spread: ab8's off arm
+`460d9673` and ab9's off arm `8516e976` carry no ledger rows at all, which fits ab7 being the first round run
+by hand rather than by `create_session`.
+
+What this does **not** change is the numbers in the table. "Offered and not applied" means the model never
+received the replacement, so what arm 1 was delivered is what the host delivered; the contamination is in the
+arm's configuration and in the sentence that called the round void for one reason. It does change what the
+round is evidence of -- an off arm with the product running is not an off arm, whatever the totals say -- and
+it is the first known instance of the trap this repository only wrote down today: **a user-scope install makes
+an OFF arm impossible, and nothing in the arm's own settings will say so.** Before any future round:
+`node cli.js uninstall`, then `verify-config --expect=off`, which exists because of exactly this and refuses a
+pair when a guard is installed at any scope.
 
 The two arms also read differently — arm 1 used `sed -n` through Bash and let 46k in, arm 3 used the Read
 tool and let 91k in — which is the same planning variance this page has measured at a factor of two on

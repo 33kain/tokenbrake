@@ -663,6 +663,9 @@ Two things to remember while that accumulates:
 
 - **A user-scope install makes the benchmark's OFF arms impossible** — `verify-config --expect=off` requires
   zero guards at every scope. Before any future round: `node cli.js uninstall`.
+  **This is not hypothetical: it has already happened once.** ab7's off arm (`01139ae6`) ran with the guard
+  firing, found on 2026-09-12 and recorded in `AB-TASK.md`'s ab7 section. The arm's own settings said nothing,
+  which is the whole danger — an install at another scope is invisible from inside the arm.
 - **This repository now has both scopes**, so the guard fires twice per call here. `--caps`, `--reach` and
   `--ledger` all dedupe, and `status` reports the overlap. `status` also now hashes the installed copy against
   this checkout's `guard.js` and says **STALE** when they differ: `init` copies the guard and nothing keeps the
@@ -739,12 +742,35 @@ available: sessions that read their own transcripts, run a 350-check suite and p
 claims to describe ordinary work on a repository. The count that matters for it is sessions that are neither
 benchmark nor tokenbrake's own development and that have a guard row, and **today that count is probably zero**.
 
-That is an inference, not a measurement, and it is settled by one command: `node cli.js report --all` prints
-the cwd of every session. If all eight sit under the tokenbrake checkout, the table has no rows yet and the
-clock on it starts from the user-scope install, not from the 40 transcripts already on disk.
+**Measured 2026-09-12, and the inference above was wrong by one and wrong in its mechanism.** `report --all`
+now prints the cwd and the guard column for all 65 sessions, and every id was crossed against `AB-TASK.md`
+rather than judged by its path. Seven of the eight are contexa, not tokenbrake's own development -- but four
+of those are A/B arms:
+
+| session | requests | cwd | what it is |
+|---|---|---|---|
+| `5ac70ce9` | 65 | tokenbrake | this repository's own development |
+| `a2afb138` | 18 | contexa | ab9's tokenbrake arm (`AB-TASK.md`) |
+| `8c21713d` | 23 | contexa | ab8's tokenbrake arm |
+| `acb853e1` | 7 | contexa | ab7's tokenbrake arm |
+| `01139ae6` | 15 | contexa | ab7's **off** arm -- and it has guard rows; see AB-TASK's ab7 section |
+| `e6f6d935` | 2 | contexa | trivial |
+| `3be8824e` | 8 | contexa | **ordinary work** |
+| `77c43384` | 3 | contexa | trivial |
+
+**So the table has one row today: `3be8824e`.** Two, if `5ac70ce9` is included and the claim drops to work on
+this repository rather than ordinary work on another. Not zero, which is what was written here this morning,
+and the reasoning that produced zero was wrong in a way the number nearly hid: the guess was that the eight
+were near enough all tokenbrake's own development, and instead they are near enough all contexa, with the A/B
+arms doing the excluding.
+
+The count is only obtainable by hand, and that is a property of the data rather than a missing feature: no
+transcript records that a session was an A/B arm. `--all` narrows 65 to 8 and says so; the last step is the
+list above, and any future round adds to it.
 
 So the table and the reach verdict wait on the same kind of thing -- sessions, not work -- but not on the same
-count, and the table's is the further away. Neither is a task until its own minimum is met.
+count, and the table's is the further away: one row of eight, against eight guard sessions of ten. Neither is a
+task until its own minimum is met, and both now have a repeatable way to be counted instead of estimated.
 
 Two notes that survive the change of source. The files under `ab-results/real/` all predate 0.2.3 and describe
 versions that no longer ship; if any of them is used at all, the post says so rather than letting the reader
