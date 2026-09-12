@@ -441,6 +441,21 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = run(['--caps', '--session=nope']);
   t('cli: --caps with an unknown session prefix says so', /No session in the ledger starts with "nope"/.test(r.stdout));
   r = run(['--ledger']);
+  /* A guard installed at both user and project scope fires twice for one event, because Claude Code adds
+     hooks across scopes rather than choosing one. Every count in --ledger would then read double on the
+     repository where the two overlap. */
+  writeLedger([capRow,
+    { t: 5000, ev: 'post', session: 'dup', tool: 'Bash', chars: 9000, kept: 1200, id: 'tu-dup', what: 'npm test' },
+    { t: 5040, ev: 'post', session: 'dup', tool: 'Bash', chars: 9000, kept: 1200, id: 'tu-dup', what: 'npm test' }]);
+  r = run(['--ledger', '--all']);
+  const trimmedCount = (out) => Number((out.match(/Trimmed by tokenbrake: (\d+) shell/) || [])[1]);
+  const withDup = trimmedCount(r.stdout);
+  writeLedger([capRow, { t: 5000, ev: 'post', session: 'dup', tool: 'Bash', chars: 9000, kept: 1200, id: 'tu-dup', what: 'npm test' }]);
+  const single = trimmedCount(run(['--ledger', '--all']).stdout);
+  t('cli: --ledger counts one event once when two installs logged it twice',
+    /1 duplicate row\(s\) dropped/.test(r.stdout) && withDup === single,
+    'two rows -> ' + withDup + ' trimmed; one row -> ' + single);
+  writeLedger([capRow]);
   t('cli: --ledger counts the two Read-cap halves apart',
     /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a shell cat of one/.test(r.stdout)
     && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));

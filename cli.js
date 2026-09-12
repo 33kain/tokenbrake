@@ -787,7 +787,22 @@ function ledgerReport() {
     console.log(`Session ${String(last).slice(0, 8)}... (${sessions.length} sessions in ledger; use --all for everything)\n`);
   }
 
-  const posts = recs.filter(r => r.ev === 'post');
+  /* One tool call can produce two rows. A guard installed at BOTH user and project scope fires twice for the
+     same event -- Claude Code adds hooks across scopes rather than choosing one -- and every count here would
+     then read double on the repository where the two overlap. `--caps` already dedupes and `--reach` collapses
+     duplicates through a Map keyed by tool_use_id; this was the one place the doubling still showed. Rows
+     carrying a tool_use_id dedupe on it; the older rows that predate that field keep their previous
+     behaviour, since inventing a key for them would merge genuinely distinct results. */
+  const seenPost = new Set();
+  const posts = recs.filter(r => {
+    if (r.ev !== 'post') return false;
+    if (!r.id) return true;
+    const k = String(r.session || '') + '|' + r.id;
+    if (seenPost.has(k)) return false;
+    seenPost.add(k);
+    return true;
+  });
+  const dupPosts = recs.filter(r => r.ev === 'post').length - posts.length;
   const total = posts.reduce((s, r) => s + (r.chars || 0), 0);
   const saved = posts.reduce((s, r) => s + (r.kept != null ? r.chars - r.kept : 0), 0);
   const trimmed = posts.filter(r => r.kept != null).length;
@@ -797,7 +812,8 @@ function ledgerReport() {
      evidence for. --caps lists the files. */
   const caps = transcript.readCapFiles(recs, null);
 
-  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ~ ${fmt(tok(total))} tokens`);
+  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ~ ${fmt(tok(total))} tokens`
+    + (dupPosts ? `   (${fmt(dupPosts)} duplicate row(s) dropped: the guard is installed at both user and project scope here, so each event is logged twice)` : ''));
   console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ~ ${fmt(tok(saved))} tokens kept out of context`);
   console.log(caps.n
     ? `Read caps fired: ${caps.n} -- ${caps.source.n} on a large source file (readLimitLines), `
