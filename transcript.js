@@ -57,12 +57,25 @@ function describe(name, input) {
 /* The file a result came from, when the call names one: a Read's path, or the single path a plain
    cat/sed/head/tail read. Separate from readKey because a recovery read is the SAME file at a DIFFERENT
    offset, so it needs the path without the range that readKey deliberately includes. */
+/* The same command shapes guard.js exempts from the trim, kept deliberately in step with its EXCERPT: a
+   read of one file, optionally inside a `cd … &&`, optionally with an `echo` label before or after, and
+   with the path quoted if it has spaces. The two must agree — a report that does not recognise the
+   commands the guard treats as reads cannot tell you what the guard did. */
+const P_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+const LBL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
+const RD_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![rRlL])[a-zA-Z]+)*\s+${P_})\s+(${P_})`;
+const EXCERPT_CMD = new RegExp(
+  String.raw`^\s*(?:cd\s+${P_}\s*&&\s*)?(?:${LBL_}\s*(?:&&|;)\s*)?${RD_}` +
+  String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
+const unquote = (s) => String(s || '').replace(/^['"]|['"]$/g, '');
+
 function readFileOf(name, input) {
   const i = input || {};
   if (i.file_path) return String(i.file_path);
   if ((name === 'Bash' || name === 'PowerShell') && typeof i.command === 'string') {
-    const m = /^\s*(?:cat(?: -n)?|sed -n\s+'?[0-9,]+p'?|head(?: -n?\s*\d+)?|tail(?: -n?\s*\d+)?)\s+(\S+)\s*$/.exec(i.command);
-    if (m) return m[1].replace(/^['"]|['"]$/g, '');
+    const m = EXCERPT_CMD.exec(i.command);
+    if (m) return unquote(m[1]);
   }
   return null;
 }
@@ -70,9 +83,8 @@ function readFileOf(name, input) {
 function readKey(name, input) {
   const i = input || {};
   if (name === 'Read' && i.file_path) return `Read ${i.file_path} ${i.offset || 0} ${i.limit || 0}`;
-  if (name === 'Bash' && typeof i.command === 'string') {
-    const m = /^\s*(?:cat(?: -n)?|sed -n\s+'?[0-9,]+p'?|head(?: -n?\s*\d+)?|tail(?: -n?\s*\d+)?)\s+(\S+)\s*$/.exec(i.command);
-    if (m) return `Bash ${i.command.trim().replace(/\s+/g, ' ')}`;
+  if (name === 'Bash' && typeof i.command === 'string' && EXCERPT_CMD.test(i.command)) {
+    return `Bash ${i.command.trim().replace(/\s+/g, ' ')}`;
   }
   return null;
 }
@@ -573,4 +585,4 @@ function renderSummaryLine(parsed) {
   return `  ${sid}…  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, recoveryReads, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

@@ -438,6 +438,45 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
   }
+  /* The shapes models actually write, all found trimmed in one measured session (AB-TASK.md, pair 5):
+     a `cd … &&` prefix, an echo label before or after, a quoted path with a space, and a grep of one
+     named file. Each is a read the model had already narrowed; each lost the exemption and was cut to
+     head, tail and error lines, and the model then went back for what was removed — four return trips,
+     three extra rounds, and the weakest result of the round. */
+  for (const c of [
+    'cd "C:/Users/Q/Desktop/bench/work/kestrel-payments" && sed -n \'502,535p\' incident/data/events.ndjson && echo "---"',
+    "echo '=== settle.js ==='; sed -n '320,345p' settle.js",
+    'cat "Settlement Batch 2026-08.csv"',
+    'cd "/a b/c" && grep -n "txn_7Q4M9KX2" "incident/exports/Settlement Batch.csv"',
+    'head -n 200 build.log && echo done',
+    "cd /repo && tail -n 120 worker/test.mjs",
+  ]) {
+    r = post(c, src.slice(0, 9000));
+    t(`untouched (pair 5 shapes): ${c.slice(0, 62)}`, r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
+  }
+  /* And the ones that must keep being trimmed: a pipe filters the file rather than printing it, a redirect
+     sends it elsewhere, and a recursive grep is a search across files, not one file's contents. */
+  for (const c of [
+    'node tools/test-runner.js 2>&1 | grep -v "^PASS"',
+    'grep -rn "txn_7Q4M9KX2" .',
+    'grep -l "txn" src/*.js',
+    'cd /a && cat x.js > y.js',
+    'cd /a && rm -rf build',
+  ]) {
+    r = post(c, src.slice(0, 9000));
+    const o2 = parse(r.stdout); const u2 = o2 && o2.hookSpecificOutput && o2.hookSpecificOutput.updatedToolOutput;
+    t(`still trimmed (pair 5 shapes): ${c.slice(0, 52)}`, !!u2 && /\[tokenbrake\] \d+ lines omitted here/.test(u2.stdout), r.stdout.slice(0, 60));
+  }
+  /* The report has to recognise exactly what the guard exempts, or it cannot say what the guard did. */
+  const { readFileOf } = await import('./transcript.js');
+  for (const [c, want] of [
+    ['cd "C:/a b/repo" && sed -n \'502,535p\' incident/data/events.ndjson && echo "---"', 'incident/data/events.ndjson'],
+    ['cat "Settlement Batch 2026-08.csv"', 'Settlement Batch 2026-08.csv'],
+    ['sed -n \'1,50p\' f.js | grep foo', null],
+  ]) {
+    t(`the report reads the same path the guard does: ${String(want).slice(0, 34)}`, readFileOf('Bash', { command: c }) === want, String(readFileOf('Bash', { command: c })));
+  }
+
   const big = Array.from({ length: 1200 }, (_, i) => `line ${i + 1} of a big file `.padEnd(70, '.')).join('\n');   // 85 KB, over readMaxBytes
   r = post("sed -n '1,1200p' big.js", big);
   let o = parse(r.stdout); let u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
