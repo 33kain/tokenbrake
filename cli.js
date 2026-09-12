@@ -125,7 +125,22 @@ function status() {
   console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
   console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
+  /* Is the INSTALLED guard the one this checkout ships? `init` copies guard.js; nothing afterwards keeps the
+     copy in step. `test.mjs` pins the project-scope copy, and the user-scope copy had nothing watching it at
+     all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its
+     ledger is read as evidence about the current one. That matters most exactly when the ledger is being
+     collected on purpose, which is what a user-scope install is for. */
+  const sha = (p2) => { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p2)).digest('hex'); } catch { return null; } };
+  const srcSha = sha(path.join(__dirname, 'guard.js'));
+  const copySha = sha(guardFile);
+  const drift = srcSha && copySha && srcSha !== copySha;
   console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
+  console.log(`  guard build: ${!copySha ? 'no copy installed'
+    : !srcSha ? 'installed, and this checkout has no guard.js to compare against'
+    : drift ? 'STALE -- the installed copy is not this checkout\'s guard.js (' + copySha.slice(0, 12) + ' vs '
+      + srcSha.slice(0, 12) + '). Re-run `' + (PROJECT ? 'node cli.js init --project' : 'node cli.js init')
+      + '`: until you do, the ledger records an older guard while the report reads it as this one.'
+    : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
   for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) for (const g of ours(ev)) for (const h of g.hooks) {
     if (!isOurs({ hooks: [h] })) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
@@ -379,6 +394,124 @@ function capsReport() {
    with a task that said "read in full", which forbids the saving by construction. Half of that question is
    arithmetic over a person's own reads -- how many a lower trigger catches and how much of each it cuts --
    and this mode does that half for free. The half it cannot do is whether the model comes back. */
+/* `--reach`: of everything that entered context, how much sits where the trim can act at ALL -- shell, exit 0,
+   over maxChars, under Claude Code's inline ceiling -- and which tools put it there.
+
+   The question comes from a benchmark round that abandoned its own schedule: handed a CLI that could slice a
+   log, the agent sliced, and the guard rewrote nothing the model saw. The round before it, on a workspace
+   whose tools only dump, the mechanism was there. So the trim's reach may be a property of the TOOLING rather
+   than of the work -- and a person's own sessions are a better sample of "an agent with decent tools" than
+   any fixture can stage. AB-TASK.md, "Does the trim's mechanism appear when the agent has decent tools?",
+   carries the rule and the thresholds, fixed before this was ever run.
+
+   The share reported is of CARRIED tokens, not of results: a result costs its size times the later requests
+   that re-read it, so counting results answers a different question from the one about the bill. */
+function reachReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const only = opt('--cwd');
+  const top = Number(opt('--top') || 12) || 12;
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+  if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+  const pooled = [], skipped = [], sessions = [];
+  for (const f of found) {
+    const id = String(f.session).slice(0, 8);
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    const cwd = p.cwd || '';
+    if (only) {
+      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
+    } else if (/tokenbrake-bench/i.test(cwd)) {
+      skipped.push([id, 'benchmark session -- a staged workload, which is the thing this view exists to check against']);
+      continue;
+    }
+    transcript.carry(p);
+    const trimmed = transcript.trimmedResults(p, ledger);
+    if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
+    /* "The guard was here and chose not to act" and "the guard was not here" produce an identical untouched
+       bucket and opposite conclusions -- the first is a design choice to argue about, the second is a
+       coverage gap. The ledger tells them apart: a session the guard ran in wrote rows in it. This is the
+       third place today the same distinction decided everything. */
+    const sid = p.sessionId || f.session;
+    const ran = ledger.some((r) => r && r.session === sid);
+    sessions.push({ parsed: p, trimmed, ran });
+    pooled.push([id, p.results.length, cwd]);
+  }
+  const withGuard = sessions.filter((x) => x.ran);
+  const r = transcript.reachPooled(sessions);
+  const rg = transcript.reachPooled(withGuard);
+  const shellN = r.window.n + r.under.n + r.failed.n + r.persisted.n;
+  console.log('Where the trim can reach -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
+    + (only ? '  (--cwd=' + only + ')' : ''));
+  console.log('\n  ' + fmt(r.total.n) + ' tool results, ~ ' + fmt(r.total.carried) + ' carried tokens in total'
+    + '  (' + fmt(shellN) + ' of them shell)');
+  const row = (label, b) => console.log('    ' + label.padEnd(34) + String(b.n).padStart(6)
+    + fmt(b.carried).padStart(12) + (r.carriedTotal ? (Math.round(1000 * b.carried / r.carriedTotal) / 10 + '%').padStart(8) : ''));
+  console.log('\n    bucket                            results     carried   share');
+  row('within the trim\'s reach', r.window);
+  row('  of those, it acted on', r.acted);
+  row('  of those, it did not', r.untouched);
+  row('under the threshold (too small)', r.under);
+  row('past the host ceiling (persisted)', r.persisted);
+  row('failed (host ignores a rewrite)', r.failed);
+  row('not shell at all', r.nonShell);
+
+  /* Everything above pools sessions the guard never ran in, where "untouched" says nothing about the guard.
+     The verdict is taken from the sessions it DID run in, because those are the only ones where a result
+     inside the reach and left alone is a fact about the product. */
+  console.log('\n  Of the ' + pooled.length + ' session(s) pooled, the guard was recording in ' + withGuard.length + '.');
+  if (!withGuard.length) {
+    console.log('  Nothing below can be read as a fact about the guard: it was not running in any of them.');
+  } else {
+    console.log('    within reach there: ' + rg.window.n + ' result(s), ' + fmt(rg.window.carried) + ' carried'
+      + (rg.carriedTotal ? ' (' + (Math.round(1000 * rg.windowShareOfCarried) / 10) + '% of what those sessions carried)' : ''));
+    console.log('    acted on: ' + rg.acted.n + '  left alone: ' + rg.untouched.n
+      + (rg.window.carried ? '  -- the guard reached ' + Math.round(100 * rg.acted.carried / rg.window.carried) + '% of the carried tokens it could' : ''));
+    console.log('    A result inside the reach and left alone, in a session the guard WAS running in, is the');
+    console.log('    product declining to act -- the excerpt exemption is the main reason it does that, and');
+    console.log('    0.2.6 traded acting less for acting wrongly less often. This is that trade\'s price.');
+  }
+
+  const W = rg.windowShareOfCarried;
+  console.log('\n  W = ' + (Math.round(1000 * W) / 10) + '% of carried tokens sit where the trim can act,'
+    + '\n  measured over the sessions the guard was actually running in.');
+  const shellG = rg.window.n + rg.under.n + rg.failed.n + rg.persisted.n;
+  const THIN = withGuard.length < 10 || shellG < 200;
+  console.log('  ' + (THIN
+    ? 'Under 10 sessions or 200 shell results: NO VERDICT, and the number above is not one.'
+    : W < 0.05 ? 'Under 5%: the mechanism is essentially absent on this work. No quality of trimming can'
+        + '\n  matter at that share -- the guard is not the useful part of this product on your sessions.'
+      : W >= 0.20 ? 'At or above 20%: the mechanism is present and worth having on your work.'
+        : 'Between 5% and 20%: present but marginal. That is the number; there is no claim to make from it.'));
+
+  /* Split the same way the verdict is. A tool list pooled over sessions the guard never ran in answers the
+     tooling question for a machine with no guard on it -- which is a different question, and mixing them is
+     the error this view had one line below the one it had just fixed. */
+  const toolRows = withGuard.length ? rg.tools : r.tools;
+  if (toolRows.length) {
+    console.log('\n  What put results in the trim\'s reach -- the tooling question, not the workload one.');
+    console.log('  ' + (withGuard.length
+      ? 'Only the ' + withGuard.length + ' session(s) the guard was recording in, since a tool list from sessions'
+        + '\n  without it describes a machine that is not running this product:'
+      : 'No session had the guard, so this is every pooled session and says nothing about the guard:'));
+    console.log('    results      carried  tool');
+    for (const t of toolRows.slice(0, top)) {
+      console.log('    ' + String(t.n).padStart(7) + fmt(t.carried).padStart(13) + '  ' + t.tool);
+    }
+    if (toolRows.length > top) console.log('    (+ ' + (toolRows.length - top) + ' more; --top=N)');
+    if (withGuard.length && r.tools.length) {
+      console.log('    (across all ' + pooled.length + ' pooled session(s), guard or not, the heaviest were: '
+        + r.tools.slice(0, 3).map((t) => t.tool + ' ' + fmt(t.carried)).join(', ') + ' -- context, not evidence.)');
+    }
+    console.log('    A tool that only dumps makes trimmable output; one that can slice does not, and a model');
+    console.log('    that can slice will. If this list is short and every entry is a dump with no ranged mode,');
+    console.log('    the reach is a property of the tools and the honest fix is to give them a ranged mode.');
+  } else {
+    console.log('\n  Nothing reached the trim at all, so there is no tool list to show.');
+  }
+  printPool(pooled, skipped);
+}
+
 function readsReport() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
@@ -604,6 +737,7 @@ function report() {
   if (flag('--where')) return whereReport();
   if (flag('--caps')) return capsReport();
   if (flag('--reads')) return readsReport();
+  if (flag('--reach')) return reachReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -668,7 +802,22 @@ function ledgerReport() {
     console.log(`Session ${String(last).slice(0, 8)}... (${sessions.length} sessions in ledger; use --all for everything)\n`);
   }
 
-  const posts = recs.filter(r => r.ev === 'post');
+  /* One tool call can produce two rows. A guard installed at BOTH user and project scope fires twice for the
+     same event -- Claude Code adds hooks across scopes rather than choosing one -- and every count here would
+     then read double on the repository where the two overlap. `--caps` already dedupes and `--reach` collapses
+     duplicates through a Map keyed by tool_use_id; this was the one place the doubling still showed. Rows
+     carrying a tool_use_id dedupe on it; the older rows that predate that field keep their previous
+     behaviour, since inventing a key for them would merge genuinely distinct results. */
+  const seenPost = new Set();
+  const posts = recs.filter(r => {
+    if (r.ev !== 'post') return false;
+    if (!r.id) return true;
+    const k = String(r.session || '') + '|' + r.id;
+    if (seenPost.has(k)) return false;
+    seenPost.add(k);
+    return true;
+  });
+  const dupPosts = recs.filter(r => r.ev === 'post').length - posts.length;
   const total = posts.reduce((s, r) => s + (r.chars || 0), 0);
   const saved = posts.reduce((s, r) => s + (r.kept != null ? r.chars - r.kept : 0), 0);
   const trimmed = posts.filter(r => r.kept != null).length;
@@ -678,7 +827,8 @@ function ledgerReport() {
      evidence for. --caps lists the files. */
   const caps = transcript.readCapFiles(recs, null);
 
-  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ~ ${fmt(tok(total))} tokens`);
+  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ~ ${fmt(tok(total))} tokens`
+    + (dupPosts ? `   (${fmt(dupPosts)} duplicate row(s) dropped: the guard is installed at both user and project scope here, so each event is logged twice)` : ''));
   console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ~ ${fmt(tok(saved))} tokens kept out of context`);
   console.log(caps.n
     ? `Read caps fired: ${caps.n} -- ${caps.source.n} on a large source file (readLimitLines), `
@@ -738,6 +888,9 @@ function help() {
       --caps                          every file the Read cap has fired on, pooled across sessions, with the
                                       two knobs counted apart and the share of each file delivered;
                                       --session=<prefix> narrows, --top=N widens
+      --reach                         of everything that entered context, the share of CARRIED tokens sitting
+                                      where the trim can act at all, and which tools put it there. The
+                                      question of whether the guard needs poor tooling to have anything to do
       --reads                         every file you read WHOLE, at its own size with Claude Code's line
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets

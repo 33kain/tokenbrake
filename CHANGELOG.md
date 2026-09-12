@@ -124,6 +124,23 @@
   contemporaneous length is often shorter than today's — the files grew — so reading lengths off disk had been
   making every target look shallower than it was.
 
+- **`report --reach` asks whether the guard needs poor tooling to have anything to do.** A benchmark round
+  abandoned its own schedule over this: handed a CLI that could slice a log (`summary`, `log --step=`), the
+  agent sliced, every shell result came back under the trim threshold, and the guard rewrote **nothing the
+  model saw**. The round before it ran on a workspace whose tools only dump, and there the mechanism was
+  present. So the trim's reach may be a property of the **tooling** rather than of the work — and a model that
+  can slice will.
+  `--reach` answers that from a person's own sessions, which are a better sample of "an agent with decent
+  tools" than any fixture can stage. It pools every session and reports what share of **carried** tokens sits
+  where the trim can act at all — shell, exit 0, over `maxChars`, under Claude Code's inline ceiling — and then
+  names the tools that put results there, grouped by the program invoked rather than by the command string.
+  A result the guard already rewrote counts as in-window **by proof**, since after a trim it measures under the
+  threshold and classifying by size would file every success as out of reach.
+  The thresholds were fixed before it was first run (`AB-TASK.md`): under 5% of carried tokens and the
+  mechanism is essentially absent on that person's work, at or above 20% it is present and worth having, and
+  between them there is a number and no claim. Under 10 sessions or 200 shell results it prints **no verdict**
+  rather than a number that looks like one.
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a

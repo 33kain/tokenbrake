@@ -795,6 +795,84 @@ prediction.
 same evidence says should not happen, and the form absolute (tie on the measure that decides). Three questions,
 three answers, none of them a change, and every one of them now has an argument where before it had a guess.
 
+## Does the trim's mechanism appear when the agent has decent tools? — pre-registered 2026-09-12
+
+Round 2's pilot abandoned its schedule because the guard rewrote **nothing the model saw**: every shell result
+in the ON arm was under the 6,000-character threshold. The fixtures put six logs inside the trim's window on
+purpose; the agent, handed a CLI with `summary` and `log --step=`, sliced instead of dumping.
+
+Round 1's workload had no slicing tools -- `diag.js`, `bank-trace.js`, `ledger-dump.js` print and stop -- and
+there the mechanism was present. So the hypothesis this question exists to test is uncomfortable for the
+product: **the trim's mechanism may be a property of bad tooling rather than of hard work.** A tool that dumps
+makes trimmable output; a tool that slices does not, and a model that can slice will.
+
+**This is answered from the owner's own sessions, free, and not from a paid round.** His real work is a better
+sample of "an agent with decent tools" than anything a fixture can stage, and it is already on disk.
+
+### The measurement
+
+A new `report --reach`, pooled across sessions with the same workload filter the other views use. Of every
+tool result, the share that sits where the trim can act at all: shell, exit 0, over `maxChars`, under Claude
+Code's inline ceiling. Reported by count and — the column that matters — **by share of carried tokens**, since
+ab10 established that a result's cost is size times the later requests that re-read it.
+
+Alongside it, the commands that produced those results, grouped by the program invoked. That is what turns a
+number into an answer about tooling: if the trim's reach comes from three commands and all three are dumps
+with no ranged mode, the mechanism is a tooling artifact and the honest advice is to fix the tool.
+
+### The rule, fixed before the numbers
+
+Let **W** be the share of all carried tool-result tokens sitting in the trim's window, pooled across the
+owner's non-benchmark sessions.
+
+- **W < 5%** → the mechanism is essentially absent on real work with real tools. No quality of trimming can
+  matter at that share, and the product's own README must say so in those words.
+- **W ≥ 20%** → the mechanism is present and worth having, and round 2's null is about the CI task's tooling
+  rather than about agents in general.
+- **5% ≤ W < 20%** → present but marginal. Report the number, make no claim either way.
+
+Under **10 pooled sessions**, or under **200 shell results**: no verdict.
+
+**Written expectation.** W lands under 10%. Round 2's agent sliced when it could, the Read cap has already
+been shown never to fire on this owner's real work, and `--where` showed his reads arriving already bounded.
+The picture those three make is of an agent that mostly asks for what it wants. If that is right, the useful
+product is the report rather than the guard — which is a finding about tokenbrake, not about this session.
+
+**Result — 2026-09-12: NO VERDICT, and the rule's own minimum is why.**
+
+Pooled over 40 non-benchmark sessions: 679 tool results, 16.4M carried tokens, 54 results inside the trim's
+reach carrying 2.71M — **16.5%**.
+
+**That number is not the measurement.** The guard was recording in only **8 of the 40 sessions**; in the other
+32 it was never installed, and there "inside the reach and untouched" says nothing about the product. Measured
+over the 8 sessions it did run in: **11 results in reach, 260,475 carried, W = 4.4%**, of which it acted on 4
+and left 7 alone — reaching **22% of the carried tokens it could have**.
+
+**8 sessions is under the rule's minimum of 10, so there is no verdict.** 4.4% sits in the band the rule calls
+"essentially absent", and it does not get to be quoted as that. The minimum exists for exactly this moment:
+the number that arrived is the one I expected, and wanting it is not a reason to accept a sample the rule
+already refused.
+
+**What it needs:** 10 sessions with the guard actually running, and 200 shell results inside them. That
+accumulates on its own, and much faster with a user-scope install — currently 8 of 40 sessions had the guard
+at all, which is a coverage fact worth knowing in its own right.
+
+**A prediction I scored against the wrong number.** I called my written expectation ("W under 10%") a failure
+on seeing 16.5%. But 16.5% pools 32 sessions the guard never ran in. Properly measured it is 4.4%, consistent
+with the expectation — and with no verdict, neither reading is a result. The retraction is of my own scoring,
+not of the expectation.
+
+**And a defect in the view, one line below the one it had just fixed.** The tool table — `sed` at 32 results
+and 77% of in-reach carried tokens — was pooled over all 40 sessions while the verdict was taken from 8. A
+tool list from sessions without the guard describes a machine that is not running this product. Now split the
+same way, with the all-session figures kept as labelled context rather than as evidence.
+
+**The question this was built to ask remains open**, and the suspicion behind it is unresolved: that 0.2.6's
+excerpt exemption — shipped on the evidence of one pair, and documented as trading "acting less for acting
+wrongly less often" — took most of the guard's remaining reach. `sed` ranges are exactly what it exempted.
+Whether that is true needs the guard running in enough sessions to see, and it is the first thing this project
+has measured that could overturn a change I made myself rather than a default someone inherited.
+
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
 this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`

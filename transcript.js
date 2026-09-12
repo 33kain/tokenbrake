@@ -591,6 +591,70 @@ function reach(parsed, wasTrimmed) {
   return out;
 }
 
+/* The program a shell command actually invoked, which is the unit the tooling question turns on.
+   `node tools/ci.js log r-8814` and `node tools/ci.js summary r-8813` are the same TOOL making different
+   demands; `git log --stat -40` and `npm test` are different tools. Grouping raw command strings would give
+   one row per invocation and answer nothing. */
+function commandTool(cmd) {
+  let c = String(cmd || '').trim().replace(/^cd\s+(?:'[^']*'|"[^"]*"|[^\s;&|]+)\s*&&\s*/, '');
+  c = c.split(/[|;]/)[0].trim();                        // the first stage of a pipeline is what produced it
+  const parts = c.split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  let i = 0;
+  while (i < parts.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) i++;   // FOO=bar prefixes
+  let prog = parts[i] || null;
+  if (!prog) return null;
+  /* An interpreter tells you nothing; the script it runs does. */
+  if (/^(node|npx|python3?|sh|bash|pwsh|powershell)$/.test(prog)) {
+    const next = parts.slice(i + 1).find((x) => x && !x.startsWith('-'));
+    if (next) prog = prog + ' ' + next;
+  }
+  return prog.replace(/\\/g, '/');
+}
+
+/* Where the trim can act at all, pooled, and WHICH tools put it there.
+
+   Round 2's pilot abandoned because the guard rewrote nothing the model saw: handed a CLI that could slice a
+   log, the agent sliced. Round 1's workload had no slicing tools and the mechanism was present. So the
+   question this answers is whether the trim's reach is a property of the work or of the tools -- and a
+   person's own sessions are a better sample of "an agent with decent tools" than any fixture.
+
+   The share that matters is of CARRIED tokens, not of results: ab10 established that a result's cost is its
+   size times the later requests that re-read it, so a count of results says nothing about the bill. */
+/* The results the guard actually rewrote AND the model saw, which is what `reach` needs to classify a
+   trimmed result as in-window by proof rather than by its post-trim size. Extracted from renderReport so a
+   pooled view can use the same rule rather than a second, quietly different one. */
+function trimmedResults(parsed, ledgerRecs) {
+  const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
+  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+  return parsed.results.filter((r) => r.marker && offeredOf(r));
+}
+
+function reachPooled(sessions) {
+  const B = () => ({ n: 0, tokens: 0, carried: 0 });
+  const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
+  const byTool = new Map();
+  for (const { parsed, trimmed } of sessions) {
+    const r = reach(parsed, trimmed);
+    for (const k of Object.keys(out)) { out[k].n += r[k].n; out[k].tokens += r[k].tokens; out[k].carried += r[k].carried; }
+    const inWindow = new Set([...(trimmed || [])]);
+    for (const res of parsed.results) {
+      const shell = res.name === 'Bash' || res.name === 'PowerShell';
+      if (!shell) continue;
+      const isWindow = inWindow.has(res) || (!res.isError && res.chars > TRIM_CHARS && res.chars < HOST_CEILING);
+      if (!isWindow) continue;
+      const tool = commandTool(res.what) || '(unknown)';
+      const e = byTool.get(tool) || { tool, n: 0, tokens: 0, carried: 0 };
+      e.n++; e.tokens += res.tokens; e.carried += res.carried || 0;
+      byTool.set(tool, e);
+    }
+  }
+  const carriedTotal = out.total.carried || 0;
+  return { ...out, carriedTotal,
+    windowShareOfCarried: carriedTotal ? out.window.carried / carriedTotal : 0,
+    tools: [...byTool.values()].sort((a, b) => b.carried - a.carried || b.n - a.n) };
+}
+
 /* Money, not token counts. ab10 (AB-TASK.md) measured where a hook's effect actually lands: not in the
    size of any one result but in `carried` -- a result is paid for again in every later request that
    re-reads it. So price the first appearance once at the cache-write rate and every re-read at the
@@ -1230,4 +1294,5 @@ function renderSummaryLine(parsed) {
 module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
+  reachPooled, commandTool, trimmedResults,
   capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
