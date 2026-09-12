@@ -510,9 +510,11 @@ from round 1 may be quoted anywhere.**
 until `readMaxBytes` moves, going in with it in one step. Full record in `AB-TASK.md`, "The Read cap's
 strength". The three things worth carrying forward:
 
-- **The source-file cap has never fired on the owner's real work.** Eleven of the twelve caps in his ledger are
-  benchmark sessions; the twelfth is a persisted spill file. Zero source-file caps outside the benchmark,
-  across every session on disk. That is why retuning the strength changes nothing today — and why it is
+- **The source-file *Read* cap has never fired on the owner's real work.** Eleven of the twelve `read-cap`
+  rows in his ledger are benchmark sessions; the twelfth is a persisted spill file. **Corrected the same day:**
+  that counted `ev: 'read-cap'` rows only, and the same two knobs also cap a `cat` of a large file through the
+  POST path, which logs as a trimmed post (`guard.js:283-296`). `report --caps` counts both paths apart now;
+  the zero stands for the Read path and the shell path is unmeasured until it is re-run. Either way it is
   `readMaxBytes`, the trigger, that decides whether the Read cap is a feature at all on ordinary work.
 - **The one real cap cost three return trips.** A 112 KB spill file cut to 80 of 2,011 lines, and the model
   came back three times for it. n=1, not a measurement, but it is the mechanism in miniature and it is the

@@ -578,9 +578,16 @@ induced reads. So the model came back three times for one cap on real work, n=1 
 the mechanism in miniature.
 
 **Source-file caps on real work: zero.** Every one of the six fired inside the benchmark — five on
-`settle.js`, one on `ledger-entries.json`. `readLimitLines` governs a cap that has **never once fired on this
-owner's own work** across every session on disk. It agrees with the 40-request audit: unbounded reads there
+`settle.js`, one on `ledger-entries.json`. It agrees with the 40-request audit: unbounded reads there
 ran 1, 8, 15, 16, 31 and 34 KB, and the 60,000-byte trigger needs roughly double the largest of them.
+
+**Corrected later the same day: that zero covered one of two paths.** `readMaxBytes` and `readLimitLines`
+govern the PreToolUse Read cap *and* the POST path that caps a `cat` of a large file (`guard.js:283-296`) --
+but the second logs `ev: 'post', excerpt: true`, not `ev: 'read-cap'`, so a counter reading only `read-cap`
+rows sees half the feature and calls the other half zero. `report --caps` counts both now and prints them
+apart. The sentence that stood here -- that `readLimitLines` governs a cap which has never once fired on this
+owner's own work -- is **withdrawn in that form**: it holds for the Read path, and the shell path was never
+measured. It does not change this section's verdict, which rests on where the targets sit, not on the count.
 
 **The rule's verdict.** Spontaneous subset 108 reads, over the 20 needed. Hidden share by candidate:
 300 → 56%, 500 → 40%, **800 → 20%**, 1200 → 8%. The smallest L at or under 25% is **800**.
