@@ -606,6 +606,68 @@ Read cap is not rarely useful on this workload; where it runs it is never reache
 - 2 of 13 real sessions ran with no guard at all. A coverage gap, not a tuning question: project-scope installs
   cover only the repo carrying them, and `tokenbrake status` says what is installed where.
 
+## Round 2 ran and abandoned itself at the pilot — 2026-09-12
+
+**Two paid sessions, about $0.95, and the schedule stopped instead of spending $20.** The pre-registered
+staging clause abandons the schedule when the ON arm shows `rewrites_applied_delivered <= 1`. It showed **0**.
+
+Full record in `tokenbrake-bench`: `results/DEVIATIONS.md` for the abandonment and two voided-run notes,
+`results/PRE-REGISTRATION.md` for the round-2 section, `results/runs-ci/` for the runs.
+
+**Why there was nothing to trim.** Every shell result in the ON arm was under the 6,000-character threshold.
+The fixtures put six logs between 9k and 24k inside the trim's window on purpose — but the agent, handed a
+CLI with `summary` and `log --step=`, sliced instead of dumping. **Given a tool that can slice, it sliced.**
+The single rewrite the guard offered was on the 42 KB log, which the host persists before the replacement can
+land.
+
+**The part that is fixture design and is recorded as such.** `tools/ci.js` was given `summary` and `--step`
+deliberately, because a real CI tool has them and removing them to force large outputs would have been rigging
+the workload to produce the mechanism. The risk was written down before the run and it is what happened. So
+the result is about a workload **that offers a cheap path**, not about CI logs in general.
+
+**Not claimed:** the ON arm cost 7.8% less, entered 76% fewer tool-result tokens and carried 18% less. The
+guard rewrote nothing, so none of that is the guard — it is two arms doing different amounts of work. The two
+OFF arms of that same pair differed by 11 against 6 tool results on identical configuration.
+
+**One line against round 1.** The ON arm made 4 recovery reads and the OFF arm 0, with no trim applied at all.
+Round 1 attributed its ON-arm recovery reads to the trim sending the model back; recovery reads arriving
+without a trim weakens that attribution.
+
+**Two controls that came out of running it**, both in the bench: `verify-config` now refuses a pair whose arms
+ran on different Claude Code or Node versions (it auto-updated mid-pair, 2.1.268 → 2.1.269, and the first OFF
+arm had to be re-run), and every writer takes `--runs=<dir>` so round 2's runs cannot land in round 1's folder
+and be pooled by `aggregate` — the directory was separate in the plan and not in the tools.
+
+## The open question, and the one thing it needs — 2026-09-12
+
+**Does the trim's mechanism need poor tooling to have anything to do?** Round 1's workspace had only dumping
+tools and the mechanism was there; round 2's agent could slice and it vanished. Pre-registered in `AB-TASK.md`
+under "Does the trim's mechanism appear when the agent has decent tools?", with the thresholds fixed first,
+including the outcome that is bad for the product: **under 5% of carried tokens and the README must say the
+mechanism is essentially absent, in those words.**
+
+`report --reach` answers it from the owner's own sessions. First run: **NO VERDICT**, because the guard was
+recording in only **8 of 40** sessions and the rule needs 10. Over those 8: W = **4.4%** of carried tokens
+inside the trim's reach, and the guard **reached 22% of the carried tokens it could have**.
+
+**The suspicion that number points at, unresolved:** that **0.2.6's excerpt exemption** — which I shipped on
+the evidence of one pair, documented as trading "acting less for acting wrongly less often" — took most of the
+guard's remaining reach. `sed` ranges are exactly what it exempted. It is the first thing this project has
+measured that could overturn a change made here rather than a default inherited from elsewhere.
+
+**What it needs is time, not work.** The owner installed the guard at **user scope** on 2026-09-12, so it now
+records in every session instead of one in five. Ten sessions with the guard running and 200 shell results in
+them, and `report --reach` returns a verdict on its own.
+
+Two things to remember while that accumulates:
+
+- **A user-scope install makes the benchmark's OFF arms impossible** — `verify-config --expect=off` requires
+  zero guards at every scope. Before any future round: `node cli.js uninstall`.
+- **This repository now has both scopes**, so the guard fires twice per call here. `--caps`, `--reach` and
+  `--ledger` all dedupe, and `status` reports the overlap. `status` also now hashes the installed copy against
+  this checkout's `guard.js` and says **STALE** when they differ: `init` copies the guard and nothing keeps the
+  copy in step, and a stale copy would answer the reach question about the wrong guard.
+
 ## Then — round 2 on CI logs, and the Saturday table
 
 **`readLimitLines` = 800 travels with any change to the trigger** — that is pre-registered, so a future trigger
