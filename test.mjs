@@ -1,4 +1,4 @@
-/* tokenbrake tests — no Claude Code, no network.
+/* tokenbrake tests -- no Claude Code, no network.
    Run from the tokenbrake/ directory:  node test.mjs
 
    Spawns guard.js and cli.js as real child processes against a throwaway
@@ -194,8 +194,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = cli(['status', '--project']);
   t('status --project resolves the placeholder and spawns', /PostToolUse spawn test \(node\): ok \(/.test(r.stdout), r.stdout.split('\n').find(l => /PostToolUse spawn/.test(l)));
 
-  /* The other scope carrying the guard while this one does not is the ordinary case — a project install,
-     `status` run without --project — and it runs the guard exactly once. The warning used to fire on the
+  /* The other scope carrying the guard while this one does not is the ordinary case -- a project install,
+     `status` run without --project -- and it runs the guard exactly once. The warning used to fire on the
      other scope alone and say "runs twice per call", which on the first ab7 arm read as a second install
      to hunt down. */
   cli(['uninstall']);
@@ -269,18 +269,18 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const out = T.renderReport(p, ledger, { top: 5 });
   t('the report names the session and the counts', /Session sess-abc/.test(out) && /4 requests, 3 tool results, 1 compaction/.test(out));
   t('it reports processed context and the cache share', /Context processed: 11k tokens across 4 requests \(90% read from cache\)/.test(out), out.split('\n')[2]);
-  t('it reports what the context holds now', /Context now: ≈ 4k tokens/.test(out));
+  t('it reports what the context holds now', /Context now: ~ 4k tokens/.test(out));
   const rank = out.split('\n').filter(l => /^\s+\d/.test(l) && /(Bash|Read|Grep)/.test(l));
   t('the ranking is by carried, not by size', /Bash/.test(rank[0]) && /Read/.test(rank[1]) && /Grep/.test(rank[2]), rank.join(' | '));
   t('a trimmed result is marked from the ledger, joined by tool_use_id', /npm test.*\[trimmed from 1k\]/.test(rank[0]), rank[0]);
   t('the other session\'s ledger row is not counted', /tokenbrake trimmed 1 of them/.test(out));
-  t('the savings line carries the trim through the turns it would have been re-read', /≈ 700 tokens kept out, ≈ 2k token-reads not carried/.test(out), out.split('\n').find(l => /kept out/.test(l)));
+  t('the savings line carries the trim through the turns it would have been re-read', /~ 700 tokens kept out, ~ 2k token-reads not carried/.test(out), out.split('\n').find(l => /kept out/.test(l)));
   t('the advice names the heaviest untrimmed result the guard could act on', /One result to have brakes on: Read "\/w\/big.txt"/.test(out) && /offset\/limit/.test(out));
   t('by-tool shares sum from carried', /Bash\s+1 calls\s+1k entered\s+2k carried\s+56%/.test(out), out.split('\n').find(l => /^  Bash/.test(l)));
 
   const found = T.findTranscripts(cfg);
   t('findTranscripts sees the session under projects/', found.length === 1 && found[0].session === 'sess-abc');
-  t('the one-line summary carries request count, processed and carried', /sess-abc…\s+4 req\s+11k processed\s+4k carried/.test(T.renderSummaryLine(p)), T.renderSummaryLine(p));
+  t('the one-line summary carries request count, processed and carried', /sess-abc\.\.\.\s+4 req\s+11k processed\s+4k carried/.test(T.renderSummaryLine(p)), T.renderSummaryLine(p));
 
   // through the CLI
   const envB4 = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
@@ -288,19 +288,106 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   let r = run([]);
   t('cli: report with no ledger picks the newest transcript', r.status === 0 && /Session sess-abc/.test(r.stdout), r.stdout.slice(0, 80));
   r = run(['--all']);
-  t('cli: --all lists sessions', /Sessions, newest first \(1\)/.test(r.stdout) && /sess-abc…/.test(r.stdout));
+  t('cli: --all lists sessions', /Sessions, newest first \(1\)/.test(r.stdout) && /sess-abc\.\.\./.test(r.stdout));
   r = run(['--session=sess-a']);
   t('cli: --session picks by prefix', /Session sess-abc/.test(r.stdout));
+  /* --where pools ranged reads across sessions, and must keep the benchmark's synthetic workload out of
+     that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
+     real work would set readLimitLines from a fixture design. */
+  const T0 = Date.parse('2026-09-12T10:00:00.000Z');
+  const mkSession = (dir, name, offsets, cwd) => {
+    mkdirSync(join(cfg, 'projects', dir), { recursive: true });
+    const rows = [];
+    offsets.forEach((offset, n) => {
+      const at = new Date(T0 + n * 1000).toISOString();
+      rows.push(JSON.stringify({ type: 'assistant', uuid: 'x' + n, requestId: 'x' + n, cwd, timestamp: at,
+        message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'tool_use', id: 't' + n, name: 'Read', input: { file_path: '/x.js', offset, limit: 20 } }] } }));
+      rows.push(JSON.stringify({ type: 'user', cwd, timestamp: at,
+        message: { content: [{ type: 'tool_result', tool_use_id: 't' + n, content: 'lines' }] } }));
+    });
+    writeFileSync(join(cfg, 'projects', dir, name + '.jsonl'), rows.join('\n') + '\n');
+  };
+  mkSession('-c-work-realrepo', 'realsess', [10, 40, 120, 350, 600], 'C:\\work\\realrepo');
+  mkSession('-c-desktop-tokenbrake-bench-work-kestrel', 'benchsess', [900, 910, 920, 930, 940, 950], 'C:\\Desktop\\tokenbrake-bench\\work\\kestrel');
+  mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
+  const capRow = { t: T0 + 2500, ev: 'read-cap', session: 'realsess', tool: 'Read', what: '/x.js', bytes: 80000, lines: 1900, limit: 300, persisted: false };
+  const writeLedger = (extra) => writeFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'),
+    [...ledger, ...extra].map(x => JSON.stringify(x)).join('\n') + '\n');
+  writeLedger([]);
+  r = run(['--where']);
+  /* With no read-cap row anywhere, the split must say it was not attempted rather than report zero induced:
+     a machine whose ledger predates the Read cap would otherwise get a clean bill of health for a confound
+     nobody looked for. */
+  t('cli: --where says the separation was not attempted when no cap ever fired',
+    /Guard-induced: not attempted/.test(r.stdout) && /absence of evidence about the confound/.test(r.stdout));
+  writeLedger([capRow]);
+  r = run(['--where']);
+  t('cli: --where skips benchmark sessions by default, and says why',
+    /benchses\s+benchmark session/.test(r.stdout) && /realsess \(5\)/.test(r.stdout), r.stdout.split('\n')[0]);
+  t('cli: --where pools the real session and not the benchmark', /All ranged reads: 5/.test(r.stdout) && !/benchses \(/.test(r.stdout),
+    (r.stdout.match(/All ranged reads:[^\n]*/) || [])[0]);
+  t('cli: --where marks the configured cap', /<- your current readLimitLines/.test(r.stdout));
+  t('cli: --where counts a target past each cap, not the same number everywhere',
+    /300 lines ->\s+2/.test(r.stdout) && /500 lines ->\s+1/.test(r.stdout) && /800 lines ->\s+0/.test(r.stdout),
+    r.stdout.split('\n').filter(l => /lines ->/.test(l)).join(' | '));
+  /* The confound: /x.js was capped at T0+2.5s, so the reads at offset 350 and 600 -- issued after it -- are
+     the cap telling the model to come back with an offset, not the model choosing where to look. The three
+     earlier ones are real evidence and stay. */
+  t('cli: --where excludes the reads a cap on the same file provoked',
+    /Guard-induced and excluded: 2 of 5/.test(r.stdout) && /Spontaneous: 3/.test(r.stdout),
+    r.stdout.split('\n').filter(l => /induced|Spontaneous/.test(l)).join(' | '));
+  t('cli: --where names the files the exclusions came from', /by file: x\.js \(2\)/.test(r.stdout));
+  t('cli: --where no longer claims the cap did not touch what these reads say',
+    /cap on an EARLIER unbounded read of the SAME file/.test(r.stdout)
+    && !/they say where to look, not what the cap did/.test(r.stdout));
+  t('cli: --where prints the histogram and the ledger-free spike line',
+    /Start lines, all ranged reads/.test(r.stdout) && /Bunching at a cap/.test(r.stdout)
+    && /80 \(your persistedLimitLines\)/.test(r.stdout));
+  t('cli: --where says when the clean subset is too thin to decide',
+    /Spontaneous: 3[^\n]*too few to set a default/.test(r.stdout),
+    (r.stdout.match(/Spontaneous:[^\n]*/) || [])[0]);
+  r = run(['--where', '--cwd=kestrel']);
+  t('cli: --cwd includes the benchmark deliberately and excludes the rest',
+    /benchses \(6\)/.test(r.stdout) && /All ranged reads: 6/.test(r.stdout) && /realsess\s+cwd does not contain/.test(r.stdout),
+    r.stdout.split('\n')[0]);
+  /* --caps: the ledger view. Pooled across sessions by default, the two knobs counted apart, and the share
+     of the file the model received shown per file. */
+  r = run(['--caps']);
+  t('cli: --caps lists the files the Read cap fired on, with the delivered share',
+    /Read caps fired -- 1 across 1 session/.test(r.stdout) && /Source files \(readLimitLines\):\s+1 caps/.test(r.stdout)
+    && /16%.*\/x\.js/.test(r.stdout), r.stdout.split('\n').filter(l => /x\.js|Source files/.test(l)).join(' | '));
+  r = run(['--caps', '--cwd=whatever']);
+  t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
+  r = run(['--caps', '--session=nope']);
+  t('cli: --caps with an unknown session prefix says so', /No session in the ledger starts with "nope"/.test(r.stdout));
+  r = run(['--ledger']);
+  t('cli: --ledger counts the two Read-cap halves apart',
+    /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a persisted output/.test(r.stdout)
+    && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));
+  rmSync(join(cfg, 'projects', '-c-work-realrepo'), { recursive: true, force: true });
+  rmSync(join(cfg, 'projects', '-c-desktop-tokenbrake-bench-work-kestrel'), { recursive: true, force: true });
+
   r = run(['--session=nope']);
   t('cli: an unknown session says so', /No transcript whose session id starts with nope/.test(r.stdout));
   r = run(['--transcript=' + file, '--top=2']);
   t('cli: --transcript and --top', /top 2:/.test(r.stdout) && !/Grep/.test(r.stdout.split('What ate it')[1].split('By tool')[0]));
-  mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
-  writeFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), ledger.map(x => JSON.stringify(x)).join('\n') + '\n');
+  writeLedger([]);
   r = run([]);
   t('cli: with a ledger, the last row\'s transcript path wins', /Session sess-abc/.test(r.stdout) && /\[trimmed from 1k\]/.test(r.stdout));
   r = run(['--ledger']);
   t('cli: --ledger is the guard\'s own record alone', /Trimmed by tokenbrake/.test(r.stdout) && !/carried/.test(r.stdout));
+  /* The report is a console surface, and a Windows console renders the typographic characters it used to
+     print as mojibake -- an ellipsis and an arrow arrived as two garbage characters each, on the owner's
+     daily output, for as long as the report existed.
+     Nothing pinned the conversion, so this does. The guard's own ellipsis inside a trimmed result is exempt:
+     that text goes to the model as JSON, not to a terminal. */
+  const nonAscii = (out) => out.split('\n').filter(l => !/^[\x20-\x7e]*$/.test(l));
+  for (const argv of [[], ['--where'], ['--caps'], ['--ledger'], ['--all']]) {
+    const o = run(argv);
+    t('cli: report ' + (argv.join(' ') || '(default)') + ' prints ASCII only', nonAscii(o.stdout).length === 0,
+      nonAscii(o.stdout).slice(0, 2).join(' | '));
+  }
   rmSync(join(cfg, 'projects'), { recursive: true, force: true });
   r = run([]);
   t('cli: no transcript falls back to the ledger with a note', /showing the ledger alone/.test(r.stdout) && /Trimmed by tokenbrake/.test(r.stdout));
@@ -316,13 +403,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
 /* ---- brake 1: the carried-context A/B, with a floor ------------------------
    The number brake 1 is sold on, computed instead of read off the usage page.
-   AB-TASK.md measures the same quantity for real — one reading per five-hour
-   window, by hand — which makes it a proof and not a tool. This runs in a second,
+   AB-TASK.md measures the same quantity for real -- one reading per five-hour
+   window, by hand -- which makes it a proof and not a tool. This runs in a second,
    so a change that quietly stops the guard from paying for itself fails here.
 
    Both arms are the same session: the same tool calls, in the same order, over the
    same file. They differ only in whether guard.js sat in front of them. Arm A is what
-   Claude Code does alone — an unbounded Read of a 48 KB source file landing whole (Read
+   Claude Code does alone -- an unbounded Read of a 48 KB source file landing whole (Read
    has no ceiling of its own: a 65 KB file entered a real session as 60,359 characters;
    the ~30,000-char save-to-a-file ceiling is Bash's), the model re-reading it twice
    more, and a test run whose 400 lines land whole. Arm B sends every one of those
@@ -336,7 +423,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
    model to, so the guard is credited only with what it mechanically does. The live
    saving is the larger number; this floor sits under the smaller one.
 
-   What is asserted is carried context — size × the requests that re-read it — because
+   What is asserted is carried context -- size x the requests that re-read it -- because
    that, not the size of any single result, is what the five-hour limit counts. */
 {
   const tr = await import('./transcript.js');
@@ -352,7 +439,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   writeFileSync(bigPath, bigLines.join('\n') + '\n');
   const wholeRead = bigLines.join('\n');                     // 48 KB: over 25,000, under 60,000, and Read returns it whole
 
-  // what the hooks really return for this file and this output — not a hand-written "after"
+  // what the hooks really return for this file and this output -- not a hand-written "after"
   // the cap's trigger for this fixture, set here and not inherited from DEFAULTS: whether the shipped
   // default should sit at 25,000 or 60,000 is the live A/B's question, not this test's
   writeFileSync(join(cfgAB, 'tokenbrake.json'), JSON.stringify({ readMaxBytes: 25000 }));
@@ -369,7 +456,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     `read ${wholeRead.length}->${cappedRead.length} chars, shell ${noisy.length}->${trimmedShell ? trimmedShell.length : '?'}`);
 
   /* Six requests: three unbounded reads of the same big file, one test run, then two more
-     requests, so every result is carried by what follows it. No compaction — this measures
+     requests, so every result is carried by what follows it. No compaction -- this measures
      what the guard keeps out, not what compaction later relieves. */
   const session = (name, read, shell) => {
     const L = [];
@@ -439,9 +526,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
   }
   /* The shapes models actually write, all found trimmed in one measured session (AB-TASK.md, pair 5):
-     a `cd … &&` prefix, an echo label before or after, a quoted path with a space, and a grep of one
+     a `cd ... &&` prefix, an echo label before or after, a quoted path with a space, and a grep of one
      named file. Each is a read the model had already narrowed; each lost the exemption and was cut to
-     head, tail and error lines, and the model then went back for what was removed — four return trips,
+     head, tail and error lines, and the model then went back for what was removed -- four return trips,
      three extra rounds, and the weakest result of the round. */
   for (const c of [
     'cd "C:/Users/Q/Desktop/bench/work/kestrel-payments" && sed -n \'502,535p\' incident/data/events.ndjson && echo "---"',
@@ -550,8 +637,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   ];
   const text = T.renderReport(parsed, ledger);
   console.log('\n-- credit only what the model saw');
-  t('a result carrying the marker is credited', /tokenbrake trimmed 1 of them: ≈ 5k tokens kept out/.test(text), text.split('\n').find(l => /tokenbrake trimmed/.test(l)));
-  t('a result without the marker is reported as offered and not applied, not as savings', /1 trim offered and not applied \(over Claude Code's own ceiling, or a failing command\): ≈ 523 tokens entered/.test(text), text.split('\n').find(l => /not applied/.test(l)));
+  t('a result carrying the marker is credited', /tokenbrake trimmed 1 of them: ~ 5k tokens kept out/.test(text), text.split('\n').find(l => /tokenbrake trimmed/.test(l)));
+  t('a result without the marker is reported as offered and not applied, not as savings', /1 trim offered and not applied \(over Claude Code's own ceiling, or a failing command\): ~ 523 tokens entered/.test(text), text.split('\n').find(l => /not applied/.test(l)));
   t('the ranking marks it', /npm test  \[trim not applied\]/.test(text) && /npm test  \[trimmed from 7k\]/.test(text));
 }
 
@@ -585,8 +672,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
   /* The Read cap's firings come from the ledger, not the transcript: a capped Read is an ordinary short
      result with no marker, invisible to the trim line. The two halves are separate features sharing one
-     hook — readMaxBytes on a large source file, persistedLimitLines on an output Claude Code wrote to
-     disk — and their evidence differs, so the report counts them apart. */
+     hook -- readMaxBytes on a large source file, persistedLimitLines on an output Claude Code wrote to
+     disk -- and their evidence differs, so the report counts them apart. */
   console.log('\n-- the Read-cap line');
   const capLedger = [
     { ev: 'read-cap', session: 'small', tool: 'Read', what: '/w/big.js', bytes: 80000, persisted: false },
@@ -605,7 +692,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 /* ---- reach: what the guard could ever have acted on ------------------------
    Every other line in the report says what the guard did. None said what it could have done, and the
    difference is the whole honesty of the thing: on one ledger, 285 tool results and the trim applied to
-   none — a session where "it saved nothing" and "it could never have saved anything" are different
+   none -- a session where "it saved nothing" and "it could never have saved anything" are different
    sentences and the second is true. Four ways to be out of reach, and a result the guard actually rewrote
    is in the window by proof rather than by size, since a trimmed result measures under the threshold. */
 {
@@ -636,8 +723,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a result the guard rewrote is in the window by proof, not by its delivered size',
     rc.window.n === 2, JSON.stringify({ window: rc.window.n }));
   t('a non-shell result is out of reach whatever its size', rc.nonShell.n === 1, JSON.stringify(rc.nonShell));
-  t('a failing shell result is out of reach — the host ignores the replacement', rc.failed.n === 1, JSON.stringify(rc.failed));
-  t('a result past the host ceiling is out of reach — persisted, never applied', rc.persisted.n === 1, JSON.stringify(rc.persisted));
+  t('a failing shell result is out of reach -- the host ignores the replacement', rc.failed.n === 1, JSON.stringify(rc.failed));
+  t('a result past the host ceiling is out of reach -- persisted, never applied', rc.persisted.n === 1, JSON.stringify(rc.persisted));
   t('a shell result under the threshold is out of reach by design', rc.under.n === 1, JSON.stringify(rc.under));
   t('the buckets account for every result exactly once',
     rc.window.n + rc.under.n + rc.failed.n + rc.persisted.n + rc.nonShell.n === rc.total.n && rc.total.n === 6,
@@ -650,11 +737,121 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     text.split('\n').find(l => /Out of reach/.test(l)));
   /* Acted-on can never exceed what was reachable; the first version printed 450% because it counted every
      result whose text merely mentioned the marker against a window computed from delivered sizes. */
-  const acted = (text.match(/Acted on: (\d+) of those — (\d+)%/) || []);
+  const acted = (text.match(/Acted on: (\d+) of those -- (\d+)%/) || []);
   t('acted-on never exceeds what was reachable', !acted[2] || Number(acted[2]) <= 100, acted[0] || 'no acted line');
   t('the window splits into what was acted on and what is still available',
     rc.acted.n + rc.untouched.n === rc.window.n && rc.acted.n === 1 && rc.untouched.n === 1,
     JSON.stringify({ acted: rc.acted.n, untouched: rc.untouched.n, window: rc.window.n }));
+
+  console.log('\n-- where the model actually reads');
+  /* The only evidence that can settle readLimitLines for a given person, and it comes from their own
+     sessions: when the model asks for a RANGE it has said where it expects to find something. A cap that
+     keeps the first N lines hides the target whenever that start line is past N (AB-TASK.md, "The Read
+     cap's trigger"). `cat` and `head` ask for the top and are not position choices, so they do not count. */
+  const { readTargets } = await import('./transcript.js');
+  const mk = (rows) => ({ results: rows });
+  const tx = mk([
+    { readFrom: 10 }, { readFrom: 46 }, { readFrom: 250 }, { readFrom: 411 }, { readFrom: 820 },
+    { readFrom: null }, { readFrom: null },
+  ]);
+  const tt = readTargets(tx, [300, 500, 800]);
+  t('only ranged reads count as targets', tt.n === 5, JSON.stringify(tt));
+  t('the deepest target is reported, not the average', tt.max === 820, String(tt.max));
+  t('a cap at 300 hides the two targets past it', tt.past[300] === 2, JSON.stringify(tt.past));
+  t('a deeper cap hides fewer, and a target past the cap still counts', tt.past[500] === 1 && tt.past[800] === 1, JSON.stringify(tt.past));
+  t('no targets means no claim', readTargets(mk([{ readFrom: null }]), [300]).n === 0);
+  /* The distinction the line rests on: a range is a position choice, the top of a file is not. */
+  const { readFileOf: _rf } = await import('./transcript.js');
+  const startOf = (cmd) => { const m = /sed\s+-n\s+['"]?(\d+),(\d+)p/.exec(cmd); return m ? Number(m[1]) : null; };
+  t('a sed range is a target at its first line', startOf("sed -n '320,345p' settle.js") === 320);
+  t('cat and head are not position choices', startOf('cat settle.js') === null && startOf('head -n 300 settle.js') === null);
+
+  console.log('\n-- separating the cap\'s own echo from where the model chose to look');
+  /* The confound this whole block exists for. A capped Read hands back lines 1..limit and its
+     additionalContext tells the model, in words, to come back with an offset. It does -- and that follow-up
+     is a ranged read starting just past the cap, which then lands in the distribution meant to decide what
+     the cap should be. Pooled over seventeen real sessions the number read 57% of targets past line 300,
+     median 351, against the 300 the guard had been applying all along. The join below is what takes that
+     apart: same file, same session, issued after the cap fired. */
+  const C0 = Date.parse('2026-09-12T09:00:00.000Z');
+  const jp = {
+    cwd: '/w', sessionId: 'joinsess', requests: [{}], compactions: [],
+    results: [
+      { file: '/w/a.js', readFrom: 40, askedAt: C0 - 5000, at: C0 - 5000 },        // before the cap: evidence
+      { file: '/w/a.js', readFrom: 305, askedAt: C0 + 2000, at: C0 + 2000 },       // after it: the cap's own
+      { file: '/w/b.js', readFrom: 420, askedAt: C0 + 3000, at: C0 + 3000 },       // never capped
+      { file: '/w/t/tool-results/x.txt', readFrom: 90, askedAt: C0 + 4000, at: C0 + 4000 },
+      { file: '/w/a.js', readFrom: 700, askedAt: null, at: null },                 // cannot be ordered
+      { file: '/w/c.js', readFrom: null, askedAt: C0, at: C0 },                    // not a ranged read at all
+    ],
+  };
+  const jled = [
+    { t: C0, ev: 'read-cap', session: 'joinsess', tool: 'Read', what: '/w/a.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: C0 + 3500, ev: 'read-cap', session: 'joinsess', tool: 'Read', what: '/w/t/tool-results/x.txt', bytes: 40000, lines: 900, limit: 80, persisted: true },
+    { t: C0, ev: 'read-cap', session: 'other', tool: 'Read', what: '/w/b.js', bytes: 99999, lines: 2000, limit: 300, persisted: false },
+  ];
+  const cl = T.classifyRangedReads(jp, jled, { sessionId: 'joinsess' });
+  t('a ranged read issued after a cap on the same file is excluded',
+    cl.induced.length === 2 && cl.induced.some(x => x.read.readFrom === 305), JSON.stringify(cl.induced.map(x => x.read.readFrom)));
+  t('a ranged read of that file from BEFORE the cap is kept -- it is evidence',
+    cl.spontaneous.some(r => r.readFrom === 40), JSON.stringify(cl.spontaneous.map(r => r.readFrom)));
+  t('a ranged read of a file no cap touched is kept', cl.spontaneous.some(r => r.readFrom === 420));
+  t('a persisted-output cap excludes the same way a source-file cap does',
+    cl.induced.some(x => x.read.readFrom === 90));
+  t('a read that cannot be ordered against the cap goes in neither bucket, and is counted',
+    cl.unordered.length === 1 && !cl.spontaneous.some(r => r.readFrom === 700) && !cl.induced.some(x => x.read.readFrom === 700));
+  t('all equals spontaneous plus induced plus unordered, always',
+    cl.all.length === cl.spontaneous.length + cl.induced.length + cl.unordered.length, String(cl.all.length));
+  t('a cap in another session does not exclude this session\'s reads',
+    cl.spontaneous.some(r => r.readFrom === 420), JSON.stringify(cl.byFile));
+  /* An empty ledger must say the separation was not attempted. Reporting "0 induced" would hand a machine
+     whose ledger predates the Read cap a clean bill of health for a confound nobody looked for. */
+  const clNone = T.classifyRangedReads(jp, [], {});
+  t('an empty ledger reports that the separation was not attempted, not that nothing was induced',
+    clNone.attempted === false && clNone.induced.length === 0 && clNone.spontaneous.length === 5);
+  /* A shell excerpt names a relative path while the ledger records what the guard stat'd, absolute. */
+  const relp = { cwd: '/w', sessionId: 'joinsess', requests: [{}], compactions: [],
+    results: [{ file: 'a.js', readFrom: 310, askedAt: C0 + 1000, at: C0 + 1000 }] };
+  t('a relative shell path resolves against the session cwd', T.classifyRangedReads(relp, jled, {}).induced.length === 1);
+  t('with no cwd to resolve against, the weaker basename match is counted as such',
+    (() => { const c = T.classifyRangedReads({ ...relp, cwd: null }, jled, {}); return c.induced.length === 1 && c.basename === 1; })());
+  t('normReadPath folds case only behind a Windows drive letter',
+    T.normReadPath('C:\\Work\\A.js') === 'c:/work/a.js' && T.normReadPath('/w/A.js') === '/w/A.js');
+
+  /* The same question without the ledger, so it still gets asked where the ledger predates the cap. Two
+     equal-width bands, so under the null `at` is Binomial(n, 0.5) -- an exact tail, nothing tuned. */
+  const rep = (n, v) => Array(n).fill(v);
+  t('bunching just past the cap is a spike, with no ledger at all',
+    T.capBandSpike([...rep(12, 305), ...rep(1, 290)], 300).verdict === 'spike');
+  t('a smooth distribution shows no step at the cap',
+    T.capBandSpike([...rep(10, 305), ...rep(10, 290)], 300).verdict === 'none');
+  t('a thin sample reports itself as thin, never as no spike',
+    T.capBandSpike(rep(3, 305), 300).verdict === 'too few');
+  t('the exact-boundary count is separate, and counts only the cap and one past it',
+    T.capBandSpike([300, 301, 302, 305], 300).exact === 2);
+  t('the histogram bins every start exactly once',
+    T.startHistogram([1, 0, 60, 250, 400, 900, 5000]).reduce((n, b) => n + b.n, 0) === 7);
+
+  /* The ledger view. One count for both Read-cap halves told the owner nothing about which default it was
+     evidence for: readMaxBytes governs a large source file, persistedLimitLines a spilled output. */
+  const capLed = [
+    { t: 1000, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: 1020, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: 5000, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/t/tool-results/a.txt', bytes: 40000, lines: null, limit: 80, persisted: true },
+    { t: 9000, ev: 'read-cap', session: 'B', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+  ];
+  const cf = T.readCapFiles(capLed, null);
+  t('the cap counter splits the two knobs apart', cf.source.n === 2 && cf.persisted.n === 1, JSON.stringify({ s: cf.source, p: cf.persisted }));
+  t('a double install logs each cap twice; the duplicate is dropped once and reported',
+    cf.deduped === 1 && cf.n === 3, JSON.stringify({ deduped: cf.deduped, n: cf.n }));
+  t('the delivered share is limit/lines', Math.abs(cf.files.find(f => /big/.test(f.what)).delivered - 300 / 1900) < 1e-9);
+  t('a row with no line count reports no fraction rather than a guess',
+    cf.files.find(f => /a\.txt/.test(f.what)).delivered === null && cf.unknownLines === 1);
+  t('the same file capped in two sessions is one row, counted twice',
+    cf.files.find(f => /big/.test(f.what)).n === 2 && cf.sessions === 2);
+  t('pooled counts equal the sum of the per-session ones',
+    T.readCapFiles(capLed, 'A').n + T.readCapFiles(capLed, 'B').n === cf.n,
+    String(T.readCapFiles(capLed, 'A').n) + '+' + String(T.readCapFiles(capLed, 'B').n) + ' vs ' + String(cf.n));
 
   console.log('\n-- the bill, and the guard\'s own cost');
   /* ab10 measured that the saving lives in `carried`, so the report has to price a re-read, not a byte. */
@@ -668,7 +865,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the dominant model is the one most requests ran on',
     T.dominantModel({ requests: [{ model: 'a' }, { model: 'b' }, { model: 'b' }] }) === 'b');
 
-  /* A recovery read is the same file at a different offset — the cost a trim can create. Distinct from a
+  /* A recovery read is the same file at a different offset -- the cost a trim can create. Distinct from a
      repeat read, which returns the same slice again (ab10 pair 5: 4 recovery reads, the smallest saving). */
   const recTx = {
     requests: [{}, {}, {}], compactions: [],
@@ -731,20 +928,20 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const table = ['Tenant settlement table',
     ...Array.from({ length: 60 }, (_, i) => `acme-${String(i).padStart(3, '0')}   EUR   ${1000 + i * 37}.${String(i % 100).padStart(2, '0')}   settled   2026-09-10T11:${String(i % 60).padStart(2, '0')}:00Z`),
     'END OF TABLE'].join('\n');
-  t('a data table whose rows differ only in numbers is NOT collapsed — no bar, no percentage',
+  t('a data table whose rows differ only in numbers is NOT collapsed -- no bar, no percentage',
     run(table, { shapeFilters: true }) === '', run(table, { shapeFilters: true }).slice(0, 160));
   /* A percentage was allowed as a redraw signal for one afternoon and had to come out: eighty rows of
-     `tenant acme-079 risk score 53% approved` collapsed to one and a count — the settlement table again,
+     `tenant acme-079 risk score 53% approved` collapsed to one and a count -- the settlement table again,
      through the other half of the rule. Percentages are in data more often than in progress bars. The
-     cost is that a bar-less `Downloading… 45%` is no longer collapsed; that is the right side to err on. */
+     cost is that a bar-less `Downloading... 45%` is no longer collapsed; that is the right side to err on. */
   const risk = ['Risk review', ...Array.from({ length: 80 }, (_, i) => `tenant acme-${String(i).padStart(3, '0')} risk score ${(i * 7) % 100}% approved`), 'END'].join('\n');
-  t('a percentage alone is NOT a redraw signal — risk scores are percentages too',
+  t('a percentage alone is NOT a redraw signal -- risk scores are percentages too',
     run(risk, { shapeFilters: true }) === '', run(risk, { shapeFilters: true }).slice(0, 160));
 
   /* `\r` at the end of a line is a CRLF line ending, not a redraw. Reading it as one turned a 120-row CRLF
      CSV into 121 characters of empty lines: every field gone, the worst thing this filter has done. */
   const csv = 'date,tenant,ccy,amount,status\r\n' + Array.from({ length: 120 }, (_, i) => `2026-09-10,acme-${String(i).padStart(3, '0')},EUR,${1000 + i * 7}.${String(i % 100).padStart(2, '0')},settled`).join('\r\n') + '\r\n';
-  t('a CRLF document passes through untouched — the trailing \\r is a line ending, not a redraw',
+  t('a CRLF document passes through untouched -- the trailing \\r is a line ending, not a redraw',
     run(csv, { shapeFilters: true }) === '', run(csv, { shapeFilters: true }).slice(0, 160));
   const varied = ['alpha begins here', 'beta continues elsewhere', 'gamma finishes the job'].join('\n').padEnd(2000, '\nunique tail line here');
   const onVaried = run(varied, { shapeFilters: true });
@@ -785,7 +982,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   let out = trimmedText(r);
   t('a stack trace buried in 400 lines of passing noise survives the trim',
     out.includes("Error: Cannot find module 'express'"), out.slice(0, 200));
-  /* The kept frames come back line-numbered, as `L203:     at Function…`, because the trim reports
+  /* The kept frames come back line-numbered, as `L203:     at Function...`, because the trim reports
      where in the omitted region each flagged line was. A test written against a bare `    at ` would
      pass on a guard that dropped the numbering, so match the shape that actually ships. */
   t('and keeps its frames, which is what makes it actionable',
@@ -803,7 +1000,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     (out.match(/```/g) || []).length === 2, String((out.match(/```/g) || []).length));
   const inner = out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1);
   let parses = true; try { JSON.parse(inner); } catch { parses = false; }
-  t('but the JSON it encloses no longer parses — a known limit, not a regression', parses === false);
+  t('but the JSON it encloses no longer parses -- a known limit, not a regression', parses === false);
 
   /* The gap in the middle is marked, so a reader can tell a truncated document from a complete
      one. Without this the model has no way to know it is looking at a hole. */
@@ -843,7 +1040,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the fourth line after is not kept at the default of 3', !/L154:/.test(out));
   t('a blank line ends the window', /L220: warning/.test(out) && !/L222:/.test(out) && !/must not be kept/.test(out));
   t('a flagged line inside a window makes one block, not two', /L301: Exception[^\n]*\n  L302: Error/.test(out));
-  t('gaps between blocks are shown as one … line', (out.match(/\n  …\n/g) || []).length === 2);
+  t('gaps between blocks are shown as one ellipsis line', (out.match(/\n  \u2026\n/g) || []).length === 2);   // the guard's own marker, still U+2026
   t('the header says how many lines follow each', /each with up to 3 lines after it/.test(out));
   const zero = run({ errorContextLines: 0 });
   t('errorContextLines 0 keeps the flagged lines alone, as before', /L150: FAIL/.test(zero) && !/L151:/.test(zero) && !/lines after it/.test(zero));
@@ -945,12 +1142,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   console.log('\n-- cost at list price, and --compare');
   const cB = T.costOf(T.parseTranscript(armB)), cA = T.costOf(T.parseTranscript(armA));
   t('the Opus 5 formula reproduces the session record to the sixth decimal', cB.usd.toFixed(6) === '2.381214' && cA.usd.toFixed(6) === '2.452951', `${cB.usd.toFixed(6)} ${cA.usd.toFixed(6)}`);
-  t('the report carries the price line', /At list price: ≈ \$2\.38 \(claude-opus-5; cache writes at the 1h rate\)/.test(T.renderReport(T.parseTranscript(armB), [])));
+  t('the report carries the price line', /At list price: ~ \$2\.38 \(claude-opus-5; cache writes at the 1h rate\)/.test(T.renderReport(T.parseTranscript(armB), [])));
   t('an unlisted model is reported as unpriced, not guessed', T.costOf(T.parseTranscript(odd)).usd === 0 && T.costOf(T.parseTranscript(odd)).unpriced.join() === 'claude-someday-9');
   const cmp = T.renderCompare(T.parseTranscript(armA), T.parseTranscript(armB), []);
-  t('--compare: A and B named, cost row with the change', /A: arma0000…  claude-opus-5/.test(cmp) && /B: armb0000…/.test(cmp) && /API cost, list price\s+\$2\.45\s+\$2\.38\s+−3%/.test(cmp), cmp.split('\n').find(l => /API cost/.test(l)));
+  t('--compare: A and B named, cost row with the change', /A: arma0000\.\.\.  claude-opus-5/.test(cmp) && /B: armb0000\.\.\./.test(cmp) && /API cost, list price\s+\$2\.45\s+\$2\.38\s+-3%/.test(cmp), cmp.split('\n').find(l => /API cost/.test(l)));
   t('--compare: the rows the A/B rounds compared by hand', ['requests', 'cache-read tokens', 'output tokens', 'tool results entered', 'tool results carried', 'trimmed by the guard', 'repeat reads'].every(k => cmp.includes(k)));
-  t('--compare: tool results entered halves, and the column says so', /tool results entered\s+2k\s+1k\s+−50%/.test(cmp), cmp.split('\n').find(l => /entered/.test(l)));
+  t('--compare: tool results entered halves, and the column says so', /tool results entered\s+2k\s+1k\s+-50%/.test(cmp), cmp.split('\n').find(l => /entered/.test(l)));
   const r = cli(['report', '--compare', 'arma0000', 'armb0000'], PROJ);
   t('cli: report --compare resolves session prefixes', r.status === 0 && /Change is B against A/.test(r.stdout), (r.stdout + r.stderr).slice(0, 200));
   const r2 = cli(['report', '--compare', 'arma0000'], PROJ);
@@ -958,7 +1155,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(dir, { recursive: true, force: true });
 }
 
-/* ---- 0.2.0 — the plugin manifest and the marketplace ---------------------- */
+/* ---- 0.2.0 -- the plugin manifest and the marketplace ---------------------- */
 {
   const plugin = JSON.parse(readFileSync('./.claude-plugin/plugin.json', 'utf8'));
   const pkg = JSON.parse(readFileSync('./package.json', 'utf8'));

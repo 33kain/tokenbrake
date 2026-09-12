@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// tokenbrake CLI — installs/removes the guard hooks in Claude Code settings and reads the ledger.
+// tokenbrake CLI -- installs/removes the guard hooks in Claude Code settings and reads the ledger.
 
 const fs = require('fs');
 const path = require('path');
@@ -25,7 +25,7 @@ const guardFile = path.join(guardDir, 'guard.js');
 const guardRef = PROJECT ? '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js' : guardFile;
 
 // Which executable the hook spawns. Exec form (args present) means Claude Code starts it directly, no shell,
-// so a bare 'node' has to be on the PATH Claude Code itself was launched with — not the one a shell profile
+// so a bare 'node' has to be on the PATH Claude Code itself was launched with -- not the one a shell profile
 // builds. If it isn't, the hook fails open and every result goes through untrimmed, silently. User scope
 // therefore records the absolute path of the node running this installer (settings.json is machine-local
 // anyway); project scope keeps 'node' because that file is meant to be committed and shared. --node=<path>
@@ -86,7 +86,7 @@ function uninstall() {
   }
   try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch {}
   console.log(`tokenbrake hooks removed from ${settingsPath}`);
-  console.log(`Ledger and saved outputs kept at ${TB_DIR} — delete that folder to remove them.`);
+  console.log(`Ledger and saved outputs kept at ${TB_DIR} -- delete that folder to remove them.`);
 }
 
 // Spawn one installed hook exactly the way Claude Code will: the recorded command, the recorded args, no shell,
@@ -107,14 +107,14 @@ function selfTest(h) {
     r = spawnSync(h.command, hookArgs, { input: JSON.stringify(payload), encoding: 'utf8', shell: false, timeout: 15000,
       env: { ...process.env, CLAUDE_CONFIG_DIR: tmp } });
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
-  if (r.error) return `FAILED to start: ${r.error.code || r.error.message} — '${h.command}' could not be spawned without a shell. Re-run init (records an absolute node path) or init --node=<path-to-node>.`;
-  if (r.status !== 0) return `FAILED: exit ${r.status}${r.stderr ? ' — ' + r.stderr.trim().split('\n')[0] : ''}`;
+  if (r.error) return `FAILED to start: ${r.error.code || r.error.message} -- '${h.command}' could not be spawned without a shell. Re-run init (records an absolute node path) or init --node=<path-to-node>.`;
+  if (r.status !== 0) return `FAILED: exit ${r.status}${r.stderr ? ' -- ' + r.stderr.trim().split('\n')[0] : ''}`;
   if (mode === 'read-pre') return r.stdout.trim() === '' ? 'ok (spawns; bounded read left untouched)' : `unexpected output: ${r.stdout.slice(0, 80)}`;
   let out; try { out = JSON.parse(r.stdout); } catch { return `FAILED: stdout is not JSON: ${r.stdout.slice(0, 80)}`; }
   const u = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedToolOutput;
   if (!u || typeof u !== 'object') return 'FAILED: no object-shaped updatedToolOutput (Claude Code would reject a string and keep the full output)';
   if (!String(u.stdout).includes('[tokenbrake]') || !String(u.stdout).includes('self-test marker')) return 'FAILED: trimmed output missing marker or flagged error line';
-  return `ok (${stdout.length.toLocaleString()} chars in → ${u.stdout.length.toLocaleString()} out, error line kept)`;
+  return `ok (${stdout.length.toLocaleString()} chars in -> ${u.stdout.length.toLocaleString()} out, error line kept)`;
 }
 
 function status() {
@@ -132,7 +132,7 @@ function status() {
   }
   /* Both scopes at once means two guards per tool call: Claude Code runs the user-scope hooks and the
      project-scope hooks, each spawns node, each writes the same ledger row. Harmless, wasteful, and the
-     ledger shows it as duplicate rows; say so — but only when this scope has the guard too. The other
+     ledger shows it as duplicate rows; say so -- but only when this scope has the guard too. The other
      scope carrying it while this one does not is the ordinary case (a project install, `status` run
      without --project), it runs the guard exactly once, and calling that "twice" sent an A/B arm hunting
      for a second install that was not there. */
@@ -156,14 +156,218 @@ function loadLedger() {
 const tok = (c) => Math.round(c / 4); // rough: ~4 chars per token for code/logs
 const fmt = (n) => n.toLocaleString();
 
-/* Brake 4 — what's eating your tokens. Transcript-first: the Claude Code session transcript holds every
+/* Brake 4 -- what's eating your tokens. Transcript-first: the Claude Code session transcript holds every
    tool result exactly as the model saw it and the API's usage per request, so the ranking comes from there;
    the ledger says which of those results the guard trimmed. Falls back to the ledger-only report when no
    transcript can be found (an older Claude Code, a different config dir), and --ledger asks for that
    directly. --all lists sessions; --session=<prefix> or --transcript=<path> picks one; --top=N widens
-   the ranking. */
+   the ranking; --where pools every session's ranged reads into the one distribution that can set
+   readLimitLines. */
+function guardCfg() {
+  const cfg = { readLimitLines: 300, persistedLimitLines: 80 };
+  try {
+    const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
+    if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
+    if (c.persistedLimitLines) cfg.persistedLimitLines = c.persistedLimitLines;
+  } catch {}
+  return cfg;
+}
+
+/* `--where`: pool every session's ranged reads into one distribution, and say what a cap at each candidate
+   would have withheld. This is the only evidence that can set readLimitLines for a given person, and it
+   has to be pooled -- a single session is a handful of reads.
+
+   Two filters make the pooled number mean anything, and both exist because the first two versions of this
+   number were circular.
+
+   The workload filter. Run over four of this repo's own benchmark sessions the per-session line read 48% of
+   targets past line 300, against 24% on an ordinary working session -- because the benchmark's fixtures are
+   BUILT with the evidence past line 300. Benchmark sessions are skipped by default, every skip is printed
+   with its reason, and --cwd=<substring> restricts the pool explicitly when that is wanted.
+
+   The confound filter, which is the same mistake from the other direction. A capped Read delivers lines
+   1..limit and its additionalContext tells the model to come back with an offset. It does, and the
+   follow-up is a ranged read starting just past the cap -- counted here as a target the cap would hide.
+   Pooled over seventeen real sessions that read 57% past line 300 with a median of 351, against a cap of
+   300 that had been applying all along. So the ledger's own record of which files the cap fired on is
+   joined against the reads, and the two distributions are printed side by side: everything, and the subset
+   the guard did not provoke. Only the second may set a default. */
+function whereReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const only = opt('--cwd');
+  const CAPS = [100, 200, 300, 500, 800, 1200];
+  const cfg = guardCfg();
+  const configured = cfg.readLimitLines;
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+  if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+  const pooled = []; const skipped = [];
+  let allReads = [], spontReads = [], induced = [], unordered = 0, basename = 0, capped = 0, attempted = 0;
+  const byFile = new Map();
+  for (const f of found) {
+    const id = String(f.session).slice(0, 8);
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    const cwd = p.cwd || '';
+    if (only) {
+      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
+    } else if (/tokenbrake-bench/i.test(cwd)) {
+      skipped.push([id, 'benchmark session -- synthetic fixtures, evidence placed past line 300 by design; --cwd to include']);
+      continue;
+    }
+    const cls = transcript.classifyRangedReads(p, ledger, { sessionId: p.sessionId || f.session });
+    if (!cls.all.length) { skipped.push([id, 'no ranged reads']); continue; }
+    pooled.push([id, cls.all.length, cwd]);
+    allReads = allReads.concat(cls.all);
+    spontReads = spontReads.concat(cls.spontaneous);
+    induced = induced.concat(cls.induced);
+    unordered += cls.unordered.length;
+    basename += cls.basename;
+    capped += cls.capped;
+    if (cls.attempted) attempted++;
+    for (const [what, n] of cls.byFile) byFile.set(what, (byFile.get(what) || 0) + n);
+  }
+  console.log('Where you read -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
+    + (only ? '  (--cwd=' + only + ')' : ''));
+  if (!allReads.length) {
+    console.log('\n  No ranged reads in any pooled session. Nothing here can set readLimitLines.');
+    printPool(pooled, skipped);
+    return;
+  }
+  const all = transcript.readTargets({ results: allReads }, CAPS);
+  const spont = transcript.readTargets({ results: spontReads }, CAPS);
+  const THIN = 20;
+  console.log('\n  All ranged reads: ' + all.n + ' -- median start line ' + all.median
+    + ', 90th percentile ' + all.p90 + ', deepest ' + all.max);
+
+  if (!attempted) {
+    console.log('\n  Guard-induced: not attempted -- the ledger holds no read-cap rows for these sessions.');
+    console.log('  Either the Read cap never fired here, or the ledger predates it. The two are not the same,');
+    console.log('  and this is an absence of evidence about the confound, not evidence there is none.');
+  } else {
+    console.log('\n  Guard-induced and excluded: ' + induced.length + ' of ' + all.n + ', from ' + capped
+      + ' cap firing(s). Each is a ranged read of a file');
+    console.log('  the Read cap had already fired on, in the same session, issued after it fired -- the cap hands back');
+    console.log('  the first N lines and tells the model to return with an offset, so that start line is the cap\'s.');
+    const top = [...byFile.entries()].sort((a, b) => b[1] - a[1]);
+    if (top.length) {
+      const shown = top.slice(0, 4).map(([w, n]) => String(w).split(/[\\/]/).pop() + ' (' + n + ')').join('  ');
+      console.log('    by file: ' + shown + (top.length > 4 ? '  + ' + (top.length - 4) + ' more' : ''));
+    }
+    if (unordered) console.log('    ' + unordered + ' more excluded as unordered: no timestamp on the read or on the cap row, so which came first'
+      + '\n    cannot be established. Counted, never guessed.');
+    if (basename) console.log('    ' + basename + ' of the ' + induced.length + ' matched on file name alone (a shell read with a relative path).');
+  }
+
+  console.log('\n  Spontaneous: ' + spont.n + (spont.n ? ' -- median start line ' + spont.median
+    + ', 90th percentile ' + spont.p90 + ', deepest ' + spont.max : '')
+    + (spont.n < THIN ? '   (under ' + THIN + ' reads -- too few to set a default)' : ''));
+
+  console.log('\n  A Read cap keeping the first ... would have hidden what the model went for:');
+  console.log('                        all        spontaneous');
+  for (const n of CAPS) {
+    const a = all.past[n], b = spont.past[n];
+    console.log('    ' + String(n).padStart(4) + ' lines ->  ' + String(a).padStart(4) + ' ('
+      + String(Math.round(100 * a / all.n)).padStart(3) + '%)     '
+      + String(b).padStart(4) + (spont.n ? ' (' + String(Math.round(100 * b / spont.n)).padStart(3) + '%)' : '       ')
+      + (n === configured ? '   <- your current readLimitLines' : ''));
+  }
+  if (!CAPS.includes(configured)) console.log('    (your readLimitLines is ' + configured + ', which is not on this scale)');
+
+  console.log('\n  Start lines, all ranged reads:');
+  for (const b of transcript.startHistogram(all.starts)) {
+    const to = b.to === Infinity ? '+'.padEnd(6) : '..' + String(b.to).padEnd(4);
+    console.log('    ' + String(b.from).padStart(5) + to + String(b.n).padStart(5) + '  ' + b.bar);
+  }
+
+  /* The same question without the ledger, so it still gets asked on a machine whose ledger predates the cap.
+     A smooth start-line density cannot step upward at an arbitrary line number; a cap can put one there. */
+  const bands = [[cfg.readLimitLines, 'your readLimitLines'], [cfg.persistedLimitLines, 'your persistedLimitLines']];
+  for (const l of transcript.readCapIndex(ledger, null).limits) {
+    if (!bands.some(([n]) => n === l)) bands.push([l, 'from the ledger, a session that ran a different cap']);
+  }
+  console.log('\n  Bunching at a cap -- the signature, and it needs no ledger at all:');
+  for (const [cap, label] of bands) {
+    const sp = transcript.capBandSpike(all.starts, cap);
+    console.log('    ' + String(cap).padStart(4) + ' (' + label + '): ' + sp.at + ' in [' + cap + '..' + (cap + sp.width)
+      + '] against ' + sp.below + ' in [' + (cap - sp.width) + '..' + cap + ') -- '
+      + (sp.verdict === 'too few' ? 'too few to say' : sp.ratio.toFixed(1) + 'x, p=' + sp.p.toFixed(3) + ', ' + sp.verdict)
+      + '; ' + sp.exact + ' at exactly ' + cap + '/' + (cap + 1));
+  }
+  console.log('    A step here is the cap measuring itself. A cap with no influence on how the model reads');
+  console.log('    leaves the density smooth across it.');
+
+  printPool(pooled, skipped);
+  console.log('\n  A ranged read -- a Read with an offset, or a sed -n range -- is the model saying where it expects');
+  console.log('  to find something. The guard never capped these reads themselves; they arrived already bounded.');
+  console.log('  But a cap on an EARLIER unbounded read of the SAME file tells the model to come back with an');
+  console.log('  offset, and that follow-up lands just past the cap -- so the "all" column is partly the cap');
+  console.log('  measuring itself. The spontaneous column is the one that can set readLimitLines.');
+  console.log('  It is a lower bound on the guard\'s influence: a ranged read of a file the guard never capped,');
+  console.log('  written that way because a cap on some OTHER file taught the model to, still counts as');
+  console.log('  spontaneous. Only a hooks-off session settles that (AB-TASK.md).');
+}
+
+function printPool(pooled, skipped) {
+  console.log('\n  Pooled:  ' + (pooled.map(([id, n]) => id + ' (' + n + ')').join('  ') || 'none'));
+  for (const [id, why] of skipped) console.log('  Skipped: ' + id + '  ' + why);
+}
+
+/* `--caps`: every file the Read cap has fired on, pooled across sessions. The question this answers is
+   readMaxBytes's, not readLimitLines's: how often does the cap fire on real work at all, and on what. A
+   real 40-request audit session read six files at 1, 8, 15, 16, 31 and 34 KB -- the 60,000-byte trigger
+   never fired once -- while benchmark round 1 fired it one to four times per run on fixtures built large on
+   purpose. Which of those a person's own week looks like is not a thing to reason about. */
+function capsReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  if (opt('--cwd') != null) {
+    console.log('--cwd cannot apply to --caps: ledger rows carry no cwd, so a session cannot be told from a');
+    console.log('working directory here. Use --session=<prefix>, or --where for the cwd-filtered view.');
+    return;
+  }
+  const top = Number(opt('--top') || 15) || 15;
+  const want = opt('--session');
+  let recs = loadLedger();
+  if (!recs.length) { console.log('No ledger yet. Run a Claude Code session with tokenbrake installed, then try again.'); return; }
+  let sessionId = null;
+  if (want) {
+    const ids = [...new Set(recs.map(r => r.session).filter(Boolean))];
+    sessionId = ids.find(id => String(id).startsWith(want));
+    if (!sessionId) { console.log('No session in the ledger starts with "' + want + '".'); return; }
+  }
+  if (flag('--all')) console.log('(--all is the default here: --caps pools every session. Use --session=<prefix> to narrow.)\n');
+  const c = transcript.readCapFiles(recs, sessionId);
+  if (!c.n) {
+    console.log('Read caps fired: none' + (sessionId ? ' in session ' + String(sessionId).slice(0, 8) : ' in this ledger') + '.');
+    console.log('The Read cap acts on an unbounded Read of a file over readMaxBytes (60,000 bytes by default),');
+    console.log('or on a read of an output Claude Code had already spilled to disk. Neither has happened here.');
+    return;
+  }
+  console.log('Read caps fired -- ' + c.n + ' across ' + (sessionId ? '1 session' : c.sessions + ' session(s)') + ' in the ledger\n');
+  console.log('  Source files (readLimitLines):           ' + String(c.source.n).padStart(3) + ' caps, '
+    + c.source.files + ' file(s), ~ ' + fmt(tok(c.source.bytes)) + ' tokens of file');
+  console.log('  Persisted outputs (persistedLimitLines): ' + String(c.persisted.n).padStart(3) + ' caps, '
+    + c.persisted.files + ' file(s), ~ ' + fmt(tok(c.persisted.bytes)) + ' tokens of file');
+  console.log('\n  caps  bytes        lines  limit  delivered  file');
+  for (const r of c.files.slice(0, top)) {
+    console.log('  ' + String(r.n).padStart(4) + '  ' + fmt(r.bytes).padStart(11) + '  '
+      + (r.lines == null ? '    ?' : fmt(r.lines).padStart(5)) + '  ' + String(r.limit == null ? '?' : r.limit).padStart(5) + '  '
+      + (r.delivered == null ? '      ?' : (Math.round(100 * r.delivered) + '%').padStart(7)) + '    ' + r.what);
+  }
+  if (c.files.length > top) console.log('  (+ ' + (c.files.length - top) + ' more file(s); --top=' + (c.files.length) + ' for all of them)');
+  if (c.unknownLines) console.log('  (' + c.unknownLines + ' row(s) have no line count: the file was over 20 MB, so the guard did not count'
+    + '\n   lines and no delivered fraction is shown.)');
+  if (c.deduped) console.log('  (' + c.deduped + ' duplicate row(s) dropped: the guard installed at both user and project scope logs'
+    + '\n   each cap twice. `tokenbrake status` says so too.)');
+  console.log('\n  delivered is limit/lines -- the share of the file the model received. The rest is not lost; it is');
+  console.log('  one offset read away, and that read is another request that re-reads the whole context. How often');
+  console.log('  the source-file half fires on real work is the question readMaxBytes turns on: here, ' + c.source.n + ' time(s).');
+}
+
 function report() {
   if (flag('--ledger')) return ledgerReport();
+  if (flag('--where')) return whereReport();
+  if (flag('--caps')) return capsReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -187,7 +391,7 @@ function report() {
       if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '. Try --transcript=<path>, or --ledger for the trimming record alone.'); return; }
       console.log('Sessions, newest first (' + found.length + '):');
       for (const f of found.slice(0, 30)) {
-        try { console.log(transcript.renderSummaryLine(transcript.parseTranscript(f.file))); } catch (e) { console.log('  ' + f.session.slice(0, 8) + '…  unreadable: ' + e.message); }
+        try { console.log(transcript.renderSummaryLine(transcript.parseTranscript(f.file))); } catch (e) { console.log('  ' + f.session.slice(0, 8) + '...  unreadable: ' + e.message); }
       }
       console.log('\nOpen one with: tokenbrake report --session=<prefix>');
       return;
@@ -204,12 +408,15 @@ function report() {
   }
   if (!file) {
     if (!ledger.length) { console.log('No transcript and no ledger yet. Run a Claude Code session with tokenbrake installed, then try again.'); return; }
-    console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + ' — showing the ledger alone.\n');
+    console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + ' -- showing the ledger alone.\n');
     return ledgerReport();
   }
   let parsed;
   try { parsed = transcript.parseTranscript(file); } catch (e) { console.log('Could not read ' + file + ': ' + e.message); return; }
-  console.log(transcript.renderReport(parsed, ledger, { top }));
+  /* The report's "Where you read" line compares against the cap the user actually runs, not the default. */
+  let readLimitLines = 300;
+  try { const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8')); if (c.readLimitLines) readLimitLines = c.readLimitLines; } catch {}
+  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
 
@@ -222,18 +429,25 @@ function ledgerReport() {
   if (!flag('--all')) {
     const last = sessions[sessions.length - 1];
     recs = recs.filter(r => r.session === last);
-    console.log(`Session ${String(last).slice(0, 8)}… (${sessions.length} sessions in ledger; use --all for everything)\n`);
+    console.log(`Session ${String(last).slice(0, 8)}... (${sessions.length} sessions in ledger; use --all for everything)\n`);
   }
 
   const posts = recs.filter(r => r.ev === 'post');
   const total = posts.reduce((s, r) => s + (r.chars || 0), 0);
   const saved = posts.reduce((s, r) => s + (r.kept != null ? r.chars - r.kept : 0), 0);
   const trimmed = posts.filter(r => r.kept != null).length;
-  const readCaps = recs.filter(r => r.ev === 'read-cap').length;
+  /* The two Read-cap halves are different features on one hook and they are decided by different config:
+     readMaxBytes/readLimitLines cap a large source file, persistedLimitLines caps a read of an output Claude
+     Code had already spilled to disk. A single count told the owner nothing about which default it was
+     evidence for. --caps lists the files. */
+  const caps = transcript.readCapFiles(recs, null);
 
-  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ≈ ${fmt(tok(total))} tokens`);
-  console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ≈ ${fmt(tok(saved))} tokens kept out of context`);
-  console.log(`Large reads capped: ${readCaps}\n`);
+  console.log(`Tool results: ${fmt(posts.length)}   raw size: ${fmt(total)} chars ~ ${fmt(tok(total))} tokens`);
+  console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ~ ${fmt(tok(saved))} tokens kept out of context`);
+  console.log(caps.n
+    ? `Read caps fired: ${caps.n} -- ${caps.source.n} on a large source file (readLimitLines), `
+      + `${caps.persisted.n} on a persisted output (persistedLimitLines)   (report --caps lists the files)\n`
+    : 'Read caps fired: none\n');
 
   const byTool = {};
   for (const r of posts) { byTool[r.tool] = byTool[r.tool] || { n: 0, chars: 0 }; byTool[r.tool].n++; byTool[r.tool].chars += r.chars || 0; }
@@ -245,7 +459,7 @@ function ledgerReport() {
 
   console.log('\nTop 10 heaviest results:');
   for (const r of [...posts].sort((a, b) => b.chars - a.chars).slice(0, 10)) {
-    const mark = r.kept != null ? `→ ${fmt(r.kept)} kept` : '';
+    const mark = r.kept != null ? `-> ${fmt(r.kept)} kept` : '';
     console.log(`  ${fmt(r.chars).padStart(9)} chars  ${(r.tool || '').padEnd(10)} ${String(r.what || '').slice(0, 60)} ${mark}`);
   }
 }
@@ -264,7 +478,7 @@ function clean() {
 }
 
 function help() {
-  console.log(`tokenbrake — trims oversized tool output before it reaches Claude's context
+  console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
 
   npx tokenbrake init [--project] [--node=<path>]
                                       install hooks (user scope, or this project's .claude/);
@@ -273,13 +487,22 @@ function help() {
   npx tokenbrake uninstall [--project]
   npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
   npx tokenbrake report               what ate your tokens last session: every tool result ranked by
-                                      the context it was carried through (size × later requests), from
+                                      the context it was carried through (size x later requests), from
                                       the Claude Code transcript, with what tokenbrake trimmed
       --all                           one line per session on disk, newest first
       --session=<prefix>              a particular session;  --transcript=<path> a particular file
       --top=N                         widen the ranking (default 10);  --ledger  the guard's own record only
+      --where                         every session pooled: where the model's ranged reads land, and what a
+                                      Read cap at each size would have hidden. The evidence for
+                                      readLimitLines. Reads a cap on the same file provoked are separated
+                                      out -- the cap tells the model to come back with an offset, so those
+                                      start lines are the cap's. Benchmark sessions are skipped;
+                                      --cwd=<text> restricts the pool explicitly
+      --caps                          every file the Read cap has fired on, pooled across sessions, with the
+                                      two knobs counted apart and the share of each file delivered. The
+                                      evidence for readMaxBytes; --session=<prefix> narrows, --top=N widens
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
-                                      and was carried, what the guard trimmed — the AB-TASK.md table
+                                      and was carried, what the guard trimmed -- the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
 }
 

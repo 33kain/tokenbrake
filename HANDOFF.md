@@ -461,9 +461,104 @@ test. Released 0.2.4 (the `Read caps fired` line; `status` no longer calls a sin
 `README.md` gained "Limits, with the numbers" ahead of the install instructions, including the count of 285
 logged tool results in which the trim applied to none.
 
-## Next session — Saturday 2026-09-13, the distribution table and the post
+## Round 1 of the benchmark, and what it settled — 2026-09-11/12
 
-Nothing to build before then. The task is collection and one table, then publishing. Steps:
+Twenty-two paid sessions, about $75, on `claude-fable-5-1[1m]` against guard `98b3c07`. Everything below is
+in [33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), including every run folder.
+
+**The verdict is `NO MEASURABLE COST DIFFERENCE`, and it is a retraction.** With two control pairs the
+round read `COST REDUCTION, median −28.8%, outside a ±18.4% band`. A third control, pre-registered hours
+earlier with the rule that it counts whichever way it falls, came out at ±30.3% and put the median inside
+the noise. The earlier verdict is withdrawn, not kept alongside. Reading that result also exposed the band
+statistic as unsound — it was the **maximum** of the controls, and a maximum grows with sample size, so
+under the median of the same three the verdict would have gone back the other way. Round 1 is **not**
+re-scored: a rule rewritten at the moment it costs a result is worth nothing. A sign test over ≥7 pairs is
+pre-registered as round 2's primary, needing no dispersion estimate at all.
+
+**The number worth more than the verdict.** Two identical sessions — same fixtures, same one-message
+prompt, no hook anywhere — differ by up to **30.3% on cost and 42.6% on tokens entered**. That is the same
+order as every saving advertised in this category, and it is why five pairs cannot resolve one.
+`CONTROL-PAIR-TEST.md` in the bench publishes the test in two sessions for anyone's tool.
+
+**What did hold, and does not depend on the band:** tool-result tokens **entering** context fell in every
+pair, −7.3% to −61.9%. Tokens **carried** fell in only four of six and rose in two, once by 72.6%. Carried
+is where the money is, so the guard reliably shrinks what enters and does not reliably shrink what is paid
+for again on every later request. And **22 runs, 22 scores of 38/38, zero critical errors** — the guard has
+never cost a correct answer. The task being solved perfectly by every arm is also a limit: that dimension
+can detect a regression but cannot measure a margin.
+
+**Mechanism, which is not what the feature's name suggests.** The number of trims does not predict the
+saving — two trims gave −39.5% and −39.0%, seven gave −28.8% and −12.5%. Which result is cut, and how
+early, dominates how many. Every ON arm made more recovery reads than its OFF arm; pair 5 made four, ran
+three rounds longer, and carried more than any run in the experiment for the smallest saving. So
+"trim more" is the wrong lever, and shape filters stay off for a measured reason rather than an assumed one.
+
+**Released.** 0.2.5 — the report speaks in dollars, names what is still within reach, and reports recovery
+reads as the mechanism's own cost. 0.2.6 — the excerpt exemption now survives how models actually spell a
+read (`cd … &&`, an `echo` label, a quoted path with a space, a grep of one named file), found by
+investigating pair 5 after it was read as an operator error. It was not one: the run's own record shows the
+right arm, workspace, host version and a 38/38 answer. Verified 12 of 22 against intent on the old guard,
+0 of 22 on the new, with no paid session.
+
+**Withdrawn deliberately:** the day-2 replication as designed, because fourteen more sessions of a design
+that has shown it lacks the power buy a second inconclusive result at twice the price. **No cost percentage
+from round 1 may be quoted anywhere.**
+
+## Settled 2026-09-12 — the Read cap's strength, and the zero underneath it
+
+`readLimitLines` is answered and **deliberately not applied**: the rule returned **800** and the value is held
+until `readMaxBytes` moves, going in with it in one step. Full record in `AB-TASK.md`, "The Read cap's
+strength". The three things worth carrying forward:
+
+- **The source-file cap has never fired on the owner's real work.** Eleven of the twelve caps in his ledger are
+  benchmark sessions; the twelfth is a persisted spill file. Zero source-file caps outside the benchmark,
+  across every session on disk. That is why retuning the strength changes nothing today — and why it is
+  `readMaxBytes`, the trigger, that decides whether the Read cap is a feature at all on ordinary work.
+- **The one real cap cost three return trips.** A 112 KB spill file cut to 80 of 2,011 lines, and the model
+  came back three times for it. n=1, not a measurement, but it is the mechanism in miniature and it is the
+  only real-work observation of the Read cap that exists.
+- **56% of his ranged reads start past line 300.** Which is the mechanism of the 2026-09-07 +10%: lowering
+  the trigger starts capping files whose target is past the cap more often than not.
+
+`report --where` and `report --caps` are the tools that produced all of this and they are the shipped answer to
+"where do my files keep what the model wants" — per person, from their own sessions. Both under `## Unreleased`.
+
+**One method note that cost a wrong prediction.** I predicted the confound would be large and it was 2.7%,
+because I took round 1's one-to-four caps per run as the rate on real work. Round 1 is the benchmark. The
+workload filter in `--where` exists to stop exactly that substitution at the transcript level; I made it one
+level up, about the ledger. Any future claim about how often a guard feature fires needs `--caps` under it.
+
+## Next session — the Read cap's trigger, free before paid
+
+Take this before the Saturday table below; it is where the work now stands and it is the owner's own
+priority, since he wants to set the value himself. **`readLimitLines` = 800 travels with any change here** —
+that is pre-registered, so a trigger change cannot pick its own limit afterwards.
+
+1. **Read the sweep first — it costs nothing.** `node fixtures/gen.mjs && node mechanism/run-mechanism.mjs`
+   in the bench, then read the `kind: 'cap-sweep'` rows: 180 of them, every `readMaxBytes` ×
+   `readLimitLines` over the real fixtures, with the column that matters — **whether the cap withholds the
+   decisive line**, not only bytes.
+2. **Know which knob is which.** `readMaxBytes` is a **trigger, not a strength**: every value from 60,000
+   down to 10,000 gives the identical saving per capped read. Only `readLimitLines` changes the amount
+   (62.5% / 75% / 87.5% at 300 / 200 / 100). A change to `readLimitLines` alone needs **no paid session** —
+   the arithmetic is deterministic and the sweep shows it.
+3. **Only `readMaxBytes` needs a session**, because its question is behavioural: does the model come back?
+   The 2026-09-07 A/B said yes and cost +10% lowering it to 25,000 — but its task said "read in full",
+   which forbids the saving by construction, and it was one run per arm against noise of 17 vs 24 requests.
+   The untested case is a session that reads a 40 KB file **once and moves on**. Pre-register before running.
+4. **The band is measurable now, and was not before.** The fixtures ran 7, 12, 14, 16, 68 and 144 KB —
+   nothing between 25 and 60 KB, the whole range the trigger governs, so both candidate values capped the
+   same two files. `F15_band_30k` and `F16_band_45k` now sit in it, each with a decisive line past 300.
+
+Round 2 on CI logs (~$20, Sonnet 5, sign test, kill condition already recorded) waits behind this, and
+needs fixtures that do not exist yet — a day's work, free. Whether the bench repo goes public is a decision,
+not a task.
+
+## Then — Saturday 2026-09-13, the distribution table and the post
+
+Still open, unchanged, and now second in line behind the Read cap above. Note one thing round 1 does not
+fix: every `ab-results/real/` file on record predates 0.2.3, so the table describes versions that no longer
+ship. Say so in the post rather than letting the reader assume otherwise. Nothing to build before then. The task is collection and one table, then publishing. Steps:
 
 1. In a checkout of `33kain/contexa`, run the loop in `ab-results/real/README.md` (fetch every `claude/…` branch,
    copy each `ab-results/real/*.txt`, dedupe by name). Expect one file per session since 2026-09-06; the writing

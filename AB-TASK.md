@@ -459,6 +459,113 @@ a session that reads a 40 KB file once and moves on, where the sweep's 40%
 applies with no return trip. The default stays at 60,000 until a run of that
 shape says otherwise.
 
+**2026-09-12 — the band is measurable now.** That open question could not be
+answered by the benchmark either: its fixtures ran 7, 12, 14, 16, 68 and 144 KB,
+**nothing between 25 and 60 KB**, so both triggers capped the same two files and
+the knob had nothing to move. Two generated sources now sit in the band at 30 KB
+and 45 KB, each with a decisive line past 300, and a `cap-sweep` section runs
+every fixture through `readMaxBytes` × `readLimitLines` recording whether the cap
+fired, how many lines the model receives, and **whether the decisive line is among
+them** — 180 rows, no paid session
+([tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), `results/DEVIATIONS.md`).
+The column that matters is the last one: bytes withheld and answer withheld are
+different numbers, and reading them as one is what made lowering the trigger look
+like a saving before the A/B and a 10% loss after it.
+
+## The Read cap's strength — pre-registered 2026-09-12, before the numbers
+
+`readLimitLines` is the other half of the Read cap: `readMaxBytes` decides *which* reads get capped,
+`readLimitLines` decides how much a capped read withholds. The sweep settled that the trigger cannot change
+the saving per capped read; only this knob can. It has never been argued for either.
+
+**What made it answerable, and what nearly made it wrong.** `report --where` pools a person's own *ranged*
+reads — a `Read` with an offset, a `sed -n 'A,Bp'` — because a range is the model saying where it expects to
+find something. Run over seventeen of the owner's real sessions it gave **111 ranged reads, median start line
+351, 57% of targets past line 300.**
+
+That figure is confounded, and in the guard's favour. A capped Read delivers lines 1..300 and its
+`additionalContext` tells the model in words to come back with an offset. The follow-up is a ranged read
+starting just past 300 — counted as a target the cap would hide, when it is the cap's own instruction being
+measured. Every one of those seventeen sessions ran with the guard on, and round 1 recorded the cap firing one
+to four times per ON run. A median of 351, sitting just past the 300 the guard had been applying all along, is
+what that looks like. It is the same circularity that disqualified the earlier 48% figure, arriving from the
+other direction: the first time it was fixtures built with the evidence past line 300, this time the guard
+instructing the model to read past line 300.
+
+So the ledger's `read-cap` rows are joined against the reads — same session, same file, issued after the cap
+fired — and the report prints two columns: all ranged reads, and the **spontaneous** subset.
+
+**The decision rule, fixed before the split was run.** From the spontaneous subset only, take the smallest
+L in {300, 500, 800, 1200} whose share of hidden targets is **≤ 25%**.
+
+- Spontaneous subset **under 20 reads** → change nothing; the sample does not carry the decision.
+- **No** candidate at ≤ 25% → change nothing, and record it: on this workload the cap cannot be made safe
+  without becoming a no-op. The trigger is 60,000 bytes, so every file the cap touches runs roughly 1,500
+  lines or more, and a limit near 1,200 on a 1,500-line file barely cuts.
+- No paid session either way. The distribution is observational and the saving per capped read is arithmetic.
+  Only `readMaxBytes` needs a session, because only there is the question behavioural.
+
+**Written expectation, before the numbers.** The spike diagnostic fires at 300 and at 80, and the spontaneous
+past-300 share falls from 57% into roughly 20–35%, leaving 300 or 500 as the answer. If the spike reports
+`none` and the spontaneous share holds at or above 50%, the confound was small, 57% stands, and the rule picks
+800 or refuses. Either is a result and gets recorded as one.
+
+**What no version of this can establish.** Attribution is by file identity, so one cap marks every later
+ranged read of that file — which inflates the excluded count rather than the clean one. And a cap on one file
+that teaches the model to read a *different* file with an offset stays counted as spontaneous, so that column
+is a **lower bound** on the guard's influence. Only a hooks-off arm settles it.
+
+**Result — 2026-09-12, run on the owner's machine over 62 sessions on disk.**
+
+**The prediction failed, and it failed in the direction that matters.** I expected the spike diagnostic to
+fire and the spontaneous past-300 share to fall from 57% into 20–35%. Neither happened. The confound is
+**3 of 111 reads, 2.7%** — all three from one persisted spill file — and the share moved from 57% to **56%**.
+The spike test reports `too few to say` at both 300 and 80, because there was almost no echo to find.
+
+Why I got it wrong: I took round 1's firing rate — one to four caps per ON run — as the rate on real work.
+Round 1 is the benchmark, running fixtures built large on purpose. That is the exact substitution the
+workload filter in `report --where` exists to prevent, made one level up, about the ledger instead of the
+transcripts.
+
+**What `--caps` found instead, and it is the larger finding.** Twelve caps across seven sessions. **Eleven of
+the twelve are benchmark sessions.** Exactly one fired on real work: a 112 KB Claude Code spill file in a
+`contexa` session, capped at 80 of 2,011 lines, 4% delivered — and that one cap is what produced all three
+induced reads. So the model came back three times for one cap on real work, n=1 and not a measurement, but
+the mechanism in miniature.
+
+**Source-file caps on real work: zero.** Every one of the six fired inside the benchmark — five on
+`settle.js`, one on `ledger-entries.json`. `readLimitLines` governs a cap that has **never once fired on this
+owner's own work** across every session on disk. It agrees with the 40-request audit: unbounded reads there
+ran 1, 8, 15, 16, 31 and 34 KB, and the 60,000-byte trigger needs roughly double the largest of them.
+
+**The rule's verdict.** Spontaneous subset 108 reads, over the 20 needed. Hidden share by candidate:
+300 → 56%, 500 → 40%, **800 → 20%**, 1200 → 8%. The smallest L at or under 25% is **800**.
+
+The no-op clause does not bite. The two source files ever seen over the trigger ran 1,297 lines (68 KB) and
+2,570 lines (72 KB) — 53 and 28 bytes per line, so the "1,500 lines or more" I assumed when writing the rule
+was itself a guess, and wrong in both directions. At 800 those two withhold 38% and 69%. Against 300's 77%
+and 88%, the cut roughly halves while the miss rate falls from 56% to 20%.
+
+**So: 800, and it changes nothing today.** The knob is inert on this workload, which is why the choice is
+free — and why it is a prerequisite rather than an improvement. It matters only if `readMaxBytes` ever comes
+down, and 56% past line 300 is exactly why the 2026-09-07 attempt to bring it down cost +10%.
+
+**Unchecked, and it stays on the record.** One session contributes 29 of the 111 reads, 27% of the pool. No
+jackknife was run. The decision is insensitive to it today because the cap does not fire on real work at all;
+it becomes live the moment the trigger moves.
+
+**Decided 2026-09-12: 800 is the answer and it is NOT applied.** Neither the shipped default nor the owner's
+own config changes. The reasoning is the zero: a knob that has never fired on this workload cannot be improved
+by retuning it, so 800 is held and goes in **in the same step** as any move on `readMaxBytes`, which is the
+only thing that would make it fire. Deciding it now rather than then is the point — the value is fixed by a
+rule written before the numbers, so a future trigger change cannot quietly pick its own limit to look good.
+
+The cost of holding, stated so it is not a surprise: until then, an unbounded read of a file over 60 KB still
+gets 300 lines, with a 56% chance on this workload that the model has to come back for the part it wanted.
+That is one return trip on a rare event, against a default change whose blast radius includes the
+shell-excerpt path (`readLimitLines` is also what caps a `cat`/`sed`/`grep` of a large file, guard.js:292)
+where no equivalent measurement exists.
+
 ## Feature round — run 2026-09-07, Opus 5 both arms
 
 The audit is reading without writing and the debugging round is a test loop;

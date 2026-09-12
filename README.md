@@ -185,6 +185,8 @@ npx tokenbrake report                     # last session
 npx tokenbrake report --all               # one line per session on disk
 npx tokenbrake report --session=<prefix>  # a particular one; --transcript=<path> for a file
 npx tokenbrake report --top=25            # widen the ranking
+npx tokenbrake report --where             # where your ranged reads land -- the evidence for readLimitLines
+npx tokenbrake report --caps              # every file the Read cap fired on -- the evidence for readMaxBytes
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -196,6 +198,17 @@ processed in total, how much of that came from cache, what the context holds rig
 results tokenbrake trimmed and what that kept out. Sizes are chars/4 estimates; the usage line is what the
 API reported. `--ledger` shows the guard's own record alone, which is also the fallback when no transcript
 can be found.
+
+Two views exist to set the Read cap's own knobs from a person's own sessions rather than from a default
+someone picked. `--where` pools every session's *ranged* reads -- a `Read` with an offset, a
+`sed -n '320,345p'` -- because a range is the model saying where it expects to find something, and a cap
+keeping the first N lines hides that target whenever the start line is past N. It separates out the reads a
+cap on the same file provoked: a capped read hands back the first N lines and tells the model to come back
+with an offset, so those start lines are the cap's own, not the model's, and pooling them in makes the guard
+measure itself. `--caps` is the other half — every file the cap has actually fired on, pooled across
+sessions, with the source-file and spilled-output halves counted apart and the share of each file delivered.
+Whether the cap is a daily event or a rarity on your work is what decides `readMaxBytes`, and it is not a
+thing to reason about.
 
 ## Against Claude Code's compaction
 
