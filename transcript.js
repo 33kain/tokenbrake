@@ -70,6 +70,77 @@ const EXCERPT_CMD = new RegExp(
   String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
 const unquote = (s) => String(s || '').replace(/^['"]|['"]$/g, '');
 
+/* A whole-file read: the population the Read cap's TRIGGER acts on. An unbounded Read, or a bare `cat` of
+   one file -- `head -n N`, `tail`, `sed -n` and `grep` are all bounded requests and are not it, even though
+   readFileOf recognises them as reads of a named file. A Read carrying an offset or a limit is likewise not
+   one, and that is also how the guard decides (guard.js:323 returns before it stats anything). */
+const WHOLE_RD_ = String.raw`cat(?:\s+-[bnAEsTv]+)*\s+(${P_})`;
+const WHOLE_CMD = new RegExp(
+  String.raw`^\s*(?:cd\s+${P_}\s*&&\s*)?(?:${LBL_}\s*(?:&&|;)\s*)?${WHOLE_RD_}` +
+  String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
+
+/* The guard's own two early exits, kept deliberately in step with it exactly as EXCERPT_CMD is: a read it
+   returns on is not a read the trigger acts on, so neither belongs in the population readMaxBytes is argued
+   from. PERSISTED is the second knob -- a spilled output is capped by persistedLimitLines at anything over
+   maxChars, whatever readMaxBytes says (guard.js:41, :329). */
+const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
+/* Claude Code's own refusal when a file exceeds its per-read token ceiling. Matched on wording, so a build
+   that words it differently falls through to 'errored' rather than being counted as a big file. */
+const TOO_LARGE = /exceeds maximum allowed (?:tokens|size)|too (?:large|long) to read|maximum allowed tokens/i;
+const BINARY_READ = /\.(png|jpe?g|gif|webp|bmp|svg|pdf|ipynb)$/i;
+
+function readsWholeFile(name, input) {
+  const i = input || {};
+  if (name === 'Read') return !!i.file_path && i.offset == null && i.limit == null && !BINARY_READ.test(i.file_path);
+  if ((name === 'Bash' || name === 'PowerShell') && typeof i.command === 'string') return WHOLE_CMD.test(i.command);
+  return false;
+}
+
+/* Claude Code refuses a Read at roughly 25k tokens and may truncate around there, so a delivered size close
+   to it is not evidence of the file's size. 100,000 characters is that ceiling; 90% of it is where a
+   delivered size stops being trustworthy as a measurement of the file. */
+const HOST_READ_CEILING = 100000;
+/* Claude Code also appears to have a default line limit of its own on an unbounded Read. It is not
+   documented and this repo has no transcript that reaches it, so nothing here asserts it exists: an
+   unbounded read that stops at exactly this many lines is FLAGGED, its line count treated as a floor, and
+   the operator told why. If the limit is real the flag catches it; if it is not, the flag stays at zero. */
+const HOST_READ_LINES = 2000;
+
+/* What a delivered Read result says about the FILE, as opposed to about the read.
+
+   Claude Code numbers every line it hands the model -- `12\tconst x = 1` -- and that numbering is Claude
+   Code's, not the file's. Measured on this repo's own transcripts it runs 5-6% of the delivered text on a
+   350-line file and grows with the line count, because the prefix grows with the number. `readMaxBytes` is
+   compared against fs.statSync().size (guard.js:330), so comparing a delivered length against it overstates
+   every file, and overstates the long ones most -- exactly at the boundary the trigger question turns on.
+   Stripping the prefixes recovers the real size: on an unchanged guard.js, 20,728 bytes recovered against
+   20,831 on disk.
+
+   The numbering also gives the line count exactly, and better than counting newlines: the last prefix IS the
+   file's last line number. Which is what makes truncation visible -- if an unbounded read's last line number
+   is a round host limit rather than the end of the file, the count is a floor and the report must say so
+   instead of taking it for a measurement. */
+function fileShape(text) {
+  const t = String(text || '');
+  if (!t) return { numbered: false, from: null, to: null, bytes: 0, lines: 0 };
+  const L = t.split('\n');
+  const NUM = /^\s*(\d+)[\t→]/;
+  const first = NUM.exec(L[0]);
+  if (!first) return { numbered: false, from: null, to: null, bytes: Buffer.byteLength(t), lines: L.length };
+  /* Consecutive from the first line, or it is data that happens to start with a number -- a TSV whose first
+     column counts, say -- and stripping it would eat the file's own content. */
+  let n = Number(first[1]), to = n, bytes = 0, ok = true;
+  for (const line of L) {
+    const m = NUM.exec(line);
+    if (!m) { if (line !== '') bytes += Buffer.byteLength(line) + 1; continue; }
+    if (Number(m[1]) !== n) { ok = false; break; }
+    to = n; n++;
+    bytes += Buffer.byteLength(line.slice(m[0].length)) + 1;
+  }
+  if (!ok) return { numbered: false, from: null, to: null, bytes: Buffer.byteLength(t), lines: L.length };
+  return { numbered: true, from: Number(first[1]), to, bytes, lines: to - Number(first[1]) + 1 };
+}
+
 function readFileOf(name, input) {
   const i = input || {};
   if (i.file_path) return String(i.file_path);
@@ -314,6 +385,15 @@ function parseTranscript(file) {
           readFrom: readStartLine(use.name, use.input),
           marker: /\[tokenbrake\]/.test(text),   // the guard's replacement is what the model saw
           chars: text.length,
+          /* The Read cap is a LINE count on a BYTE trigger, so neither can be reasoned about from the other.
+             `shape` is what the delivered text says about the file itself, with Claude Code's line numbering
+             subtracted; it is computed only for reads, not for every result in a large transcript. */
+          lines: text ? text.split('\n').length : 0,
+          whole: readsWholeFile(use.name, use.input),
+          shape: readFileOf(use.name, use.input) ? fileShape(text) : null,
+          /* Only for a failed read, and only the head of it: the reason a read failed decides whether it is
+             evidence of a large file or of nothing at all, and that cannot be recovered later. */
+          text: b.is_error ? text.slice(0, 400) : undefined,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
           /* Two clocks, both Claude Code's own and both on this host: askedAt is when the model emitted the
@@ -549,23 +629,213 @@ function readCapFiles(ledgerRecs, sessionId) {
   const idx = readCapIndex(ledgerRecs, sessionId);
   const files = new Map();
   const sessions = new Set();
-  for (const r of idx.rows) {
+  /* The third half, which is not a third knob. A `cat` of a large file is capped by the POST path against
+     the SAME readMaxBytes and readLimitLines (guard.js:283-296), but it logs `ev: 'post', excerpt: true`
+     rather than `ev: 'read-cap'` -- so a counter that reads only read-cap rows sees one of the two paths
+     those knobs govern and reports the other as never having fired. `chars` on that row is the size BEFORE
+     the cap, which for a cat is the file itself: no line numbering to subtract. */
+  const rows = [...idx.rows];
+  let excerpt = 0;
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'post' || !r.excerpt || r.kept == null) continue;
+    if (sessionId && r.session && r.session !== sessionId) continue;
+    const fp = readFileOf('Bash', { command: String(r.what || '') });
+    if (!fp) continue;
+    excerpt++;
+    rows.push({ t: Number(r.t) || null, what: fp, key: normReadPath(fp), bytes: Number(r.chars) || 0,
+      lines: null, limit: null, persisted: false, session: r.session || null, viaExcerpt: true });
+  }
+  for (const r of rows) {
     if (r.session) sessions.add(r.session);
     const e = files.get(r.key);
-    if (!e) files.set(r.key, { what: r.what, n: 1, persisted: r.persisted, limit: r.limit, bytes: r.bytes, lines: r.lines });
+    if (!e) files.set(r.key, { what: r.what, n: 1, persisted: r.persisted, limit: r.limit, bytes: r.bytes,
+      lines: r.lines, viaExcerpt: !!r.viaExcerpt });
     else { e.n++; if (r.bytes > e.bytes) { e.bytes = r.bytes; e.lines = r.lines; } }
   }
-  const rows = [...files.values()].map((e) => ({ ...e,
+  const listed = [...files.values()].map((e) => ({ ...e,
     delivered: (e.lines && e.limit) ? e.limit / e.lines : null }))
     .sort((a, b) => b.n - a.n || b.bytes - a.bytes);
-  const half = (want) => {
-    const rs = rows.filter((r) => r.persisted === want);
-    return { n: idx.rows.filter((r) => r.persisted === want).length, files: rs.length,
-      bytes: idx.rows.filter((r) => r.persisted === want).reduce((t, r) => t + r.bytes, 0) };
+  const half = (pick) => {
+    const rs = out.filter(pick);
+    return { n: rows.filter(pick).length, files: rs.length, bytes: rows.filter(pick).reduce((t, r) => t + r.bytes, 0) };
   };
-  return { source: half(false), persisted: half(true), n: idx.n, bytes: idx.bytes,
+  const out = [...files.values()];
+  return { source: half((r) => !r.persisted && !r.viaExcerpt), persisted: half((r) => r.persisted),
+    excerpt: half((r) => r.viaExcerpt), viaExcerpt: excerpt,
+    n: rows.length, bytes: rows.reduce((t, r) => t + r.bytes, 0),
     sessions: sessions.size, deduped: idx.deduped, limits: idx.limits,
-    unknownLines: rows.filter((r) => r.lines == null).length, files: rows };
+    unknownLines: listed.filter((r) => r.lines == null).length, files: listed };
+}
+
+/* The reads the Read cap's TRIGGER would act on, and how big they actually were. `readMaxBytes` decides
+   which unbounded reads get capped and `readLimitLines` how much a capped one withholds -- but nothing in the
+   record has ever said how many of a person's reads a lower trigger would catch, or how much of each it would
+   then cut. That is arithmetic over their own sessions, and this is the population it runs on.
+
+   Three corrections without which the count is worthless, each returned as its own number rather than folded
+   into the total:
+
+   - A read the guard already CAPPED delivered only `readLimitLines` lines and carries no marker, so it looks
+     like a small ordinary read. The ledger knows better: a read-cap row carries the file's true size and line
+     count from statSync, so those reads come back with real sizes instead of being dropped or believed.
+   - Whether Claude Code records the model's ORIGINAL input or the guard's REWRITTEN one (updatedInput adds a
+     `limit`) is not documented anywhere. Both tallies are returned, which settles it from a real machine's
+     data rather than by assuming.
+   - Claude Code refuses a Read near 25k tokens, so a delivered size close to that ceiling is a floor on the
+     file's size, not a measurement of it. Those are flagged, never silently counted as measured. */
+function unboundedReads(parsed, ledgerRecs, opts) {
+  const o = opts || {};
+  const idx = readCapIndex(ledgerRecs, o.sessionId || parsed.sessionId || null);
+  const reads = [];
+  const postByIdChars = new Map();
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'post' || !r.excerpt || r.kept == null || !r.id) continue;
+    if ((o.sessionId || parsed.sessionId) && r.session && r.session !== (o.sessionId || parsed.sessionId)) continue;
+    postByIdChars.set(r.id, Number(r.chars) || 0);
+  }
+  let recordedOriginal = 0, nearCeiling = 0, hostLines = 0, persistedSkipped = 0;
+  const capSeen = new Set();
+  for (const r of parsed.results) {
+    if (!r.whole || !r.file) continue;
+    /* A spilled output is the OTHER knob: persistedLimitLines caps it at anything over maxChars, whatever
+       readMaxBytes is set to. Counting it here would credit the trigger with a firing it has no say in. */
+    if (PERSISTED.test(r.file)) { persistedSkipped++; continue; }
+    const key = normReadPath(r.file, parsed.cwd);
+    const cap = key ? idx.byFile.get(key) : null;
+    if (cap) {
+      /* Recorded as the model wrote it: unbounded in the transcript, yet the ledger says it was capped, so
+         the delivered text is the cap's first N lines and not the file. Believe the ledger -- its numbers
+         come from statSync. Believing the transcript here would count a capped read as a small file and
+         then argue for a lower trigger using the cap's own output as the evidence. */
+      recordedOriginal++;
+      capSeen.add(key);
+      reads.push({ file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null });
+      continue;
+    }
+    let sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
+    let source = sh.numbered ? 'numbering' : 'text';
+    /* The same correction the Read cap needs, for the other path. A `cat` the guard capped as an excerpt
+       delivered only readLimitLines lines and says so in its marker; its ledger `post` row carries `chars`,
+       the size BEFORE the cap, which for a cat is the file itself. Without this a capped cat is sized at its
+       cap and argues for a lower trigger with the guard's own output -- the mistake this file already
+       corrects for Read, arriving by a different door. */
+    if (r.marker && r.id && postByIdChars.has(r.id)) {
+      sh = { bytes: postByIdChars.get(r.id), lines: null, numbered: false, from: null, to: null };
+      source = 'ledger-post';
+    }
+    let ceiling = null;
+    /* An errored read is not a large file. Claude Code's own refusal above roughly 25k tokens IS evidence a
+       large file exists, with no evidence of its size; "file not found" is evidence of nothing. Classifying
+       every failure as the first would manufacture large files out of typos -- and those files, being
+       unsized, sit exactly where they could swing the withholding median. So the refusal is matched on its
+       wording and anything else is reported as what it is: a failure whose reason was not recognised. */
+    if (r.isError) ceiling = TOO_LARGE.test(r.text || '') ? 'refused' : 'errored';
+    else if (sh.numbered && sh.from === 1 && sh.lines === HOST_READ_LINES) { ceiling = 'host-lines'; hostLines++; }
+    else if (r.chars >= 0.9 * HOST_READ_CEILING) { ceiling = 'near'; nearCeiling++; }
+    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source });
+  }
+  /* A cap row whose file never appears as an unbounded read means the transcript recorded the guard's
+     rewritten input instead -- the read is in there carrying a `limit`, which is not a whole-file read.
+     Those reads belong in the population too, at their true size. */
+  let recordedRewritten = 0;
+  for (const [key, cap] of idx.byFile) {
+    if (capSeen.has(key) || cap.persisted) continue;
+    recordedRewritten++;
+    reads.push({ file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null });
+  }
+  const sized = reads.filter((r) => !r.ceiling);
+  return { reads, sized, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
+    files: new Set(reads.map((r) => normReadPath(r.file, parsed.cwd))).size,
+    capped: reads.filter((x) => x.capped).length, recordedOriginal, recordedRewritten,
+    nearCeiling, hostLines, persistedSkipped,
+    refused: reads.filter((r) => r.ceiling === 'refused').length,
+    errored: reads.filter((r) => r.ceiling === 'errored').length,
+    sources: { ledger: reads.filter((r) => r.source === 'ledger').length,
+      ledgerPost: reads.filter((r) => r.source === 'ledger-post').length,
+      numbering: reads.filter((r) => r.source === 'numbering').length,
+      text: reads.filter((r) => r.source === 'text').length },
+    noLines: reads.filter((x) => !x.lines).length,
+    /* Undetermined until a cap actually fires in these sessions: with nothing to match, neither answer is
+       evidence. Printed as undetermined rather than silently as one of them. */
+    shapeVerdict: (recordedOriginal + recordedRewritten) === 0 ? 'undetermined'
+      : recordedOriginal && recordedRewritten ? 'mixed' : (recordedOriginal ? 'original' : 'rewritten') };
+}
+
+/* How deep into a file the model's targets sit, as a FRACTION of the file rather than as a line number.
+
+   The question this exists for is the shape of the knob, not its value. `readLimitLines` is an absolute line
+   count, but whether it hides the target depends on where the target sits relative to the file's length: a
+   median start line of 351 is 51% into a 684-line file and 14% into a 2,570-line one. If targets cluster at
+   an absolute line whatever the file's size, a fixed line count is the right shape. If they scale with the
+   file, it is the wrong shape and the cap should be a fraction. Nothing has ever paired a read's start line
+   with its file's length, so neither has ever been evidence.
+
+   Line counts come from three sources and the output says which, because they are not equally good: a
+   whole-file read of that file in the same session is exact and contemporaneous; a ledger cap row is exact
+   but only exists for files the cap fired on; the file on disk now is what is left, and it may have changed
+   since. A read whose file length cannot be established at all is counted as unresolved and never imputed. */
+function readDepths(parsed, ledgerRecs, opts) {
+  const o = opts || {};
+  const sessionId = o.sessionId || parsed.sessionId || null;
+  const idx = readCapIndex(ledgerRecs, sessionId);
+  const fromSession = new Map();
+  for (const r of parsed.results) {
+    if (!r.whole || !r.file) continue;
+    /* The file's length as the numbering reported it -- exact, and contemporaneous with the read. A read
+       that stopped at the host's own line limit says nothing about the file's length and is not used. */
+    const sh = r.shape;
+    if (!sh || !sh.lines || (sh.numbered && sh.from === 1 && sh.lines === HOST_READ_LINES)) continue;
+    const key = normReadPath(r.file, parsed.cwd);
+    if (key && !fromSession.has(key)) fromSession.set(key, sh.lines);
+  }
+  const cls = classifyRangedReads(parsed, ledgerRecs, { sessionId });
+  const rows = []; const bySource = { session: 0, ledger: 0, disk: 0 };
+  let unresolved = 0;
+  for (const r of cls.spontaneous) {
+    const key = normReadPath(r.file, parsed.cwd);
+    let lines = null, source = null;
+    if (key && fromSession.has(key)) { lines = fromSession.get(key); source = 'session'; }
+    else if (key && idx.byFile.get(key) && idx.byFile.get(key).lines) { lines = idx.byFile.get(key).lines; source = 'ledger'; }
+    else if (o.linesOnDisk && r.file) { const n = o.linesOnDisk(r.file); if (n) { lines = n; source = 'disk'; } }
+    if (!lines || r.readFrom > lines) { unresolved++; continue; }
+    bySource[source]++;
+    rows.push({ file: r.file, start: r.readFrom, lines, depth: r.readFrom / lines, source });
+  }
+  const cv = (xs) => {
+    if (xs.length < 2) return null;
+    const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+    if (!m) return null;
+    const v = xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1);
+    return Math.sqrt(v) / m;
+  };
+  const q = (xs, f) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(s.length * f))] : null; };
+  const abs = rows.map((r) => r.start), frac = rows.map((r) => r.depth);
+  /* Exact sources only for the verdict: a length read off disk today may not be the length the model saw. */
+  const exact = rows.filter((r) => r.source !== 'disk');
+  return { rows, n: rows.length, unresolved, bySource,
+    absCV: cv(abs), fracCV: cv(frac),
+    exactN: exact.length, exactAbsCV: cv(exact.map((r) => r.start)), exactFracCV: cv(exact.map((r) => r.depth)),
+    absMedian: q(abs, 0.5), fracMedian: q(frac, 0.5), fracP90: q(frac, 0.9) };
+}
+
+/* What each candidate trigger would catch, and what each candidate limit would then withhold. Pure
+   arithmetic over the reads -- the half of the readMaxBytes question that needs no session. The half it
+   cannot answer is whether the model comes back for what was withheld, which is behavioural and costs money
+   to find out (AB-TASK.md, "The Read cap's trigger"). */
+function triggerGrid(reads, triggers, limits) {
+  const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const totalBytes = reads.reduce((t, r) => t + (r.bytes || 0), 0);
+  return (triggers || []).map((trigger) => {
+    const caught = reads.filter((r) => (r.bytes || 0) > trigger);
+    const caughtBytes = caught.reduce((t, r) => t + r.bytes, 0);
+    const byLimit = {};
+    for (const L of (limits || [])) {
+      const withheld = caught.filter((r) => r.lines).map((r) => Math.max(0, (r.lines - Math.min(L, r.lines)) / r.lines));
+      byLimit[L] = withheld.length ? med(withheld) : null;
+    }
+    return { trigger, caught: caught.length, caughtBytes,
+      byteShare: totalBytes ? caughtBytes / totalBytes : 0, byLimit };
+  });
 }
 
 /* Find transcripts. The ledger's `transcript` field (0.1.0) is exact; failing that, every JSONL under
@@ -810,4 +1080,5 @@ function renderSummaryLine(parsed) {
 }
 
 module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
-  normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+  normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
+  unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

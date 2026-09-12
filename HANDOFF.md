@@ -510,9 +510,11 @@ from round 1 may be quoted anywhere.**
 until `readMaxBytes` moves, going in with it in one step. Full record in `AB-TASK.md`, "The Read cap's
 strength". The three things worth carrying forward:
 
-- **The source-file cap has never fired on the owner's real work.** Eleven of the twelve caps in his ledger are
-  benchmark sessions; the twelfth is a persisted spill file. Zero source-file caps outside the benchmark,
-  across every session on disk. That is why retuning the strength changes nothing today — and why it is
+- **The source-file *Read* cap has never fired on the owner's real work.** Eleven of the twelve `read-cap`
+  rows in his ledger are benchmark sessions; the twelfth is a persisted spill file. **Corrected the same day:**
+  that counted `ev: 'read-cap'` rows only, and the same two knobs also cap a `cat` of a large file through the
+  POST path, which logs as a trimmed post (`guard.js:283-296`). `report --caps` counts both paths apart now;
+  the zero stands for the Read path and the shell path is unmeasured until it is re-run. Either way it is
   `readMaxBytes`, the trigger, that decides whether the Read cap is a feature at all on ordinary work.
 - **The one real cap cost three return trips.** A 112 KB spill file cut to 80 of 2,011 lines, and the model
   came back three times for it. n=1, not a measurement, but it is the mechanism in miniature and it is the
@@ -528,31 +530,58 @@ because I took round 1's one-to-four caps per run as the rate on real work. Roun
 workload filter in `--where` exists to stop exactly that substitution at the transcript level; I made it one
 level up, about the ledger. Any future claim about how often a guard feature fires needs `--caps` under it.
 
-## Next session — the Read cap's trigger, free before paid
+## Settled 2026-09-12 — the trigger too, and the discrepancy it left behind
 
-Take this before the Saturday table below; it is where the work now stands and it is the owner's own
-priority, since he wants to set the value himself. **`readLimitLines` = 800 travels with any change here** —
-that is pre-registered, so a trigger change cannot pick its own limit afterwards.
+`readMaxBytes` is answered without a paid session: **60,000 stays.** The pre-registered rule's third condition
+fails at every candidate — at `readLimitLines` 800 no trigger withholds more than 20% of a file, because this
+owner's whole-file reads stop at 62,476 bytes and 800 lines is most of a file that size. The argument 60,000
+never had now exists, measured: the limit that keeps his targets makes the cap nearly a no-op on everything he
+reads, so a lower trigger fires more often and saves almost nothing. Full record in `AB-TASK.md`, "The Read
+cap's trigger — pre-registered 2026-09-12".
 
-1. **Read the sweep first — it costs nothing.** `node fixtures/gen.mjs && node mechanism/run-mechanism.mjs`
-   in the bench, then read the `kind: 'cap-sweep'` rows: 180 of them, every `readMaxBytes` ×
-   `readLimitLines` over the real fixtures, with the column that matters — **whether the cap withholds the
-   decisive line**, not only bytes.
-2. **Know which knob is which.** `readMaxBytes` is a **trigger, not a strength**: every value from 60,000
-   down to 10,000 gives the identical saving per capped read. Only `readLimitLines` changes the amount
-   (62.5% / 75% / 87.5% at 300 / 200 / 100). A change to `readLimitLines` alone needs **no paid session** —
-   the arithmetic is deterministic and the sweep shows it.
-3. **Only `readMaxBytes` needs a session**, because its question is behavioural: does the model come back?
-   The 2026-09-07 A/B said yes and cost +10% lowering it to 25,000 — but its task said "read in full",
-   which forbids the saving by construction, and it was one run per arm against noise of 17 vs 24 requests.
-   The untested case is a session that reads a 40 KB file **once and moves on**. Pre-register before running.
-4. **The band is measurable now, and was not before.** The fixtures ran 7, 12, 14, 16, 68 and 144 KB —
-   nothing between 25 and 60 KB, the whole range the trigger governs, so both candidate values capped the
-   same two files. `F15_band_30k` and `F16_band_45k` now sit in it, each with a decisive line past 300.
+**Q2, the shape, has no verdict and the reason is worth keeping.** Whether the cap should be an absolute line
+count or a fraction of the file needs 20 reads whose file length is known exactly; there is 1, because the
+other 42 lengths came off disk today and a file may have changed since. `report --reads` resolves lengths from
+a whole-file read in the same session first, and those are rare in his sessions. The question reopens on its
+own as more sessions accumulate — no work needed, just time.
 
-Round 2 on CI logs (~$20, Sonnet 5, sign test, kill condition already recorded) waits behind this, and
-needs fixtures that do not exist yet — a day's work, free. Whether the bench repo goes public is a decision,
-not a task.
+**The discrepancy that outranked both knobs, and how it closed.** `--reads` found 2 whole-file reads over
+60,000 bytes on real work while `--caps` found 0 caps from either path — the same evidence for "the cap is
+inert on this workload" and for "the cap is not running on this workload", which are opposite conclusions.
+`--reads` separates them from the ledger, and the answer is **not a defect**: both reads are in sessions with
+no ledger row at all, so the guard was not running there.
+
+**Which sharpens the result past where the rule needed it.** Every read over the trigger is in a guard-less
+session, so across the **11 sessions where the guard was running, not one whole-file read reached 60,000.** The
+Read cap is not rarely useful on this workload; where it runs it is never reached. Two things follow:
+
+- A paid test of the trigger **cannot use this owner's workload as its scenario** — with the guard on, that
+  workload never trips it. Any such test measures a task built to trip it, which is the weakness already on the
+  2026-09-07 A/B's record.
+- 2 of 13 real sessions ran with no guard at all. A coverage gap, not a tuning question: project-scope installs
+  cover only the repo carrying them, and `tokenbrake status` says what is installed where.
+
+## Then — round 2 on CI logs, and the Saturday table
+
+**`readLimitLines` = 800 travels with any change to the trigger** — that is pre-registered, so a future trigger
+change cannot pick its own limit afterwards.
+
+Round 2 on CI logs is the next paid thing and it is not urgent: ~$20, Sonnet 5, sign test over at least seven
+pairs, kill condition already recorded (if ON arms show more recovery reads than OFF in a majority of pairs,
+the hypothesis is refused regardless of cost). Its fixtures do not exist — a day's work, free. The hypothesis
+is narrow: on large **successful** logs read once for a pass/fail verdict, the model has no reason to come
+back, so the trim's saving survives.
+
+**What the Read cap's two settled questions leave behind, for whoever reads this next:**
+
+- The sweep in the bench is **confirmatory only** and does not need running. Its arithmetic is in
+  `AB-TASK.md`: the decisive line's depth is the constant `0.62` in `fixtures/lib/sources.mjs:1085`, so "a safe
+  limit withholds at most 38%" is that constant restated, not a measurement.
+- `readMaxBytes` is a **trigger, not a strength**: every value below a file's size withholds the same amount.
+  Only `readLimitLines` changes it. A change to the limit alone needs no paid session; a change to the trigger
+  does, because its question is behavioural — does the model come back.
+- If the trigger is ever revisited, the untested shape is a session that reads a 40 KB file **once and moves
+  on**. The 2026-09-07 A/B's task said "read in full", which forbids the saving by construction.
 
 ## Then — Saturday 2026-09-13, the distribution table and the post
 

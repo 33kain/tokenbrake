@@ -472,6 +472,104 @@ The column that matters is the last one: bytes withheld and answer withheld are
 different numbers, and reading them as one is what made lowering the trigger look
 like a saving before the A/B and a 10% loss after it.
 
+## The Read cap's trigger — pre-registered 2026-09-12, before the numbers
+
+`readMaxBytes` decides *which* reads get capped. The record against moving it: the 2026-09-07 A/B lowering it
+to 25,000 cost **+10%**, 34 requests against 25 — on a task that said "read in full". The record for moving it:
+in a real 40-request audit the six unbounded reads ran 1, 8, 15, 16, 31 and 34 KB, **none reached 60,000**, and
+the two largest carried half the Read total. And as of today, the source-file cap has fired **zero** times on
+real work, so at 60,000 the trigger catches nothing this owner does.
+
+**The sweep is confirmatory only, and that is settled without running it.** Computed directly from the bench's
+`fixtures/manifest.json`: `F15_band_30k` is 30,004 bytes / 684 lines / 43.9 B per line with its decisive line
+at 411, 60% deep; `F16_band_45k` is 45,006 / 1,040 / 43.3 with its decisive line at 633, 61% deep. The trigger
+never changes what a capped read withholds — every value below the file's size gives the same number — and the
+*safe* limit is pinned by how deep the decisive line sits, which in these fixtures is the constant `0.62` in
+`fixtures/lib/sources.mjs:1085`. "A safe limit withholds at most ~38%" is `1 − 0.62` restated, not a
+measurement. `results/DEVIATIONS.md` already warns about exactly this.
+
+**What `report --reads` adds, and what it cannot.** It measures the withholding half from the owner's own
+reads — with Claude Code's line numbering stripped, without which every file is overstated by 5-6% and the
+long ones more. It cannot measure the saving: whether the model comes back for what a cap withheld is
+behavioural and is in no transcript. This mode does not replace the paid session; it decides whether one is
+worth running.
+
+**Q1, the trigger — decision rule.** Lower `readMaxBytes` from 60,000 to the largest candidate T satisfying
+**all three**: it catches at least **5** whole-file reads; those carry at least **20%** of all bytes read
+whole; and at `readLimitLines` 800 — this morning's answer, which travels with any trigger change — the median
+withholding on the newly-caught reads is at least **25%**. If no candidate satisfies all three, **60,000
+stays** and the argument it never had gets written down: below roughly 55 KB a limit safe at this owner's
+target depth delivers the whole file, so a lower trigger fires more often and saves nothing. A candidate that
+passes earns the paid test, it does not skip it.
+
+**Q2, the shape — decision rule.** Compare the coefficient of variation of target depth as a **fraction**
+against the same in **absolute lines**, over reads whose file length came from an exact source (not from disk
+now). If the fractional spread is at least **25% tighter**, targets scale with file length, `readLimitLines`
+is the wrong shape, and the fractional cap gets its own pre-registration — not the same change. If the
+absolute spread is tighter, a fixed line count is the right shape and that is the first evidence for it. Under
+**20** reads with an exact length: no verdict.
+
+**Written expectation.** I expect the absolute spread to be tighter, and Q1 to fail its third condition,
+leaving 60,000 in place. The specific risk, named because this morning's prediction failed for a reason of
+exactly this kind: his whole-file reads may be dominated by one or two large files, and the medians would then
+be one file's shape rather than a workload's.
+
+**Result — 2026-09-12, run on the owner's machine.**
+
+**Q1: no candidate passes, so 60,000 stays.** 33 whole-file reads of 27 files, 701,372 bytes, median 18,293,
+90th percentile 59,374, largest **62,476** — his whole-file reads stop just above the trigger. The grid:
+
+| trigger | reads caught | share of bytes | withheld at limit 800 |
+|---|---|---|---|
+| 10,000 | 16 | 95% | **8%** |
+| 25,000 | 13 | 88% | **8%** |
+| 30,000 | 12 | 84% | **17%** |
+| 45,000 | 8 | 64% | **17%** |
+| 60,000 | 2 | 18% | 20% |
+
+Conditions one and two pass down to 45,000 and condition three fails everywhere: nothing reaches 25%. **The
+argument 60,000 never had, now measured rather than estimated:** the limit that keeps this owner's targets
+makes the cap nearly a no-op on every file he reads, so a lower trigger fires more often and saves almost
+nothing. The self-cancelling arithmetic predicted from an assumed 50 bytes per line holds on his real files.
+The written expectation — that Q1 would fail its third condition — was right this time.
+
+Three reads could not be sized. They were checked before the rule was applied, because unsized reads sit
+exactly where they could swing the withholding median: all three failed for reasons other than Claude Code's
+size refusal, so they are failures and not large files, and the grid is complete.
+
+**Q2: no verdict.** The rule requires 20 reads whose file length came from an exact source. There is **1** —
+the other 42 lengths were read off disk today, which the rule excludes because a file may have changed since
+the read. The numbers exist (absolute CV 1.21, fractional 1.05, so the fraction is 13% tighter, short of the
+25% the rule demands) and are **not admissible**. The shape question stays open, and the expectation that the
+absolute spread would be tighter is neither confirmed nor refuted: the test did not run.
+
+Worth a second look, from the inadmissible source and so a lead rather than a finding: target depth is
+**bimodal** — 21 reads in the first 10% of a file, then 15 at 50-60%. Two habits, "read the top" and "read the
+middle", which one cap value cannot serve.
+
+**And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
+work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
+this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`
+now separates them from the ledger: a session with no ledger row never had the guard; a session the guard was
+recording in, whose over-trigger read still went through, is a defect.
+
+**Resolved the same day: not a defect.** Both reads sit in sessions with **no ledger row at all** (`460d9673`,
+`3c9cde47`) -- the guard was not running there and the cap never had a chance. So the zero is genuine and the
+"inert, not broken" reading is the right one.
+
+It also sharpens the finding past where the rule needed it. Every read over 60,000 bytes is in a session
+without the guard, so across the **11 sessions where the guard was running, not one whole-file read reached the
+trigger.** The cap is not rarely useful on this workload; in the sessions where it runs it is never reached.
+
+Two consequences worth carrying:
+
+- A paid test of the trigger **cannot use this owner's own workload as its scenario**, because his workload with
+  the guard on never trips it. Any such test is measuring a task constructed to trip it, which is what the
+  2026-09-07 A/B did and is the weakness already on its record.
+- 2 of 13 real sessions ran without the guard at all. That is a coverage gap rather than a tuning question:
+  project-scope installs only cover the repo that carries them, and `tokenbrake status` says what is installed
+  where.
+
 ## The Read cap's strength — pre-registered 2026-09-12, before the numbers
 
 `readLimitLines` is the other half of the Read cap: `readMaxBytes` decides *which* reads get capped,
@@ -534,9 +632,16 @@ induced reads. So the model came back three times for one cap on real work, n=1 
 the mechanism in miniature.
 
 **Source-file caps on real work: zero.** Every one of the six fired inside the benchmark — five on
-`settle.js`, one on `ledger-entries.json`. `readLimitLines` governs a cap that has **never once fired on this
-owner's own work** across every session on disk. It agrees with the 40-request audit: unbounded reads there
+`settle.js`, one on `ledger-entries.json`. It agrees with the 40-request audit: unbounded reads there
 ran 1, 8, 15, 16, 31 and 34 KB, and the 60,000-byte trigger needs roughly double the largest of them.
+
+**Corrected later the same day: that zero covered one of two paths.** `readMaxBytes` and `readLimitLines`
+govern the PreToolUse Read cap *and* the POST path that caps a `cat` of a large file (`guard.js:283-296`) --
+but the second logs `ev: 'post', excerpt: true`, not `ev: 'read-cap'`, so a counter reading only `read-cap`
+rows sees half the feature and calls the other half zero. `report --caps` counts both now and prints them
+apart. The sentence that stood here -- that `readLimitLines` governs a cap which has never once fired on this
+owner's own work -- is **withdrawn in that form**: it holds for the Read path, and the shell path was never
+measured. It does not change this section's verdict, which rests on where the targets sit, not on the count.
 
 **The rule's verdict.** Spontaneous subset 108 reads, over the 20 needed. Hidden share by candidate:
 300 → 56%, 500 → 40%, **800 → 20%**, 1200 → 8%. The smallest L at or under 25% is **800**.

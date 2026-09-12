@@ -44,6 +44,59 @@
   cap fires on ordinary work, which is the question `readMaxBytes` turns on: one real 40-request audit
   session read six files at 1, 8, 15, 16, 31 and 34 KB and **never tripped the 60,000-byte trigger once.**
 
+- **`report --reads`, and a sizing error it had to fix first.** `readMaxBytes` decides which reads get capped
+  and has never had an argument: 60,000 was a guess, and the one paid A/B lowering it to 25,000 cost +10% on
+  a task that said "read in full", which forbids the saving by construction. Half of that question is
+  arithmetic over a person's own reads — how many a lower trigger catches and how much of each it cuts — and
+  this does that half for free.
+  **The sizing error, found while building it and verified on this repo's own transcripts:** Claude Code
+  numbers every line it delivers (`12→const x = 1`), and that numbering is Claude Code's, not the file's. It
+  runs **5–6% of the delivered text on a 350-line file and grows with the line count**, while `readMaxBytes`
+  is compared against the file's real size on disk. Measuring a file by what its read cost therefore
+  overstates every file, and overstates the long ones most — exactly at the boundary a trigger sits on. The
+  numbering is now stripped, which recovers the real size to the byte: an unchanged `guard.js` came back as
+  22,076 characters and strips to **20,832 bytes against 20,831 on disk**. The stripping also gives the line
+  count exactly, because the last prefix *is* the file's last line number.
+  Four things that would each have made the grid lie, all corrected and each printed rather than folded in:
+  a read the guard had already **capped** (its delivered text is the cap's first N lines — the ledger's
+  `statSync` size is used instead, or a capped read would be counted as a small file and argue for a lower
+  trigger using the cap's own output); a read Claude Code **refused** as too large; an unbounded read that
+  stopped at a round host line limit, whose line count is a **floor** and not a count; and a read of an output
+  Claude Code had already **spilled to disk**, which `persistedLimitLines` governs and `readMaxBytes` has no
+  say in. Images and notebooks are excluded too, because the guard returns on them before it stats anything.
+  **And the question underneath the value.** `readLimitLines` is an *absolute* line count, but whether it
+  hides the target depends on where the target sits as a **fraction** of the file: a median start line of 351
+  is 51% into a 684-line file and 14% into a 2,570-line one. The report gives both spreads side by side. If
+  the fractional one is markedly tighter, the knob is the wrong *shape* — too tight on a short file, too loose
+  on a long one — and no value of it is right everywhere. Nothing had ever paired a read's start line with its
+  file's length, so neither shape had ever been evidence.
+  The miss rate is printed beside the grid and never inside it, because it is measured over ranged reads —
+  a different population from the whole-file reads a trigger catches — and adding the two would be wrong.
+
+- **Both paths `readMaxBytes` governs are counted now, and one of them never was.** The same two knobs cap an
+  unbounded `Read` through the PreToolUse hook *and* a `cat` of a large file through the POST hook
+  (`guard.js:283-296`) -- but the second logs `ev: 'post', excerpt: true`, not `ev: 'read-cap'`. So
+  `--caps`, `--ledger` and the "Read caps fired" line were all reading one of the two paths and reporting the
+  other as zero. **That is how this changelog's own claim, that the source-file cap has never fired on real
+  work, came to be stated about half a feature.** All three count both now and print them apart.
+  `--reads` needed the matching correction: a `cat` the guard capped delivers only `readLimitLines` lines, so
+  sizing it from its delivered text counts a capped read as a small file and argues for a lower trigger using
+  the guard's own output. Its ledger `post` row carries the size *before* the cap, and that is used instead --
+  the same defect this release already fixed for `Read`, arriving through a different door.
+
+- **`report --reads` now tells "the cap is inert here" apart from "the cap is not running here".** Those are
+  opposite conclusions from identical evidence, and nothing in this repo could distinguish them: a whole-file
+  read larger than `readMaxBytes` with no cap recorded against it. The ledger settles it — a session with no
+  ledger row at all never had the guard, while a session the guard *was* recording in, whose over-trigger read
+  still went through unbounded, is a **defect and not a tuning question**. Both are printed with the session
+  ids, counted apart.
+  It exists because the owner's own numbers disagreed: 2 whole-file reads over 60,000 bytes on real work, and
+  0 caps on real work from either path. Every conclusion drawn about this feature so far assumed the first
+  reading without checking the second. **Checked: not a defect** — both reads are in sessions with no ledger
+  row at all, so the guard was not running there. And the check paid for itself immediately, because it sharpens
+  the result: every read over the trigger is in a guard-less session, so in the 11 sessions where the guard
+  *was* running, **not one whole-file read reached 60,000.**
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a

@@ -164,9 +164,10 @@ const fmt = (n) => n.toLocaleString();
    the ranking; --where pools every session's ranged reads into the one distribution that can set
    readLimitLines. */
 function guardCfg() {
-  const cfg = { readLimitLines: 300, persistedLimitLines: 80 };
+  const cfg = { readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
+    if (c.readMaxBytes) cfg.readMaxBytes = c.readMaxBytes;
     if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
     if (c.persistedLimitLines) cfg.persistedLimitLines = c.persistedLimitLines;
   } catch {}
@@ -344,8 +345,13 @@ function capsReport() {
     return;
   }
   console.log('Read caps fired -- ' + c.n + ' across ' + (sessionId ? '1 session' : c.sessions + ' session(s)') + ' in the ledger\n');
-  console.log('  Source files (readLimitLines):           ' + String(c.source.n).padStart(3) + ' caps, '
+  console.log('  Source files, Read cap (readLimitLines):  ' + String(c.source.n).padStart(3) + ' caps, '
     + c.source.files + ' file(s), ~ ' + fmt(tok(c.source.bytes)) + ' tokens of file');
+  /* The same two knobs, the other path. A `cat` of a large file is capped after the fact by the POST hook
+     against the same readMaxBytes and readLimitLines, but it logs as a trimmed post, not as a read-cap row.
+     Counting only read-cap rows reports one of the two paths those knobs govern and calls the other zero. */
+  console.log('  Same knobs via a shell cat:              ' + String(c.excerpt.n).padStart(3) + ' caps, '
+    + c.excerpt.files + ' file(s), ~ ' + fmt(tok(c.excerpt.bytes)) + ' tokens of file');
   console.log('  Persisted outputs (persistedLimitLines): ' + String(c.persisted.n).padStart(3) + ' caps, '
     + c.persisted.files + ' file(s), ~ ' + fmt(tok(c.persisted.bytes)) + ' tokens of file');
   console.log('\n  caps  bytes        lines  limit  delivered  file');
@@ -361,13 +367,189 @@ function capsReport() {
     + '\n   each cap twice. `tokenbrake status` says so too.)');
   console.log('\n  delivered is limit/lines -- the share of the file the model received. The rest is not lost; it is');
   console.log('  one offset read away, and that read is another request that re-reads the whole context. How often');
-  console.log('  the source-file half fires on real work is the question readMaxBytes turns on: here, ' + c.source.n + ' time(s).');
+  console.log('  the source-file half fires on real work is the question readMaxBytes turns on: here, '
+    + (c.source.n + c.excerpt.n) + ' time(s) across both paths (' + c.source.n + ' Read, ' + c.excerpt.n + ' shell cat).');
+}
+
+/* `--reads`: the other half of the Read cap's evidence. `--where` says where the model looks; this says how
+   big the files it reads whole actually are, which is what `readMaxBytes` acts on, and how deep the targets
+   sit as a FRACTION of the file, which is what says whether an absolute line cap is even the right shape.
+
+   The trigger has never had an argument. 60,000 was a guess; one paid A/B lowering it to 25,000 cost +10%
+   with a task that said "read in full", which forbids the saving by construction. Half of that question is
+   arithmetic over a person's own reads -- how many a lower trigger catches and how much of each it cuts --
+   and this mode does that half for free. The half it cannot do is whether the model comes back. */
+function readsReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const only = opt('--cwd');
+  const TRIGGERS = [10000, 25000, 30000, 45000, 60000];
+  const LIMITS = [100, 200, 300, 500, 800, 1200];
+  const cfg = guardCfg();
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+  if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+  /* The file on disk is the last resort for a line count and it is the weakest: it may have changed since the
+     read. Cached so a file read in twenty sessions is counted once. */
+  const diskCache = new Map();
+  const linesOnDisk = (f) => {
+    if (diskCache.has(f)) return diskCache.get(f);
+    let n = null;
+    try { const st = fs.statSync(f); if (st.isFile() && st.size < 20e6) n = fs.readFileSync(f, 'utf8').split('\n').length; } catch {}
+    diskCache.set(f, n);
+    return n;
+  };
+  const pooled = [], skipped = [], missed = [];
+  const ledgerSessions = new Set(ledger.map(r => r && r.session).filter(Boolean));
+  let reads = [], depths = [];
+  let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
+  let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
+  const sources = { ledger: 0, ledgerPost: 0, numbering: 0, text: 0 };
+  const bySource = { session: 0, ledger: 0, disk: 0 };
+  for (const f of found) {
+    const id = String(f.session).slice(0, 8);
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    const cwd = p.cwd || '';
+    if (only) {
+      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
+    } else if (/tokenbrake-bench/i.test(cwd)) {
+      skipped.push([id, 'benchmark session -- synthetic fixtures, sizes chosen by design; --cwd to include']);
+      continue;
+    }
+    const sessionId = p.sessionId || f.session;
+    const u = transcript.unboundedReads(p, ledger, { sessionId });
+    const d = transcript.readDepths(p, ledger, { sessionId, linesOnDisk });
+    /* The product's own self-check, and the reason it exists: a read over readMaxBytes that was NOT capped
+       means either the guard was not running in that session or it did not fire. Those are the same evidence
+       and opposite conclusions -- "the cap is inert on this workload" against "the cap is not running on this
+       workload" -- and nothing in this repo could tell them apart. The ledger settles it: if it holds no row
+       at all for a session, the guard was not there; if it holds rows and the read still went through
+       unbounded, the cap had its chance and missed. */
+    const over = u.reads.filter(r => !r.capped && !r.ceiling && (r.bytes || 0) > cfg.readMaxBytes);
+    if (over.length) missed.push([id, over.length, ledgerSessions.has(sessionId)]);
+    if (!u.n && !d.n) { skipped.push([id, 'no whole-file reads and no resolvable targets']); continue; }
+    pooled.push([id, u.n, cwd]);
+    reads = reads.concat(u.reads);
+    depths = depths.concat(d.rows);
+    capped += u.capped; recOrig += u.recordedOriginal; recRew += u.recordedRewritten;
+    nearCeiling += u.nearCeiling; noLines += u.noLines; unresolved += d.unresolved;
+    hostLines += u.hostLines; refused += u.refused; errored += u.errored;
+    persistedSkipped += u.persistedSkipped; files += u.files;
+    for (const k of Object.keys(sources)) sources[k] += u.sources[k];
+    for (const k of Object.keys(bySource)) bySource[k] += d.bySource[k];
+  }
+  console.log('What you read whole -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
+    + (only ? '  (--cwd=' + only + ')' : ''));
+  if (!reads.length) {
+    console.log('\n  No whole-file reads in any pooled session. readMaxBytes has nothing to act on here.');
+    printPool(pooled, skipped);
+    return;
+  }
+  const sized = reads.filter(r => !r.ceiling);
+  const sizes = sized.map(r => r.bytes || 0).sort((a, b) => a - b);
+  const q = (f) => sizes.length ? sizes[Math.min(sizes.length - 1, Math.floor(sizes.length * f))] : 0;
+  console.log('\n  ' + reads.length + ' whole-file read(s) of ' + files + ' file(s) -- '
+    + fmt(reads.reduce((t, r) => t + (r.bytes || 0), 0)) + ' bytes in total'
+    + (sizes.length ? ', median ' + fmt(q(0.5)) + ', 90th percentile ' + fmt(q(0.9)) + ', largest ' + fmt(q(1)) : ''));
+  /* Sizes are the FILE's, not what the read cost. Claude Code numbers every line it delivers and that
+     numbering is its own, not the file's -- 5-6% of the delivered text on a 350-line file, and growing with
+     the line count. readMaxBytes is compared against statSync().size, so leaving the numbering in overstates
+     every file and overstates long ones most, right at the boundary this grid is about. */
+  console.log('    Sized from: ' + sources.ledger + ' a ledger cap row (statSync, exact), ' + sources.ledgerPost
+    + ' a ledger post row (a cat the guard capped -- its size before the cap), ' + sources.numbering
+    + '\n      the Read\'s own line numbering (subtracted), ' + sources.text + ' the delivered text as-is (an uncapped cat).');
+  if (capped) console.log('    ' + capped + ' read(s) the guard had already capped: the delivered text was the cap\'s first N lines,'
+    + '\n    so the ledger\'s true size is used. Believing the transcript there would count a capped read as a'
+    + '\n    small file and argue for a lower trigger using the cap\'s own output as the evidence.');
+  const notSized = [];
+  if (refused) notSized.push(refused + ' refused by Claude Code for exceeding its own per-read token ceiling'
+    + ' (so the file IS large, and the transcript does not say how large -- those reads could swing the'
+    + '\n      medians below in either direction)');
+  if (errored) notSized.push(errored + ' failed for a reason not recognised as the size refusal -- counted as failures, not as large files');
+  if (hostLines) notSized.push(hostLines + ' stopped at exactly ' + transcript.HOST_READ_LINES + ' lines from line 1, which looks like a host limit rather than the end of the file -- the line count is a floor');
+  if (nearCeiling) notSized.push(nearCeiling + ' came back within 10% of the ~100,000-character Read ceiling');
+  if (notSized.length) console.log('    Not sized, and out of every median below: ' + notSized.join(';\n      '));
+  if (persistedSkipped) console.log('    ' + persistedSkipped + ' read(s) of an output Claude Code had already spilled to disk are excluded: those are'
+    + '\n    capped by persistedLimitLines at anything over maxChars, so readMaxBytes has no say in them (report --caps).');
+  if (noLines) console.log('    ' + noLines + ' read(s) have no line count and are in the byte columns only.');
+
+  console.log('\n  What lowering readMaxBytes would catch, and what each limit would then withhold (median):');
+  console.log('    trigger   reads  bytes' + LIMITS.map(l => String(l).padStart(6)).join(''));
+  for (const g of transcript.triggerGrid(sized, TRIGGERS, LIMITS)) {
+    console.log('    ' + String(g.trigger).padStart(7) + String(g.caught).padStart(8)
+      + (Math.round(100 * g.byteShare) + '%').padStart(7)
+      + LIMITS.map(l => (g.byLimit[l] == null ? '-' : Math.round(100 * g.byLimit[l]) + '%').padStart(6)).join('')
+      + (g.trigger === cfg.readMaxBytes ? '   <- your readMaxBytes' : ''));
+  }
+  /* The miss rate belongs beside the grid but not inside it: it is measured over ranged reads, a different
+     population from the whole-file reads the trigger catches. Printing them in one table would invite adding
+     them up. */
+  const tgt = transcript.readTargets({ results: depths.map(d => ({ readFrom: d.start })) }, LIMITS);
+  if (tgt.n) {
+    console.log('\n  Chance each capped read sends the model back, by limit -- from your ranged reads, which are a');
+    console.log('  DIFFERENT population from the whole-file reads above. Read it beside the grid, not added to it:');
+    console.log('    ' + LIMITS.map(l => l + ': ' + Math.round(100 * tgt.past[l] / tgt.n) + '%').join('   '));
+  }
+
+  console.log('\n  How deep the targets sit -- ' + depths.length + ' read(s) with a known file length'
+    + (unresolved ? ', ' + unresolved + ' unresolved and left out' : ''));
+  if (depths.length) {
+    console.log('    line length known from: ' + bySource.session + ' a whole-file read in the same session, '
+      + bySource.ledger + ' the ledger, ' + bySource.disk + ' the file on disk now (may have changed)');
+    const d2 = { n: depths.length, rows: depths };
+    const cv = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+      return m ? Math.sqrt(xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1)) / m : null; };
+    const exact = depths.filter(r => r.source !== 'disk');
+    const absCV = depths.length > 1 ? cv(depths.map(r => r.start)) : null;
+    const frCV = depths.length > 1 ? cv(depths.map(r => r.depth)) : null;
+    const eAbs = exact.length > 1 ? cv(exact.map(r => r.start)) : null;
+    const eFr = exact.length > 1 ? cv(exact.map(r => r.depth)) : null;
+    const pct = (x) => x == null ? '?' : x.toFixed(2);
+    console.log('    spread (coefficient of variation), all sources:   absolute line ' + pct(absCV) + '   fraction of file ' + pct(frCV));
+    console.log('    spread, exact sources only (' + exact.length + ' reads):' + ' '.repeat(9) + 'absolute line ' + pct(eAbs) + '   fraction of file ' + pct(eFr));
+    console.log('    The tighter one is the shape the cap should have. readLimitLines is an absolute line count,');
+    console.log('    so if the fraction is markedly tighter the knob is the wrong shape -- too tight on a short');
+    console.log('    file and too loose on a long one -- and no value of it is right everywhere.');
+    console.log('\n  Target depth as a share of the file:');
+    for (const b of transcript.startHistogram(depths.map(r => Math.round(100 * r.depth)), [0, 10, 20, 30, 40, 50, 60, 80, 101])) {
+      const to = b.to > 100 ? '100%' : String(b.to) + '%';
+      console.log('    ' + (String(b.from) + '%').padStart(5) + '..' + to.padEnd(5) + String(b.n).padStart(5) + '  ' + b.bar);
+    }
+  }
+  if (missed.length) {
+    const withGuard = missed.filter(([, , had]) => had);
+    const without = missed.filter(([, , had]) => !had);
+    const total = missed.reduce((t, [, n]) => t + n, 0);
+    console.log('\n  ' + total + ' read(s) over your readMaxBytes of ' + fmt(cfg.readMaxBytes) + ' that were NOT capped:');
+    if (without.length) console.log('    ' + without.reduce((t, [, n]) => t + n, 0) + ' in ' + without.length
+      + ' session(s) with no ledger row at all -- the guard was not running there, so the cap never had a chance:'
+      + '\n      ' + without.map(([i, n]) => i + ' (' + n + ')').join('  '));
+    if (withGuard.length) console.log('    ' + withGuard.reduce((t, [, n]) => t + n, 0) + ' in ' + withGuard.length
+      + ' session(s) the guard WAS recording in -- it had its chance on these and did not fire, which is a'
+      + '\n      defect and not a tuning question:  ' + withGuard.map(([i, n]) => i + ' (' + n + ')').join('  '));
+    console.log('    Why this line exists: a read over the trigger with no cap is the same evidence for "the cap');
+    console.log('    is inert on this workload" and for "the cap is not running on this workload", and those are');
+    console.log('    opposite conclusions. The ledger is what tells them apart.');
+  }
+  if (capped) {
+    console.log('\n  What the transcript records when the guard caps a Read -- settled from your machine, not assumed:');
+    console.log('    ' + recOrig + ' appear as the model wrote them (unbounded), ' + recRew + ' as the guard rewrote them (carrying a limit).');
+    console.log('    Verdict: ' + (recOrig && recRew ? 'mixed' : recOrig ? 'recorded as the model wrote it' : 'recorded as the guard rewrote it') + '.');
+    if (recOrig) console.log('    That means capped reads sit in the pool looking like small whole-file reads unless the ledger'
+      + '\n    catches them, which is why the ledger join above is not optional.');
+  }
+  printPool(pooled, skipped);
+  console.log('\n  A whole-file read -- an unbounded Read, or a bare cat -- is what readMaxBytes acts on. head,');
+  console.log('  tail, sed -n and grep are bounded requests and are not counted. The grid above is arithmetic and');
+  console.log('  is exact for what it measures; what it cannot say is whether the model comes back for what a cap');
+  console.log('  withholds, which is behavioural and has cost money to find out before (AB-TASK.md).');
 }
 
 function report() {
   if (flag('--ledger')) return ledgerReport();
   if (flag('--where')) return whereReport();
   if (flag('--caps')) return capsReport();
+  if (flag('--reads')) return readsReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -446,6 +628,7 @@ function ledgerReport() {
   console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ~ ${fmt(tok(saved))} tokens kept out of context`);
   console.log(caps.n
     ? `Read caps fired: ${caps.n} -- ${caps.source.n} on a large source file (readLimitLines), `
+      + `${caps.excerpt.n} on a shell cat of one (same knobs, capped after the fact), `
       + `${caps.persisted.n} on a persisted output (persistedLimitLines)   (report --caps lists the files)\n`
     : 'Read caps fired: none\n');
 
@@ -499,8 +682,12 @@ function help() {
                                       start lines are the cap's. Benchmark sessions are skipped;
                                       --cwd=<text> restricts the pool explicitly
       --caps                          every file the Read cap has fired on, pooled across sessions, with the
-                                      two knobs counted apart and the share of each file delivered. The
-                                      evidence for readMaxBytes; --session=<prefix> narrows, --top=N widens
+                                      two knobs counted apart and the share of each file delivered;
+                                      --session=<prefix> narrows, --top=N widens
+      --reads                         every file you read WHOLE, at its own size with Claude Code's line
+                                      numbering subtracted: how many reads a lower readMaxBytes would catch,
+                                      how much of each a limit would then withhold, and how deep the targets
+                                      sit as a share of the file. The evidence for readMaxBytes
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
