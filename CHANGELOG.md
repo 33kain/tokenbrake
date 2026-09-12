@@ -7,11 +7,16 @@
   it expects to find something. A cap keeping the first N lines hides that target whenever the start line
   is past N, and the model comes back for it. The report now gives the distribution of those start lines
   and, against the cap you actually run, how often it would have hidden what the model went for.
-  On the session that prompted it: 92 targeted reads, median start line 50, 90th percentile 464, deepest
-  820 — and the default 300-line cap would have hidden the target in **23% of them**, against 10% at 500
-  and 1% at 800. That is a per-person number, and nobody else's default can supply it.
+  On the session that prompted it: ~100 targeted reads, median start line in the 50s, 90th percentile 464,
+  deepest 820 — and the default 300-line cap would have hidden the target in **about a quarter of them**,
+  against 9% at 500 and 1% at 800. That is a per-person number, and nobody else's default can supply it.
   Labelled as the inference it is: these reads were already bounded, so the guard never capped them. What
   they establish is where the model expects to find things, not what the cap did.
+
+- **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
+  which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
+  report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a
+  trimmed result is unchanged, because that text goes to the model as JSON, not to a console.
 
 ## 0.2.6 — 2026-09-12
 
