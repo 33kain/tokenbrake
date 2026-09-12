@@ -84,6 +84,9 @@ const WHOLE_CMD = new RegExp(
    from. PERSISTED is the second knob -- a spilled output is capped by persistedLimitLines at anything over
    maxChars, whatever readMaxBytes says (guard.js:41, :329). */
 const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
+/* Claude Code's own refusal when a file exceeds its per-read token ceiling. Matched on wording, so a build
+   that words it differently falls through to 'errored' rather than being counted as a big file. */
+const TOO_LARGE = /exceeds maximum allowed (?:tokens|size)|too (?:large|long) to read|maximum allowed tokens/i;
 const BINARY_READ = /\.(png|jpe?g|gif|webp|bmp|svg|pdf|ipynb)$/i;
 
 function readsWholeFile(name, input) {
@@ -388,6 +391,9 @@ function parseTranscript(file) {
           lines: text ? text.split('\n').length : 0,
           whole: readsWholeFile(use.name, use.input),
           shape: readFileOf(use.name, use.input) ? fileShape(text) : null,
+          /* Only for a failed read, and only the head of it: the reason a read failed decides whether it is
+             evidence of a large file or of nothing at all, and that cannot be recovered later. */
+          text: b.is_error ? text.slice(0, 400) : undefined,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
           /* Two clocks, both Claude Code's own and both on this host: askedAt is when the model emitted the
@@ -683,7 +689,12 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     }
     const sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
     let ceiling = null;
-    if (r.isError) ceiling = 'refused';
+    /* An errored read is not a large file. Claude Code's own refusal above roughly 25k tokens IS evidence a
+       large file exists, with no evidence of its size; "file not found" is evidence of nothing. Classifying
+       every failure as the first would manufacture large files out of typos -- and those files, being
+       unsized, sit exactly where they could swing the withholding median. So the refusal is matched on its
+       wording and anything else is reported as what it is: a failure whose reason was not recognised. */
+    if (r.isError) ceiling = TOO_LARGE.test(r.text || '') ? 'refused' : 'errored';
     else if (sh.numbered && sh.from === 1 && sh.lines === HOST_READ_LINES) { ceiling = 'host-lines'; hostLines++; }
     else if (r.chars >= 0.9 * HOST_READ_CEILING) { ceiling = 'near'; nearCeiling++; }
     reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: false, ceiling,
@@ -704,6 +715,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     capped: reads.filter((x) => x.capped).length, recordedOriginal, recordedRewritten,
     nearCeiling, hostLines, persistedSkipped,
     refused: reads.filter((r) => r.ceiling === 'refused').length,
+    errored: reads.filter((r) => r.ceiling === 'errored').length,
     sources: { ledger: reads.filter((r) => r.source === 'ledger').length,
       numbering: reads.filter((r) => r.source === 'numbering').length,
       text: reads.filter((r) => r.source === 'text').length },

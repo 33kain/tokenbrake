@@ -395,7 +395,7 @@ function readsReport() {
   const pooled = [], skipped = [];
   let reads = [], depths = [];
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
-  let hostLines = 0, refused = 0, persistedSkipped = 0, files = 0;
+  let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
   const sources = { ledger: 0, numbering: 0, text: 0 };
   const bySource = { session: 0, ledger: 0, disk: 0 };
   for (const f of found) {
@@ -418,7 +418,8 @@ function readsReport() {
     depths = depths.concat(d.rows);
     capped += u.capped; recOrig += u.recordedOriginal; recRew += u.recordedRewritten;
     nearCeiling += u.nearCeiling; noLines += u.noLines; unresolved += d.unresolved;
-    hostLines += u.hostLines; refused += u.refused; persistedSkipped += u.persistedSkipped; files += u.files;
+    hostLines += u.hostLines; refused += u.refused; errored += u.errored;
+    persistedSkipped += u.persistedSkipped; files += u.files;
     for (const k of Object.keys(sources)) sources[k] += u.sources[k];
     for (const k of Object.keys(bySource)) bySource[k] += d.bySource[k];
   }
@@ -445,7 +446,10 @@ function readsReport() {
     + '\n    so the ledger\'s true size is used. Believing the transcript there would count a capped read as a'
     + '\n    small file and argue for a lower trigger using the cap\'s own output as the evidence.');
   const notSized = [];
-  if (refused) notSized.push(refused + ' refused by Claude Code as too large (the file is big; the transcript does not say how big)');
+  if (refused) notSized.push(refused + ' refused by Claude Code for exceeding its own per-read token ceiling'
+    + ' (so the file IS large, and the transcript does not say how large -- those reads could swing the'
+    + '\n      medians below in either direction)');
+  if (errored) notSized.push(errored + ' failed for a reason not recognised as the size refusal -- counted as failures, not as large files');
   if (hostLines) notSized.push(hostLines + ' stopped at exactly ' + transcript.HOST_READ_LINES + ' lines from line 1, which looks like a host limit rather than the end of the file -- the line count is a floor');
   if (nearCeiling) notSized.push(nearCeiling + ' came back within 10% of the ~100,000-character Read ceiling');
   if (notSized.length) console.log('    Not sized, and out of every median below: ' + notSized.join(';\n      '));

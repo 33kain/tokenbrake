@@ -912,6 +912,18 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      nothing -- it stays at zero if the limit is not real, and catches the case if it is. */
   t('an unbounded read stopping at exactly the host line limit is a floor, not a file length',
     ur.reads.find(r => /host/.test(r.file)).ceiling === 'host-lines' && ur.hostLines === 1);
+  /* A failed read is not a large file. The host's own size refusal IS evidence one exists, with no evidence
+     of how large; "file does not exist" is evidence of nothing. Counting every failure as the first would
+     manufacture large files out of typos -- and unsized reads sit exactly where they could swing the
+     withholding median, which is the number the trigger's decision rule turns on. */
+  const errRead = (file, text) => ({ file, whole: true, chars: 10, lines: 1, shape: T.fileShape('x'),
+    readFrom: null, isError: true, text });
+  const errs = T.unboundedReads({ ...up, results: [
+    errRead('/w/big.js', 'File content (35000 tokens) exceeds maximum allowed tokens (25000)'),
+    errRead('/w/gone.js', '<tool_use_error>File does not exist.</tool_use_error>')] }, [], {});
+  t('the host\'s size refusal is evidence of a large file; any other failure is not',
+    errs.refused === 1 && errs.errored === 1, JSON.stringify({ refused: errs.refused, errored: errs.errored }));
+  t('neither kind of failure is sized, so neither enters the grid', errs.sized.length === 0);
   t('a read that could not be sized is out of the grid, not silently in it',
     ur.sized.length === 2 && ur.n === 3, JSON.stringify({ sized: ur.sized.length, n: ur.n }));
   t('a read of a spilled output is the other knob and never enters the population',
