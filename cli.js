@@ -413,10 +413,18 @@ function reachReport() {
     transcript.carry(p);
     const trimmed = transcript.trimmedResults(p, ledger);
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
-    sessions.push({ parsed: p, trimmed });
+    /* "The guard was here and chose not to act" and "the guard was not here" produce an identical untouched
+       bucket and opposite conclusions -- the first is a design choice to argue about, the second is a
+       coverage gap. The ledger tells them apart: a session the guard ran in wrote rows in it. This is the
+       third place today the same distinction decided everything. */
+    const sid = p.sessionId || f.session;
+    const ran = ledger.some((r) => r && r.session === sid);
+    sessions.push({ parsed: p, trimmed, ran });
     pooled.push([id, p.results.length, cwd]);
   }
+  const withGuard = sessions.filter((x) => x.ran);
   const r = transcript.reachPooled(sessions);
+  const rg = transcript.reachPooled(withGuard);
   const shellN = r.window.n + r.under.n + r.failed.n + r.persisted.n;
   console.log('Where the trim can reach -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
@@ -433,9 +441,27 @@ function reachReport() {
   row('failed (host ignores a rewrite)', r.failed);
   row('not shell at all', r.nonShell);
 
-  const W = r.windowShareOfCarried;
-  console.log('\n  W = ' + (Math.round(1000 * W) / 10) + '% of carried tokens sit where the trim can act.');
-  const THIN = pooled.length < 10 || shellN < 200;
+  /* Everything above pools sessions the guard never ran in, where "untouched" says nothing about the guard.
+     The verdict is taken from the sessions it DID run in, because those are the only ones where a result
+     inside the reach and left alone is a fact about the product. */
+  console.log('\n  Of the ' + pooled.length + ' session(s) pooled, the guard was recording in ' + withGuard.length + '.');
+  if (!withGuard.length) {
+    console.log('  Nothing below can be read as a fact about the guard: it was not running in any of them.');
+  } else {
+    console.log('    within reach there: ' + rg.window.n + ' result(s), ' + fmt(rg.window.carried) + ' carried'
+      + (rg.carriedTotal ? ' (' + (Math.round(1000 * rg.windowShareOfCarried) / 10) + '% of what those sessions carried)' : ''));
+    console.log('    acted on: ' + rg.acted.n + '  left alone: ' + rg.untouched.n
+      + (rg.window.carried ? '  -- the guard reached ' + Math.round(100 * rg.acted.carried / rg.window.carried) + '% of the carried tokens it could' : ''));
+    console.log('    A result inside the reach and left alone, in a session the guard WAS running in, is the');
+    console.log('    product declining to act -- the excerpt exemption is the main reason it does that, and');
+    console.log('    0.2.6 traded acting less for acting wrongly less often. This is that trade\'s price.');
+  }
+
+  const W = rg.windowShareOfCarried;
+  console.log('\n  W = ' + (Math.round(1000 * W) / 10) + '% of carried tokens sit where the trim can act,'
+    + '\n  measured over the sessions the guard was actually running in.');
+  const shellG = rg.window.n + rg.under.n + rg.failed.n + rg.persisted.n;
+  const THIN = withGuard.length < 10 || shellG < 200;
   console.log('  ' + (THIN
     ? 'Under 10 sessions or 200 shell results: NO VERDICT, and the number above is not one.'
     : W < 0.05 ? 'Under 5%: the mechanism is essentially absent on this work. No quality of trimming can'

@@ -411,6 +411,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reach pools sessions and reports the share of carried tokens the trim can act on',
     /Where the trim can reach/.test(r.stdout) && /W = [\d.]+% of carried tokens/.test(r.stdout),
     (r.stdout.match(/[^\n]*W = [^\n]*/) || [])[0]);
+  t('cli: --reach separates sessions the guard ran in from sessions it did not',
+    /the guard was recording in \d+/.test(r.stdout),
+    (r.stdout.match(/[^\n]*guard was recording in[^\n]*/) || [])[0]);
+  t('cli: --reach measures the verdict over the sessions the guard was running in',
+    /measured over the sessions the guard was actually running in/.test(r.stdout));
   t('cli: --reach refuses a verdict on a thin pool rather than printing a number that looks like one',
     /NO VERDICT, and the number above is not one/.test(r.stdout));
   r = run(['--caps', '--cwd=whatever']);
