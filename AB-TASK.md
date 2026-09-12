@@ -765,7 +765,35 @@ forbids it. They are there to notice a disaster, not to declare a win.
 - A fourth hole turns up in this rule before it runs. Three rules today have had one, all three in the
   product's favour, and the next one is not free — it is the reason nothing here ships on a single measurement.
 
-**Result:** _pending — Step A first, and it is free._
+**Result — Step A, 2026-09-12. TIE at 9 points against a threshold of 10. STOP: nothing is built.**
+
+45 of 45 reads carried a bytes-per-line of their own, over the 20 the rule needs.
+
+| shape | safest useful cap | saves, by median share of lines | saves, by share of tokens | misses |
+|---|---|---|---|---|
+| absolute | first 800 lines | 22% | **31%** | 13% |
+| fractional | first 60% of the file | 40% | **40%** | 11% |
+
+**Exactly half the margin was a weighting artifact.** 18 points on share of lines, 9 on tokens. The mechanism is
+clean and worth keeping: a fractional cap withholds the same share of every file, so its number does not move
+between the two measures at all. An absolute cap cuts hardest on long files, which is where the tokens are, so
+its share rises from 22% to 31% once tokens are what is counted. Step A existed for precisely this, and it
+found precisely this.
+
+**9 against 10, and the rule decides.** That is one point, on a threshold I chose myself, for a design I
+proposed. It would take one sentence to call it "essentially ten" or "inside the noise". **No.** The rule was
+written before the measurement, it says tie, and a tie means `readLimitLines` stays **in form and in value** and
+no fractional cap is built. Recorded here rather than argued down.
+
+**My written expectation was half right, which is the honest way to score it.** I predicted "fractional still
+wins, by 8 to 14 points". The magnitude was right — 9 sits in that range. The verdict was wrong, because 9 is
+below the line I had already drawn. Predicting the number and missing the conclusion is not a successful
+prediction.
+
+**So the form question closes with no change, and the whole Read cap is now settled:** `readMaxBytes` 60,000
+(rule failed at every candidate), `readLimitLines` 300 with 800 decided and held for a trigger change that the
+same evidence says should not happen, and the form absolute (tie on the measure that decides). Three questions,
+three answers, none of them a change, and every one of them now has an argument where before it had a guess.
 
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
