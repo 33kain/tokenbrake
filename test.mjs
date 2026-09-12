@@ -407,6 +407,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     (r.stdout.match(/[^\n]*Verdict on tokens:[^\n]*/) || [])[0]);
   t('cli: --reads does not crash printing the verdict', r.status === 0 && !/TypeError/.test(r.stderr), r.stderr.slice(0, 120));
   rmSync(join(cfg, 'projects', '-c-work-shaperepo'), { recursive: true, force: true });
+  r = run(['--reach']);
+  t('cli: --reach pools sessions and reports the share of carried tokens the trim can act on',
+    /Where the trim can reach/.test(r.stdout) && /W = [\d.]+% of carried tokens/.test(r.stdout),
+    (r.stdout.match(/[^\n]*W = [^\n]*/) || [])[0]);
+  t('cli: --reach refuses a verdict on a thin pool rather than printing a number that looks like one',
+    /NO VERDICT, and the number above is not one/.test(r.stdout));
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code
@@ -448,7 +454,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      Nothing pinned the conversion, so this does. The guard's own ellipsis inside a trimmed result is exempt:
      that text goes to the model as JSON, not to a terminal. */
   const nonAscii = (out) => out.split('\n').filter(l => !/^[\x20-\x7e]*$/.test(l));
-  for (const argv of [[], ['--where'], ['--caps'], ['--reads'], ['--ledger'], ['--all']]) {
+  for (const argv of [[], ['--where'], ['--caps'], ['--reads'], ['--reach'], ['--ledger'], ['--all']]) {
     const o = run(argv);
     t('cli: report ' + (argv.join(' ') || '(default)') + ' prints ASCII only', nonAscii(o.stdout).length === 0,
       nonAscii(o.stdout).slice(0, 2).join(' | '));
@@ -896,6 +902,60 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     T.capBandSpike([300, 301, 302, 305], 300).exact === 2);
   t('the histogram bins every start exactly once',
     T.startHistogram([1, 0, 60, 250, 400, 900, 5000]).reduce((n, b) => n + b.n, 0) === 7);
+
+  console.log('\n-- where the trim can reach, and which tools put it there');
+  /* Round 2's pilot abandoned its schedule because the guard rewrote nothing the model saw: handed a CLI that
+     could slice a log, the agent sliced. Round 1's workspace had only dumping tools and the mechanism was
+     there. So the reach may be a property of the TOOLING, and the unit that answers it is the program a
+     command invoked -- not the command string, which would give one row per invocation and answer nothing. */
+  t('an interpreter is not a tool: the script it runs is',
+    T.commandTool('node tools/ci.js log r-8814') === 'node tools/ci.js'
+    && T.commandTool('FOO=1 node scripts/x.mjs --v') === 'node scripts/x.mjs');
+  t('the same tool making different demands groups as one tool',
+    T.commandTool("cd /w && node tools/ci.js summary r-1") === T.commandTool('node tools/ci.js log r-2'));
+  t('a pipeline is credited to the stage that produced the bytes',
+    T.commandTool('cat big.txt | head -50') === 'cat');
+  t('a bare program is itself', T.commandTool('npm test') === 'npm' && T.commandTool('git log --stat -40') === 'git');
+
+  const mkRes = (name, what, chars, carried, extra) => ({ name, what, chars, tokens: Math.round(chars / 4),
+    carried, isError: false, marker: false, ...(extra || {}) });
+  const sess = {
+    parsed: { cwd: '/w', sessionId: 'rs', requests: [{}], compactions: [], results: [
+      mkRes('Bash', 'node tools/dump.js', 20000, 40000),        // in the window
+      mkRes('Bash', 'node tools/dump.js', 9000, 18000),         // in the window
+      mkRes('Bash', 'node tools/ci.js summary r-1', 800, 1600), // under the threshold
+      mkRes('Read', '/w/a.js', 5000, 10000),                    // not shell
+    ] },
+    trimmed: [],
+  };
+  const rp = T.reachPooled([sess]);
+  t('the window is shell, over the threshold and under the host ceiling',
+    rp.window.n === 2 && rp.under.n === 1 && rp.nonShell.n === 1, JSON.stringify({ w: rp.window.n, u: rp.under.n, ns: rp.nonShell.n }));
+  /* The share is of CARRIED tokens and not of results, because a result costs its size times the later
+     requests that re-read it -- counting results answers a different question from the one about the bill. */
+  t('the share reported is of carried tokens, not of results',
+    Math.abs(rp.windowShareOfCarried - 58000 / 69600) < 1e-6, String(rp.windowShareOfCarried));
+  t('the tools that reached the trim are named, heaviest first',
+    rp.tools[0].tool === 'node tools/dump.js' && rp.tools[0].n === 2, JSON.stringify(rp.tools));
+  t('a tool whose output never reached the trim is not in the list',
+    !rp.tools.some(x => /ci\.js/.test(x.tool)));
+  /* A trimmed result now measures under the threshold, so classifying by size alone would put every success
+     in the wrong bucket and leave the window empty. It is in the window by proof. */
+  const trimmedRes = mkRes('Bash', 'node tools/dump.js', 900, 1800, { marker: true, id: 'tu1' });
+  const sess2 = { parsed: { cwd: '/w', sessionId: 'rs2', requests: [{}], compactions: [], results: [trimmedRes] },
+    trimmed: [trimmedRes] };
+  t('a result the guard rewrote counts as in-window by proof, not by its post-trim size',
+    T.reachPooled([sess2]).window.n === 1 && T.reachPooled([sess2]).acted.n === 1);
+  t('trimmedResults credits only a rewrite the model actually saw',
+    (() => {
+      const p2 = { sessionId: 'x', results: [
+        { id: 'a', name: 'Bash', what: 'npm test', marker: true },
+        { id: 'b', name: 'Bash', what: 'npm run lint', marker: false }] };
+      const led = [{ ev: 'post', session: 'x', id: 'a', kept: 10, chars: 9000, tool: 'Bash', what: 'npm test' },
+        { ev: 'post', session: 'x', id: 'b', kept: 10, chars: 9000, tool: 'Bash', what: 'npm run lint' }];
+      const out = T.trimmedResults(p2, led);
+      return out.length === 1 && out[0].id === 'a';
+    })());
 
   console.log('\n-- what you read whole, and how deep the targets sit');
   /* The guard now records a whole-file read it did NOT cap. Until it did, the trigger's own evidence was all

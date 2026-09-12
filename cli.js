@@ -379,6 +379,86 @@ function capsReport() {
    with a task that said "read in full", which forbids the saving by construction. Half of that question is
    arithmetic over a person's own reads -- how many a lower trigger catches and how much of each it cuts --
    and this mode does that half for free. The half it cannot do is whether the model comes back. */
+/* `--reach`: of everything that entered context, how much sits where the trim can act at ALL -- shell, exit 0,
+   over maxChars, under Claude Code's inline ceiling -- and which tools put it there.
+
+   The question comes from a benchmark round that abandoned its own schedule: handed a CLI that could slice a
+   log, the agent sliced, and the guard rewrote nothing the model saw. The round before it, on a workspace
+   whose tools only dump, the mechanism was there. So the trim's reach may be a property of the TOOLING rather
+   than of the work -- and a person's own sessions are a better sample of "an agent with decent tools" than
+   any fixture can stage. AB-TASK.md, "Does the trim's mechanism appear when the agent has decent tools?",
+   carries the rule and the thresholds, fixed before this was ever run.
+
+   The share reported is of CARRIED tokens, not of results: a result costs its size times the later requests
+   that re-read it, so counting results answers a different question from the one about the bill. */
+function reachReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const only = opt('--cwd');
+  const top = Number(opt('--top') || 12) || 12;
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+  if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+  const pooled = [], skipped = [], sessions = [];
+  for (const f of found) {
+    const id = String(f.session).slice(0, 8);
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    const cwd = p.cwd || '';
+    if (only) {
+      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
+    } else if (/tokenbrake-bench/i.test(cwd)) {
+      skipped.push([id, 'benchmark session -- a staged workload, which is the thing this view exists to check against']);
+      continue;
+    }
+    transcript.carry(p);
+    const trimmed = transcript.trimmedResults(p, ledger);
+    if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
+    sessions.push({ parsed: p, trimmed });
+    pooled.push([id, p.results.length, cwd]);
+  }
+  const r = transcript.reachPooled(sessions);
+  const shellN = r.window.n + r.under.n + r.failed.n + r.persisted.n;
+  console.log('Where the trim can reach -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
+    + (only ? '  (--cwd=' + only + ')' : ''));
+  console.log('\n  ' + fmt(r.total.n) + ' tool results, ~ ' + fmt(r.total.carried) + ' carried tokens in total'
+    + '  (' + fmt(shellN) + ' of them shell)');
+  const row = (label, b) => console.log('    ' + label.padEnd(34) + String(b.n).padStart(6)
+    + fmt(b.carried).padStart(12) + (r.carriedTotal ? (Math.round(1000 * b.carried / r.carriedTotal) / 10 + '%').padStart(8) : ''));
+  console.log('\n    bucket                            results     carried   share');
+  row('within the trim\'s reach', r.window);
+  row('  of those, it acted on', r.acted);
+  row('  of those, it did not', r.untouched);
+  row('under the threshold (too small)', r.under);
+  row('past the host ceiling (persisted)', r.persisted);
+  row('failed (host ignores a rewrite)', r.failed);
+  row('not shell at all', r.nonShell);
+
+  const W = r.windowShareOfCarried;
+  console.log('\n  W = ' + (Math.round(1000 * W) / 10) + '% of carried tokens sit where the trim can act.');
+  const THIN = pooled.length < 10 || shellN < 200;
+  console.log('  ' + (THIN
+    ? 'Under 10 sessions or 200 shell results: NO VERDICT, and the number above is not one.'
+    : W < 0.05 ? 'Under 5%: the mechanism is essentially absent on this work. No quality of trimming can'
+        + '\n  matter at that share -- the guard is not the useful part of this product on your sessions.'
+      : W >= 0.20 ? 'At or above 20%: the mechanism is present and worth having on your work.'
+        : 'Between 5% and 20%: present but marginal. That is the number; there is no claim to make from it.'));
+
+  if (r.tools.length) {
+    console.log('\n  What put results in the trim\'s reach -- the tooling question, not the workload one:');
+    console.log('    results      carried  tool');
+    for (const t of r.tools.slice(0, top)) {
+      console.log('    ' + String(t.n).padStart(7) + fmt(t.carried).padStart(13) + '  ' + t.tool);
+    }
+    if (r.tools.length > top) console.log('    (+ ' + (r.tools.length - top) + ' more; --top=N)');
+    console.log('    A tool that only dumps makes trimmable output; one that can slice does not, and a model');
+    console.log('    that can slice will. If this list is short and every entry is a dump with no ranged mode,');
+    console.log('    the reach is a property of the tools and the honest fix is to give them a ranged mode.');
+  } else {
+    console.log('\n  Nothing reached the trim at all, so there is no tool list to show.');
+  }
+  printPool(pooled, skipped);
+}
+
 function readsReport() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
@@ -604,6 +684,7 @@ function report() {
   if (flag('--where')) return whereReport();
   if (flag('--caps')) return capsReport();
   if (flag('--reads')) return readsReport();
+  if (flag('--reach')) return reachReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -738,6 +819,9 @@ function help() {
       --caps                          every file the Read cap has fired on, pooled across sessions, with the
                                       two knobs counted apart and the share of each file delivered;
                                       --session=<prefix> narrows, --top=N widens
+      --reach                         of everything that entered context, the share of CARRIED tokens sitting
+                                      where the trim can act at all, and which tools put it there. The
+                                      question of whether the guard needs poor tooling to have anything to do
       --reads                         every file you read WHOLE, at its own size with Claude Code's line
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets
