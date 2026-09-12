@@ -629,23 +629,42 @@ function readCapFiles(ledgerRecs, sessionId) {
   const idx = readCapIndex(ledgerRecs, sessionId);
   const files = new Map();
   const sessions = new Set();
-  for (const r of idx.rows) {
+  /* The third half, which is not a third knob. A `cat` of a large file is capped by the POST path against
+     the SAME readMaxBytes and readLimitLines (guard.js:283-296), but it logs `ev: 'post', excerpt: true`
+     rather than `ev: 'read-cap'` -- so a counter that reads only read-cap rows sees one of the two paths
+     those knobs govern and reports the other as never having fired. `chars` on that row is the size BEFORE
+     the cap, which for a cat is the file itself: no line numbering to subtract. */
+  const rows = [...idx.rows];
+  let excerpt = 0;
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'post' || !r.excerpt || r.kept == null) continue;
+    if (sessionId && r.session && r.session !== sessionId) continue;
+    const fp = readFileOf('Bash', { command: String(r.what || '') });
+    if (!fp) continue;
+    excerpt++;
+    rows.push({ t: Number(r.t) || null, what: fp, key: normReadPath(fp), bytes: Number(r.chars) || 0,
+      lines: null, limit: null, persisted: false, session: r.session || null, viaExcerpt: true });
+  }
+  for (const r of rows) {
     if (r.session) sessions.add(r.session);
     const e = files.get(r.key);
-    if (!e) files.set(r.key, { what: r.what, n: 1, persisted: r.persisted, limit: r.limit, bytes: r.bytes, lines: r.lines });
+    if (!e) files.set(r.key, { what: r.what, n: 1, persisted: r.persisted, limit: r.limit, bytes: r.bytes,
+      lines: r.lines, viaExcerpt: !!r.viaExcerpt });
     else { e.n++; if (r.bytes > e.bytes) { e.bytes = r.bytes; e.lines = r.lines; } }
   }
-  const rows = [...files.values()].map((e) => ({ ...e,
+  const listed = [...files.values()].map((e) => ({ ...e,
     delivered: (e.lines && e.limit) ? e.limit / e.lines : null }))
     .sort((a, b) => b.n - a.n || b.bytes - a.bytes);
-  const half = (want) => {
-    const rs = rows.filter((r) => r.persisted === want);
-    return { n: idx.rows.filter((r) => r.persisted === want).length, files: rs.length,
-      bytes: idx.rows.filter((r) => r.persisted === want).reduce((t, r) => t + r.bytes, 0) };
+  const half = (pick) => {
+    const rs = out.filter(pick);
+    return { n: rows.filter(pick).length, files: rs.length, bytes: rows.filter(pick).reduce((t, r) => t + r.bytes, 0) };
   };
-  return { source: half(false), persisted: half(true), n: idx.n, bytes: idx.bytes,
+  const out = [...files.values()];
+  return { source: half((r) => !r.persisted && !r.viaExcerpt), persisted: half((r) => r.persisted),
+    excerpt: half((r) => r.viaExcerpt), viaExcerpt: excerpt,
+    n: rows.length, bytes: rows.reduce((t, r) => t + r.bytes, 0),
     sessions: sessions.size, deduped: idx.deduped, limits: idx.limits,
-    unknownLines: rows.filter((r) => r.lines == null).length, files: rows };
+    unknownLines: listed.filter((r) => r.lines == null).length, files: listed };
 }
 
 /* The reads the Read cap's TRIGGER would act on, and how big they actually were. `readMaxBytes` decides
@@ -668,6 +687,12 @@ function unboundedReads(parsed, ledgerRecs, opts) {
   const o = opts || {};
   const idx = readCapIndex(ledgerRecs, o.sessionId || parsed.sessionId || null);
   const reads = [];
+  const postByIdChars = new Map();
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'post' || !r.excerpt || r.kept == null || !r.id) continue;
+    if ((o.sessionId || parsed.sessionId) && r.session && r.session !== (o.sessionId || parsed.sessionId)) continue;
+    postByIdChars.set(r.id, Number(r.chars) || 0);
+  }
   let recordedOriginal = 0, nearCeiling = 0, hostLines = 0, persistedSkipped = 0;
   const capSeen = new Set();
   for (const r of parsed.results) {
@@ -687,7 +712,17 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       reads.push({ file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null });
       continue;
     }
-    const sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
+    let sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
+    let source = sh.numbered ? 'numbering' : 'text';
+    /* The same correction the Read cap needs, for the other path. A `cat` the guard capped as an excerpt
+       delivered only readLimitLines lines and says so in its marker; its ledger `post` row carries `chars`,
+       the size BEFORE the cap, which for a cat is the file itself. Without this a capped cat is sized at its
+       cap and argues for a lower trigger with the guard's own output -- the mistake this file already
+       corrects for Read, arriving by a different door. */
+    if (r.marker && r.id && postByIdChars.has(r.id)) {
+      sh = { bytes: postByIdChars.get(r.id), lines: null, numbered: false, from: null, to: null };
+      source = 'ledger-post';
+    }
     let ceiling = null;
     /* An errored read is not a large file. Claude Code's own refusal above roughly 25k tokens IS evidence a
        large file exists, with no evidence of its size; "file not found" is evidence of nothing. Classifying
@@ -697,8 +732,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     if (r.isError) ceiling = TOO_LARGE.test(r.text || '') ? 'refused' : 'errored';
     else if (sh.numbered && sh.from === 1 && sh.lines === HOST_READ_LINES) { ceiling = 'host-lines'; hostLines++; }
     else if (r.chars >= 0.9 * HOST_READ_CEILING) { ceiling = 'near'; nearCeiling++; }
-    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: false, ceiling,
-      source: sh.numbered ? 'numbering' : 'text' });
+    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source });
   }
   /* A cap row whose file never appears as an unbounded read means the transcript recorded the guard's
      rewritten input instead -- the read is in there carrying a `limit`, which is not a whole-file read.
@@ -717,6 +751,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     refused: reads.filter((r) => r.ceiling === 'refused').length,
     errored: reads.filter((r) => r.ceiling === 'errored').length,
     sources: { ledger: reads.filter((r) => r.source === 'ledger').length,
+      ledgerPost: reads.filter((r) => r.source === 'ledger-post').length,
       numbering: reads.filter((r) => r.source === 'numbering').length,
       text: reads.filter((r) => r.source === 'text').length },
     noLines: reads.filter((x) => !x.lines).length,

@@ -345,8 +345,13 @@ function capsReport() {
     return;
   }
   console.log('Read caps fired -- ' + c.n + ' across ' + (sessionId ? '1 session' : c.sessions + ' session(s)') + ' in the ledger\n');
-  console.log('  Source files (readLimitLines):           ' + String(c.source.n).padStart(3) + ' caps, '
+  console.log('  Source files, Read cap (readLimitLines):  ' + String(c.source.n).padStart(3) + ' caps, '
     + c.source.files + ' file(s), ~ ' + fmt(tok(c.source.bytes)) + ' tokens of file');
+  /* The same two knobs, the other path. A `cat` of a large file is capped after the fact by the POST hook
+     against the same readMaxBytes and readLimitLines, but it logs as a trimmed post, not as a read-cap row.
+     Counting only read-cap rows reports one of the two paths those knobs govern and calls the other zero. */
+  console.log('  Same knobs via a shell cat:              ' + String(c.excerpt.n).padStart(3) + ' caps, '
+    + c.excerpt.files + ' file(s), ~ ' + fmt(tok(c.excerpt.bytes)) + ' tokens of file');
   console.log('  Persisted outputs (persistedLimitLines): ' + String(c.persisted.n).padStart(3) + ' caps, '
     + c.persisted.files + ' file(s), ~ ' + fmt(tok(c.persisted.bytes)) + ' tokens of file');
   console.log('\n  caps  bytes        lines  limit  delivered  file');
@@ -362,7 +367,8 @@ function capsReport() {
     + '\n   each cap twice. `tokenbrake status` says so too.)');
   console.log('\n  delivered is limit/lines -- the share of the file the model received. The rest is not lost; it is');
   console.log('  one offset read away, and that read is another request that re-reads the whole context. How often');
-  console.log('  the source-file half fires on real work is the question readMaxBytes turns on: here, ' + c.source.n + ' time(s).');
+  console.log('  the source-file half fires on real work is the question readMaxBytes turns on: here, '
+    + (c.source.n + c.excerpt.n) + ' time(s) across both paths (' + c.source.n + ' Read, ' + c.excerpt.n + ' shell cat).');
 }
 
 /* `--reads`: the other half of the Read cap's evidence. `--where` says where the model looks; this says how
@@ -396,7 +402,7 @@ function readsReport() {
   let reads = [], depths = [];
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
   let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
-  const sources = { ledger: 0, numbering: 0, text: 0 };
+  const sources = { ledger: 0, ledgerPost: 0, numbering: 0, text: 0 };
   const bySource = { session: 0, ledger: 0, disk: 0 };
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
@@ -440,8 +446,9 @@ function readsReport() {
      numbering is its own, not the file's -- 5-6% of the delivered text on a 350-line file, and growing with
      the line count. readMaxBytes is compared against statSync().size, so leaving the numbering in overstates
      every file and overstates long ones most, right at the boundary this grid is about. */
-  console.log('    Sized from: ' + sources.ledger + ' a ledger cap row (statSync, exact), ' + sources.numbering
-    + ' the Read\'s own line numbering (subtracted), ' + sources.text + ' the delivered text as-is (a shell cat).');
+  console.log('    Sized from: ' + sources.ledger + ' a ledger cap row (statSync, exact), ' + sources.ledgerPost
+    + ' a ledger post row (a cat the guard capped -- its size before the cap), ' + sources.numbering
+    + '\n      the Read\'s own line numbering (subtracted), ' + sources.text + ' the delivered text as-is (an uncapped cat).');
   if (capped) console.log('    ' + capped + ' read(s) the guard had already capped: the delivered text was the cap\'s first N lines,'
     + '\n    so the ledger\'s true size is used. Believing the transcript there would count a capped read as a'
     + '\n    small file and argue for a lower trigger using the cap\'s own output as the evidence.');
@@ -597,6 +604,7 @@ function ledgerReport() {
   console.log(`Trimmed by tokenbrake: ${trimmed} shell outputs, ${fmt(saved)} chars ~ ${fmt(tok(saved))} tokens kept out of context`);
   console.log(caps.n
     ? `Read caps fired: ${caps.n} -- ${caps.source.n} on a large source file (readLimitLines), `
+      + `${caps.excerpt.n} on a shell cat of one (same knobs, capped after the fact), `
       + `${caps.persisted.n} on a persisted output (persistedLimitLines)   (report --caps lists the files)\n`
     : 'Read caps fired: none\n');
 

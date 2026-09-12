@@ -355,7 +355,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      of the file the model received shown per file. */
   r = run(['--caps']);
   t('cli: --caps lists the files the Read cap fired on, with the delivered share',
-    /Read caps fired -- 1 across 1 session/.test(r.stdout) && /Source files \(readLimitLines\):\s+1 caps/.test(r.stdout)
+    /Read caps fired -- 1 across 1 session/.test(r.stdout) && /Source files, Read cap \(readLimitLines\):\s+1 caps/.test(r.stdout)
     && /16%.*\/x\.js/.test(r.stdout), r.stdout.split('\n').filter(l => /x\.js|Source files/.test(l)).join(' | '));
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
@@ -366,7 +366,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     /realsess \(/.test(r.stdout) && /benchses\s+benchmark session/.test(r.stdout) && !/benchses \(/.test(r.stdout),
     r.stdout.split('\n')[0]);
   t('cli: --reads says where each size came from, because they are not equally good',
-    /Sized from: .*line numbering \(subtracted\)/.test(r.stdout),
+    /Sized from: /.test(r.stdout) && /line numbering \(subtracted\)/.test(r.stdout),
     (r.stdout.match(/Sized from:[^\n]*/) || [])[0]);
   t('cli: --reads prints the trigger grid and marks the configured readMaxBytes',
     /<- your readMaxBytes/.test(r.stdout) && /trigger   reads  bytes/.test(r.stdout));
@@ -378,7 +378,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --caps with an unknown session prefix says so', /No session in the ledger starts with "nope"/.test(r.stdout));
   r = run(['--ledger']);
   t('cli: --ledger counts the two Read-cap halves apart',
-    /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a persisted output/.test(r.stdout)
+    /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a shell cat of one/.test(r.stdout)
     && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));
   rmSync(join(cfg, 'projects', '-c-work-realrepo'), { recursive: true, force: true });
   rmSync(join(cfg, 'projects', '-c-desktop-tokenbrake-bench-work-kestrel'), { recursive: true, force: true });
@@ -973,6 +973,28 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     { t: 9000, ev: 'read-cap', session: 'B', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
   ];
   const cf = T.readCapFiles(capLed, null);
+  /* A `cat` of a large file is capped by the POST hook against the SAME readMaxBytes and readLimitLines, but
+     it logs as a trimmed post, not as a read-cap row. A counter reading only read-cap rows therefore sees one
+     of the two paths those knobs govern and reports the other as never having fired -- which is exactly what
+     it did report, on the owner's real sessions, until this. */
+  const exLed = [
+    { t: 1, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: 2, ev: 'post', session: 'A', tool: 'Bash', excerpt: true, kept: 9000, chars: 62476, what: 'cat /w/huge.md' },
+    { t: 3, ev: 'post', session: 'A', tool: 'Bash', excerpt: true, chars: 500, what: 'cat /w/small.md' },
+    { t: 4, ev: 'post', session: 'A', tool: 'Bash', chars: 9000, kept: 1000, what: 'npm test' },
+  ];
+  const exc = T.readCapFiles(exLed, null);
+  t('a shell cat capped by the same two knobs is counted, on its own line',
+    exc.excerpt.n === 1 && exc.excerpt.bytes === 62476 && exc.source.n === 1,
+    JSON.stringify({ excerpt: exc.excerpt, source: exc.source }));
+  t('an excerpt the guard left alone is not a cap, and an ordinary trim is not one either',
+    exc.n === 2, JSON.stringify(exc.files.map(f => f.what)));
+  t('a capped cat is sized at its size BEFORE the cap, not at what the cap delivered',
+    (() => { const p2 = { cwd: '/w', sessionId: 'A', requests: [{}], compactions: [],
+        results: [{ file: '/w/huge.md', whole: true, chars: 9000, lines: 300, shape: T.fileShape('x'),
+          readFrom: null, marker: true, id: 'tu9' }] };
+      const u2 = T.unboundedReads(p2, [{ t: 2, ev: 'post', session: 'A', excerpt: true, kept: 9000, chars: 62476, id: 'tu9', what: 'cat /w/huge.md' }], {});
+      return u2.reads[0].bytes === 62476 && u2.reads[0].source === 'ledger-post'; })());
   t('the cap counter splits the two knobs apart', cf.source.n === 2 && cf.persisted.n === 1, JSON.stringify({ s: cf.source, p: cf.persisted }));
   t('a double install logs each cap twice; the duplicate is dropped once and reported',
     cf.deduped === 1 && cf.n === 3, JSON.stringify({ deduped: cf.deduped, n: cf.n }));

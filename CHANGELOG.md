@@ -73,6 +73,17 @@
   The miss rate is printed beside the grid and never inside it, because it is measured over ranged reads —
   a different population from the whole-file reads a trigger catches — and adding the two would be wrong.
 
+- **Both paths `readMaxBytes` governs are counted now, and one of them never was.** The same two knobs cap an
+  unbounded `Read` through the PreToolUse hook *and* a `cat` of a large file through the POST hook
+  (`guard.js:283-296`) -- but the second logs `ev: 'post', excerpt: true`, not `ev: 'read-cap'`. So
+  `--caps`, `--ledger` and the "Read caps fired" line were all reading one of the two paths and reporting the
+  other as zero. **That is how this changelog's own claim, that the source-file cap has never fired on real
+  work, came to be stated about half a feature.** All three count both now and print them apart.
+  `--reads` needed the matching correction: a `cat` the guard capped delivers only `readLimitLines` lines, so
+  sizing it from its delivered text counts a capped read as a small file and argues for a lower trigger using
+  the guard's own output. Its ledger `post` row carries the size *before* the cap, and that is used instead --
+  the same defect this release already fixed for `Read`, arriving through a different door.
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a
