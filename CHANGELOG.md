@@ -10,8 +10,39 @@
   On the session that prompted it: ~100 targeted reads, median start line in the 50s, 90th percentile 464,
   deepest 820 — and the default 300-line cap would have hidden the target in **about a quarter of them**,
   against 9% at 500 and 1% at 800. That is a per-person number, and nobody else's default can supply it.
-  Labelled as the inference it is: these reads were already bounded, so the guard never capped them. What
-  they establish is where the model expects to find things, not what the cap did.
+  Labelled as the inference it is: the guard never capped these reads themselves, they arrived already
+  bounded. The claim that therefore they say nothing about what the cap did is **withdrawn in the next
+  entry** -- it was wrong, and in the guard's favour.
+
+- **That number was confounded, and `report --where` now takes the confound apart.** A capped Read hands the
+  model lines 1..N and its `additionalContext` tells it, in words, to come back with an offset. It does — and
+  that follow-up is a ranged read starting just past the cap, counted in the distribution meant to decide
+  what the cap should be. Pooled over seventeen real sessions the figure read **57% of targets past line
+  300, median start line 351** — against the 300 the guard had been applying all along. The report now joins
+  the ledger's own record of which files the cap fired on against the reads, and prints two columns: every
+  ranged read, and the subset the guard did not provoke. **Only the second may set a default**, and the
+  report says so where the old closing line used to claim the opposite.
+  A read with no timestamp to order against the cap goes in **neither** column and is counted; a cap in
+  another session never excludes this session's reads; and a ledger with no cap rows at all reports *"not
+  attempted"* rather than *"0 induced"*, because a machine whose ledger predates the Read cap should not get
+  a clean bill of health for a confound nobody looked for.
+  Two things the report states about itself: attribution is by file identity, so one cap marks every later
+  ranged read of that file — which inflates the excluded count, not the clean one. And a cap on one file that
+  teaches the model to read *another* with an offset is invisible here, so the spontaneous column is a
+  **lower bound** on the guard's influence. Only a hooks-off session settles that.
+  Also a diagnostic that needs no ledger, for machines whose ledger predates the cap: whether the start-line
+  density **steps** at the cap. Two equal-width bands either side, an exact binomial tail, nothing tuned to
+  the data — and a thin sample reports itself as thin rather than as no spike.
+
+- **`report --caps`, and `--ledger` stops lumping the two Read caps together.** `Large reads capped: N`
+  counted source-file caps (`readMaxBytes` / `readLimitLines`) together with caps on outputs Claude Code had
+  already spilled to disk (`persistedLimitLines`). They are different features on one hook, governed by
+  different config, and a single number was evidence for neither. `--caps` lists every file the cap has fired
+  on, pooled across sessions, with the two halves counted apart and `delivered` — the share of the file the
+  model received, `null` rather than a guess when the guard skipped the line count. Rows a double install
+  logged twice are dropped once and the drop is reported. This is the view that answers how often the Read
+  cap fires on ordinary work, which is the question `readMaxBytes` turns on: one real 40-request audit
+  session read six files at 1, 8, 15, 16, 31 and 34 KB and **never tripped the 60,000-byte trigger once.**
 
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the

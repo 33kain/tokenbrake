@@ -106,6 +106,151 @@ function readTargets(parsed, caps) {
   return { n: starts.length, starts, median: q(0.5), p90: q(0.9), max: starts.length ? starts[starts.length - 1] : null, past };
 }
 
+/* One spelling for a path, so a ledger row and a transcript read can be recognised as the same file.
+   A shell excerpt names a relative path (`sed -n '320,345p' transcript.js`) while the ledger records what
+   the guard stat'd, which is absolute -- so a relative path is resolved against the session's cwd. Case is
+   folded only behind a Windows drive letter: on POSIX, Guard.js and guard.js are two files and merging them
+   would invent a match. */
+function normReadPath(p, cwd) {
+  if (!p) return null;
+  let out = String(p).replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  if (!/^([a-zA-Z]:\/|\/)/.test(out) && cwd) out = String(cwd).replace(/\\/g, '/').replace(/\/+$/, '') + '/' + out;
+  out = out.replace(/\/+$/, '');
+  if (/^[a-zA-Z]:\//.test(out)) out = out.toLowerCase();
+  return out || null;
+}
+
+/* The Read cap's firings as an index the join can use: which files were capped, and when each was FIRST
+   capped. The ledger row (ev: 'read-cap') carries session, path, full size, line count and the limit applied,
+   but no tool_use_id -- PreToolUse does not carry one -- so (session, path, time) is the only key there is.
+   Two guard installs, user scope and project scope, log the same cap twice milliseconds apart; those rows are
+   deduped on session|path|limit inside a second and counted, because for the per-file listing they would be a
+   real double-count. */
+function readCapIndex(ledgerRecs, sessionId) {
+  const rows = [];
+  let deduped = 0, noTime = 0;
+  const seen = new Map();
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'read-cap') continue;
+    if (sessionId && r.session && r.session !== sessionId) continue;
+    const key = normReadPath(r.what);
+    const t = Number(r.t) || null;
+    if (t == null) noTime++;
+    const dk = String(r.session || '') + '|' + key + '|' + r.limit;
+    const prev = seen.get(dk);
+    if (prev != null && t != null && Math.abs(t - prev) <= 1000) { deduped++; continue; }
+    if (t != null) seen.set(dk, t);
+    rows.push({ t, what: r.what, key, bytes: Number(r.bytes) || 0, lines: r.lines == null ? null : Number(r.lines),
+      limit: Number(r.limit) || null, persisted: !!r.persisted, session: r.session || null });
+  }
+  rows.sort((a, b) => (a.t || 0) - (b.t || 0));
+  const byFile = new Map();
+  let source = 0, persisted = 0, bytes = 0;
+  for (const r of rows) {
+    bytes += r.bytes;
+    if (r.persisted) persisted++; else source++;
+    const e = byFile.get(r.key);
+    if (!e) byFile.set(r.key, { first: r.t, last: r.t, n: 1, limit: r.limit, persisted: r.persisted, bytes: r.bytes, lines: r.lines, what: r.what });
+    else {
+      e.n++;
+      if (r.t != null && (e.first == null || r.t < e.first)) e.first = r.t;
+      if (r.t != null && (e.last == null || r.t > e.last)) e.last = r.t;
+    }
+  }
+  const limits = [...new Set(rows.map((r) => r.limit).filter((n) => n != null))].sort((a, b) => a - b);
+  return { rows, byFile, source, persisted, n: rows.length, bytes, limits, deduped, noTime };
+}
+
+/* Split this session's ranged reads into the ones the cap provoked and the ones it did not.
+
+   Why this exists. A capped Read delivers lines 1..limit and its additionalContext tells the model, in
+   words, to come back with an offset. The model does, and that follow-up is a ranged read starting just
+   past the cap -- which then shows up in the distribution meant to decide what the cap should be. The
+   number measures the cap. Pooled over seventeen real sessions it read 57% of targets past line 300, with
+   a median of 351, sitting just past the 300 the guard had been applying all along.
+
+   The rule: a ranged read of a file the cap fired on in this session, emitted after it fired, is induced.
+   A ranged read of that file from BEFORE the cap is kept -- it is real evidence. A read with no timestamp
+   to order is put in neither bucket and counted, because guessing which came first is the thing to avoid.
+   The capped read itself can never land here: handleReadPre returns on any offset, so a read that got
+   capped had none, and readStartLine needs one.
+
+   Two limits, both reported by the caller. Attribution is by file identity, so one cap on a file marks
+   every later ranged read of it -- conservative, and it inflates `induced` rather than the clean subset.
+   And a cap on one file that teaches the model to read a different file with an offset is invisible here,
+   so `spontaneous` is a LOWER bound on the guard's influence. Only a hooks-off arm settles that. */
+function classifyRangedReads(parsed, ledgerRecs, opts) {
+  const o = opts || {};
+  const idx = readCapIndex(ledgerRecs, o.sessionId || parsed.sessionId || null);
+  const all = parsed.results.filter((r) => r.readFrom != null);
+  const spontaneous = [], induced = [], unordered = [];
+  const byFile = new Map();
+  let basename = 0;
+  const base = (k) => String(k || '').split('/').pop();
+  const byBase = new Map();
+  for (const [k, e] of idx.byFile) { const b = base(k); if (!byBase.has(b)) byBase.set(b, e); }
+  for (const r of all) {
+    const key = normReadPath(r.file, parsed.cwd);
+    let cap = key ? idx.byFile.get(key) : null;
+    let why = 'after-cap';
+    if (!cap && key) { const b = byBase.get(base(key)); if (b) { cap = b; why = 'after-cap-basename'; } }
+    if (!cap) { spontaneous.push(r); continue; }
+    const askedAt = r.askedAt != null ? r.askedAt : r.at;
+    if (askedAt == null || cap.first == null) { unordered.push({ read: r, cap, why: 'no-time' }); continue; }
+    if (askedAt < cap.first) { spontaneous.push(r); continue; }
+    induced.push({ read: r, cap, why });
+    if (why === 'after-cap-basename') basename++;
+    byFile.set(cap.what, (byFile.get(cap.what) || 0) + 1);
+  }
+  return { all, spontaneous, induced, unordered, capped: idx.n, attempted: idx.n > 0, basename,
+    byFile: [...byFile.entries()].sort((a, b) => b[1] - a[1]) };
+}
+
+/* Does the start-line distribution step at the cap? The ledger-free half of the same question, and the
+   one that still works on a machine whose ledger predates the Read cap. Any smooth density of start lines
+   is non-increasing across an arbitrary line number, so `below >= at` is the null and a band just past the
+   cap holding several times what the band just below it holds can only come from a step. `exact` -- starts
+   at the cap itself or one past it -- is the sharpest fingerprint: a model told it received the first 300
+   lines comes back at literally 300 or 301. A thin sample reports itself as thin rather than as no spike. */
+function capBandSpike(starts, cap, opts) {
+  const width = (opts && opts.width) || Math.max(5, Math.round(cap * 0.1));
+  const at = starts.filter((x) => x >= cap && x <= cap + width).length;
+  const below = starts.filter((x) => x >= cap - width && x < cap).length;
+  const exact = starts.filter((x) => x === cap || x === cap + 1).length;
+  const ratio = at / Math.max(1, below);
+  /* The two bands are the same width, so under the null they split the reads that fall in either of them
+     evenly and `at` is Binomial(n, 0.5). One-sided exact tail, no distribution assumed and no threshold
+     tuned to this data -- the same family as the sign test the benchmark's round 2 is pre-registered on.
+     Conservative on purpose: a smooth density is non-increasing across the cap, so an even split OVERstates
+     how much of `at` is ordinary, which makes a significant result harder to get rather than easier. */
+  const n = at + below;
+  let p = null;
+  if (n) {
+    let c = 1, sum = 0;                       // C(n,n) = 1, walking down from k = n
+    for (let k = n; k >= at; k--) { sum += c; c = c * k / (n - k + 1); }
+    p = sum / Math.pow(2, n);
+  }
+  const verdict = n < 8 ? 'too few' : (p <= 0.05 ? 'spike' : 'none');
+  return { cap, width, at, below, exact, ratio, p, verdict };
+}
+
+/* The shape of the whole distribution, so the reader can see what the percentages summarise. Edges reach
+   1200 because the cap's trigger is 60,000 bytes: every file it touches runs roughly 1,500 lines or more,
+   so a scale stopping at 800 stops before the point where a cap keeps everything. */
+function startHistogram(starts, edges) {
+  const e = edges || [1, 50, 100, 200, 300, 500, 800, 1200, Infinity];
+  const bins = [];
+  for (let i = 0; i < e.length - 1; i++) {
+    const from = e[i], to = e[i + 1];
+    bins.push({ from, to, n: starts.filter((x) => x >= from && x < to).length, bar: '' });
+  }
+  const first = bins[0];
+  if (first) first.n += starts.filter((x) => x < e[0]).length;   // offset below the first edge still belongs somewhere
+  const top = bins.reduce((m, b) => Math.max(m, b.n), 0);
+  for (const b of bins) b.bar = '#'.repeat(top ? Math.max(b.n ? 1 : 0, Math.round(30 * b.n / top)) : 0);
+  return bins;
+}
+
 function readKey(name, input) {
   const i = input || {};
   if (name === 'Read' && i.file_path) return `Read ${i.file_path} ${i.offset || 0} ${i.limit || 0}`;
@@ -123,8 +268,8 @@ function parseTranscript(file) {
   const entries = readJsonl(file);
   const requests = [];               // { id, usage, at }  in order of first appearance
   const reqIndex = new Map();        // requestId -> index in requests
-  const toolUses = new Map();        // tool_use_id -> { name, input, req }
-  const results = [];                // { id, name, what, chars, tokens, afterReq, isError }
+  const toolUses = new Map();        // tool_use_id -> { name, input, req, at }
+  const results = [];                // { id, name, what, chars, tokens, afterReq, askedAt, at, isError }
   const compactions = [];            // request indices at which context was reset
   let cwd = null, sessionId = null, version = null;
 
@@ -144,7 +289,7 @@ function parseTranscript(file) {
       }
       const req = reqIndex.get(rid);
       for (const b of (Array.isArray(e.message.content) ? e.message.content : [])) {
-        if (b && b.type === 'tool_use' && b.id) toolUses.set(b.id, { name: b.name || '?', input: b.input, req });
+        if (b && b.type === 'tool_use' && b.id) toolUses.set(b.id, { name: b.name || '?', input: b.input, req, at: Date.parse(e.timestamp) || null });
       }
       continue;
     }
@@ -159,7 +304,7 @@ function parseTranscript(file) {
       for (const b of content) {
         if (!b || b.type !== 'tool_result') continue;
         const text = resultText(b);
-        const use = toolUses.get(b.tool_use_id) || { name: '?', input: null, req: requests.length - 1 };
+        const use = toolUses.get(b.tool_use_id) || { name: '?', input: null, req: requests.length - 1, at: null };
         results.push({
           id: b.tool_use_id || null,
           name: use.name,
@@ -171,6 +316,12 @@ function parseTranscript(file) {
           chars: text.length,
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
+          /* Two clocks, both Claude Code's own and both on this host: askedAt is when the model emitted the
+             call -- the moment it chose an offset -- and at is when the result landed. askedAt is the one a
+             cap can be compared against, because a follow-up read the model wrote after reading the cap's
+             advice was necessarily emitted after the cap fired. Null on an older transcript. */
+          askedAt: use.at != null ? use.at : null,
+          at: Date.parse(e.timestamp) || null,
           isError: !!b.is_error
         });
       }
@@ -373,8 +524,10 @@ function ledgerIndex(ledgerRecs, sessionId) {
    The two halves are different features that happen to share a hook and are separable by config --
    `readMaxBytes` caps an unbounded Read of a large source file, `persistedLimitLines` caps a read of an
    output Claude Code had already written to disk -- and the evidence for them is not the same. On one real
-   421-request session, reads of persisted outputs carried 25% of everything carried, while the source-file
-   cap has not been observed to fire at all outside a test. Counting them apart is what lets a week of real
+   421-request session, reads of persisted outputs carried 25% of everything carried; the source-file cap was
+   then unobserved outside a test, and benchmark round 1 (2026-09-11) is where it was first seen firing in
+   anger -- one to four times per ON run, on fixtures built large on purpose. How often it fires on ordinary
+   work is still open, and `report --caps` is what answers it. Counting them apart is what lets a week of real
    sessions decide whether either default is worth keeping. */
 function readCaps(ledgerRecs, sessionId) {
   let source = 0, persisted = 0, bytes = 0;
@@ -385,6 +538,34 @@ function readCaps(ledgerRecs, sessionId) {
     if (r.persisted) persisted++; else source++;
   }
   return { source, persisted, n: source + persisted, bytes };
+}
+
+/* Every file the Read cap has fired on, pooled across sessions unless one is named. This is the view that
+   says whether the cap is a daily event or a rarity on a given person's work -- the question readMaxBytes
+   turns on, and one the per-session report cannot answer because the answer is a handful of firings spread
+   over weeks. `delivered` is limit/lines, the share of the file the model received; it is null rather than a
+   guess when the guard skipped the line count, which it does above 20 MB. */
+function readCapFiles(ledgerRecs, sessionId) {
+  const idx = readCapIndex(ledgerRecs, sessionId);
+  const files = new Map();
+  const sessions = new Set();
+  for (const r of idx.rows) {
+    if (r.session) sessions.add(r.session);
+    const e = files.get(r.key);
+    if (!e) files.set(r.key, { what: r.what, n: 1, persisted: r.persisted, limit: r.limit, bytes: r.bytes, lines: r.lines });
+    else { e.n++; if (r.bytes > e.bytes) { e.bytes = r.bytes; e.lines = r.lines; } }
+  }
+  const rows = [...files.values()].map((e) => ({ ...e,
+    delivered: (e.lines && e.limit) ? e.limit / e.lines : null }))
+    .sort((a, b) => b.n - a.n || b.bytes - a.bytes);
+  const half = (want) => {
+    const rs = rows.filter((r) => r.persisted === want);
+    return { n: idx.rows.filter((r) => r.persisted === want).length, files: rs.length,
+      bytes: idx.rows.filter((r) => r.persisted === want).reduce((t, r) => t + r.bytes, 0) };
+  };
+  return { source: half(false), persisted: half(true), n: idx.n, bytes: idx.bytes,
+    sessions: sessions.size, deduped: idx.deduped, limits: idx.limits,
+    unknownLines: rows.filter((r) => r.lines == null).length, files: rows };
 }
 
 /* Find transcripts. The ledger's `transcript` field (0.1.0) is exact; failing that, every JSONL under
@@ -516,9 +697,13 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
   const tgt = readTargets(parsed, [readLimitLines, 500, 800].filter((v, i, a) => v && a.indexOf(v) === i).sort((a, b) => a - b));
   if (tgt.n >= 5) {
     const pcts = Object.entries(tgt.past).map(([n, k]) => `${n} lines -> ${k} (${Math.round(100 * k / tgt.n)}%)`);
-    lines.push(`  Where you read: ${tgt.n} targeted reads, median start line ${tgt.median}, 90th percentile ${tgt.p90}, deepest ${tgt.max}`);
+    const cls = classifyRangedReads(parsed, ledger || [], { sessionId: parsed.sessionId });
+    lines.push(`  Where you read: ${tgt.n} targeted reads, median start line ${tgt.median}, 90th percentile ${tgt.p90}, deepest ${tgt.max}`
+      + (cls.induced.length ? ` -- ${cls.induced.length} of them followed a cap on the same file; report --where separates them` : ''));
     lines.push(`  A Read cap keeping the first ... would have hidden what the model went for: ${pcts.join('; ')}`);
-    lines.push(`    (inferred: these reads were already bounded, so the guard never capped them -- they say where the model expects to find things)`);
+    lines.push(`    (inferred: the guard never capped these reads themselves -- they arrived already bounded. But a cap on an`);
+    lines.push(`     earlier unbounded read of the same file tells the model to come back with an offset, so some of these`);
+    lines.push(`     start lines are the cap's own, not the model's. report --where pools every session and splits the two.)`);
   }
 
   const rep = repeatReads(parsed);
@@ -624,4 +809,5 @@ function renderSummaryLine(parsed) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
+  normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

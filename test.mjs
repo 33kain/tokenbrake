@@ -294,33 +294,77 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   /* --where pools ranged reads across sessions, and must keep the benchmark's synthetic workload out of
      that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
      real work would set readLimitLines from a fixture design. */
+  const T0 = Date.parse('2026-09-12T10:00:00.000Z');
   const mkSession = (dir, name, offsets, cwd) => {
     mkdirSync(join(cfg, 'projects', dir), { recursive: true });
     const rows = [];
     offsets.forEach((offset, n) => {
-      rows.push(JSON.stringify({ type: 'assistant', uuid: 'x' + n, requestId: 'x' + n, cwd,
+      const at = new Date(T0 + n * 1000).toISOString();
+      rows.push(JSON.stringify({ type: 'assistant', uuid: 'x' + n, requestId: 'x' + n, cwd, timestamp: at,
         message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
           content: [{ type: 'tool_use', id: 't' + n, name: 'Read', input: { file_path: '/x.js', offset, limit: 20 } }] } }));
-      rows.push(JSON.stringify({ type: 'user', cwd,
+      rows.push(JSON.stringify({ type: 'user', cwd, timestamp: at,
         message: { content: [{ type: 'tool_result', tool_use_id: 't' + n, content: 'lines' }] } }));
     });
     writeFileSync(join(cfg, 'projects', dir, name + '.jsonl'), rows.join('\n') + '\n');
   };
   mkSession('-c-work-realrepo', 'realsess', [10, 40, 120, 350, 600], 'C:\\work\\realrepo');
   mkSession('-c-desktop-tokenbrake-bench-work-kestrel', 'benchsess', [900, 910, 920, 930, 940, 950], 'C:\\Desktop\\tokenbrake-bench\\work\\kestrel');
+  mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
+  const capRow = { t: T0 + 2500, ev: 'read-cap', session: 'realsess', tool: 'Read', what: '/x.js', bytes: 80000, lines: 1900, limit: 300, persisted: false };
+  const writeLedger = (extra) => writeFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'),
+    [...ledger, ...extra].map(x => JSON.stringify(x)).join('\n') + '\n');
+  writeLedger([]);
+  r = run(['--where']);
+  /* With no read-cap row anywhere, the split must say it was not attempted rather than report zero induced:
+     a machine whose ledger predates the Read cap would otherwise get a clean bill of health for a confound
+     nobody looked for. */
+  t('cli: --where says the separation was not attempted when no cap ever fired',
+    /Guard-induced: not attempted/.test(r.stdout) && /absence of evidence about the confound/.test(r.stdout));
+  writeLedger([capRow]);
   r = run(['--where']);
   t('cli: --where skips benchmark sessions by default, and says why',
     /benchses\s+benchmark session/.test(r.stdout) && /realsess \(5\)/.test(r.stdout), r.stdout.split('\n')[0]);
-  t('cli: --where pools the real session and not the benchmark', /5 targeted reads/.test(r.stdout) && !/benchses \(/.test(r.stdout),
-    (r.stdout.match(/\d+ targeted reads[^\n]*/) || [])[0]);
+  t('cli: --where pools the real session and not the benchmark', /All ranged reads: 5/.test(r.stdout) && !/benchses \(/.test(r.stdout),
+    (r.stdout.match(/All ranged reads:[^\n]*/) || [])[0]);
   t('cli: --where marks the configured cap', /<- your current readLimitLines/.test(r.stdout));
   t('cli: --where counts a target past each cap, not the same number everywhere',
     /300 lines ->\s+2/.test(r.stdout) && /500 lines ->\s+1/.test(r.stdout) && /800 lines ->\s+0/.test(r.stdout),
     r.stdout.split('\n').filter(l => /lines ->/.test(l)).join(' | '));
+  /* The confound: /x.js was capped at T0+2.5s, so the reads at offset 350 and 600 -- issued after it -- are
+     the cap telling the model to come back with an offset, not the model choosing where to look. The three
+     earlier ones are real evidence and stay. */
+  t('cli: --where excludes the reads a cap on the same file provoked',
+    /Guard-induced and excluded: 2 of 5/.test(r.stdout) && /Spontaneous: 3/.test(r.stdout),
+    r.stdout.split('\n').filter(l => /induced|Spontaneous/.test(l)).join(' | '));
+  t('cli: --where names the files the exclusions came from', /by file: x\.js \(2\)/.test(r.stdout));
+  t('cli: --where no longer claims the cap did not touch what these reads say',
+    /cap on an EARLIER unbounded read of the SAME file/.test(r.stdout)
+    && !/they say where to look, not what the cap did/.test(r.stdout));
+  t('cli: --where prints the histogram and the ledger-free spike line',
+    /Start lines, all ranged reads/.test(r.stdout) && /Bunching at a cap/.test(r.stdout)
+    && /80 \(your persistedLimitLines\)/.test(r.stdout));
+  t('cli: --where says when the clean subset is too thin to decide',
+    /Spontaneous: 3[^\n]*too few to set a default/.test(r.stdout),
+    (r.stdout.match(/Spontaneous:[^\n]*/) || [])[0]);
   r = run(['--where', '--cwd=kestrel']);
   t('cli: --cwd includes the benchmark deliberately and excludes the rest',
-    /benchses \(6\)/.test(r.stdout) && /6 targeted reads/.test(r.stdout) && /realsess\s+cwd does not contain/.test(r.stdout),
+    /benchses \(6\)/.test(r.stdout) && /All ranged reads: 6/.test(r.stdout) && /realsess\s+cwd does not contain/.test(r.stdout),
     r.stdout.split('\n')[0]);
+  /* --caps: the ledger view. Pooled across sessions by default, the two knobs counted apart, and the share
+     of the file the model received shown per file. */
+  r = run(['--caps']);
+  t('cli: --caps lists the files the Read cap fired on, with the delivered share',
+    /Read caps fired -- 1 across 1 session/.test(r.stdout) && /Source files \(readLimitLines\):\s+1 caps/.test(r.stdout)
+    && /16%.*\/x\.js/.test(r.stdout), r.stdout.split('\n').filter(l => /x\.js|Source files/.test(l)).join(' | '));
+  r = run(['--caps', '--cwd=whatever']);
+  t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
+  r = run(['--caps', '--session=nope']);
+  t('cli: --caps with an unknown session prefix says so', /No session in the ledger starts with "nope"/.test(r.stdout));
+  r = run(['--ledger']);
+  t('cli: --ledger counts the two Read-cap halves apart',
+    /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a persisted output/.test(r.stdout)
+    && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));
   rmSync(join(cfg, 'projects', '-c-work-realrepo'), { recursive: true, force: true });
   rmSync(join(cfg, 'projects', '-c-desktop-tokenbrake-bench-work-kestrel'), { recursive: true, force: true });
 
@@ -328,12 +372,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: an unknown session says so', /No transcript whose session id starts with nope/.test(r.stdout));
   r = run(['--transcript=' + file, '--top=2']);
   t('cli: --transcript and --top', /top 2:/.test(r.stdout) && !/Grep/.test(r.stdout.split('What ate it')[1].split('By tool')[0]));
-  mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
-  writeFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), ledger.map(x => JSON.stringify(x)).join('\n') + '\n');
+  writeLedger([]);
   r = run([]);
   t('cli: with a ledger, the last row\'s transcript path wins', /Session sess-abc/.test(r.stdout) && /\[trimmed from 1k\]/.test(r.stdout));
   r = run(['--ledger']);
   t('cli: --ledger is the guard\'s own record alone', /Trimmed by tokenbrake/.test(r.stdout) && !/carried/.test(r.stdout));
+  /* The report is a console surface, and a Windows console renders the typographic characters it used to
+     print as mojibake -- an ellipsis and an arrow arrived as two garbage characters each, on the owner's
+     daily output, for as long as the report existed.
+     Nothing pinned the conversion, so this does. The guard's own ellipsis inside a trimmed result is exempt:
+     that text goes to the model as JSON, not to a terminal. */
+  const nonAscii = (out) => out.split('\n').filter(l => !/^[\x20-\x7e]*$/.test(l));
+  for (const argv of [[], ['--where'], ['--caps'], ['--ledger'], ['--all']]) {
+    const o = run(argv);
+    t('cli: report ' + (argv.join(' ') || '(default)') + ' prints ASCII only', nonAscii(o.stdout).length === 0,
+      nonAscii(o.stdout).slice(0, 2).join(' | '));
+  }
   rmSync(join(cfg, 'projects'), { recursive: true, force: true });
   r = run([]);
   t('cli: no transcript falls back to the ledger with a note', /showing the ledger alone/.test(r.stdout) && /Trimmed by tokenbrake/.test(r.stdout));
@@ -711,6 +765,93 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const startOf = (cmd) => { const m = /sed\s+-n\s+['"]?(\d+),(\d+)p/.exec(cmd); return m ? Number(m[1]) : null; };
   t('a sed range is a target at its first line', startOf("sed -n '320,345p' settle.js") === 320);
   t('cat and head are not position choices', startOf('cat settle.js') === null && startOf('head -n 300 settle.js') === null);
+
+  console.log('\n-- separating the cap\'s own echo from where the model chose to look');
+  /* The confound this whole block exists for. A capped Read hands back lines 1..limit and its
+     additionalContext tells the model, in words, to come back with an offset. It does -- and that follow-up
+     is a ranged read starting just past the cap, which then lands in the distribution meant to decide what
+     the cap should be. Pooled over seventeen real sessions the number read 57% of targets past line 300,
+     median 351, against the 300 the guard had been applying all along. The join below is what takes that
+     apart: same file, same session, issued after the cap fired. */
+  const C0 = Date.parse('2026-09-12T09:00:00.000Z');
+  const jp = {
+    cwd: '/w', sessionId: 'joinsess', requests: [{}], compactions: [],
+    results: [
+      { file: '/w/a.js', readFrom: 40, askedAt: C0 - 5000, at: C0 - 5000 },        // before the cap: evidence
+      { file: '/w/a.js', readFrom: 305, askedAt: C0 + 2000, at: C0 + 2000 },       // after it: the cap's own
+      { file: '/w/b.js', readFrom: 420, askedAt: C0 + 3000, at: C0 + 3000 },       // never capped
+      { file: '/w/t/tool-results/x.txt', readFrom: 90, askedAt: C0 + 4000, at: C0 + 4000 },
+      { file: '/w/a.js', readFrom: 700, askedAt: null, at: null },                 // cannot be ordered
+      { file: '/w/c.js', readFrom: null, askedAt: C0, at: C0 },                    // not a ranged read at all
+    ],
+  };
+  const jled = [
+    { t: C0, ev: 'read-cap', session: 'joinsess', tool: 'Read', what: '/w/a.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: C0 + 3500, ev: 'read-cap', session: 'joinsess', tool: 'Read', what: '/w/t/tool-results/x.txt', bytes: 40000, lines: 900, limit: 80, persisted: true },
+    { t: C0, ev: 'read-cap', session: 'other', tool: 'Read', what: '/w/b.js', bytes: 99999, lines: 2000, limit: 300, persisted: false },
+  ];
+  const cl = T.classifyRangedReads(jp, jled, { sessionId: 'joinsess' });
+  t('a ranged read issued after a cap on the same file is excluded',
+    cl.induced.length === 2 && cl.induced.some(x => x.read.readFrom === 305), JSON.stringify(cl.induced.map(x => x.read.readFrom)));
+  t('a ranged read of that file from BEFORE the cap is kept -- it is evidence',
+    cl.spontaneous.some(r => r.readFrom === 40), JSON.stringify(cl.spontaneous.map(r => r.readFrom)));
+  t('a ranged read of a file no cap touched is kept', cl.spontaneous.some(r => r.readFrom === 420));
+  t('a persisted-output cap excludes the same way a source-file cap does',
+    cl.induced.some(x => x.read.readFrom === 90));
+  t('a read that cannot be ordered against the cap goes in neither bucket, and is counted',
+    cl.unordered.length === 1 && !cl.spontaneous.some(r => r.readFrom === 700) && !cl.induced.some(x => x.read.readFrom === 700));
+  t('all equals spontaneous plus induced plus unordered, always',
+    cl.all.length === cl.spontaneous.length + cl.induced.length + cl.unordered.length, String(cl.all.length));
+  t('a cap in another session does not exclude this session\'s reads',
+    cl.spontaneous.some(r => r.readFrom === 420), JSON.stringify(cl.byFile));
+  /* An empty ledger must say the separation was not attempted. Reporting "0 induced" would hand a machine
+     whose ledger predates the Read cap a clean bill of health for a confound nobody looked for. */
+  const clNone = T.classifyRangedReads(jp, [], {});
+  t('an empty ledger reports that the separation was not attempted, not that nothing was induced',
+    clNone.attempted === false && clNone.induced.length === 0 && clNone.spontaneous.length === 5);
+  /* A shell excerpt names a relative path while the ledger records what the guard stat'd, absolute. */
+  const relp = { cwd: '/w', sessionId: 'joinsess', requests: [{}], compactions: [],
+    results: [{ file: 'a.js', readFrom: 310, askedAt: C0 + 1000, at: C0 + 1000 }] };
+  t('a relative shell path resolves against the session cwd', T.classifyRangedReads(relp, jled, {}).induced.length === 1);
+  t('with no cwd to resolve against, the weaker basename match is counted as such',
+    (() => { const c = T.classifyRangedReads({ ...relp, cwd: null }, jled, {}); return c.induced.length === 1 && c.basename === 1; })());
+  t('normReadPath folds case only behind a Windows drive letter',
+    T.normReadPath('C:\\Work\\A.js') === 'c:/work/a.js' && T.normReadPath('/w/A.js') === '/w/A.js');
+
+  /* The same question without the ledger, so it still gets asked where the ledger predates the cap. Two
+     equal-width bands, so under the null `at` is Binomial(n, 0.5) -- an exact tail, nothing tuned. */
+  const rep = (n, v) => Array(n).fill(v);
+  t('bunching just past the cap is a spike, with no ledger at all',
+    T.capBandSpike([...rep(12, 305), ...rep(1, 290)], 300).verdict === 'spike');
+  t('a smooth distribution shows no step at the cap',
+    T.capBandSpike([...rep(10, 305), ...rep(10, 290)], 300).verdict === 'none');
+  t('a thin sample reports itself as thin, never as no spike',
+    T.capBandSpike(rep(3, 305), 300).verdict === 'too few');
+  t('the exact-boundary count is separate, and counts only the cap and one past it',
+    T.capBandSpike([300, 301, 302, 305], 300).exact === 2);
+  t('the histogram bins every start exactly once',
+    T.startHistogram([1, 0, 60, 250, 400, 900, 5000]).reduce((n, b) => n + b.n, 0) === 7);
+
+  /* The ledger view. One count for both Read-cap halves told the owner nothing about which default it was
+     evidence for: readMaxBytes governs a large source file, persistedLimitLines a spilled output. */
+  const capLed = [
+    { t: 1000, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: 1020, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+    { t: 5000, ev: 'read-cap', session: 'A', tool: 'Read', what: '/w/t/tool-results/a.txt', bytes: 40000, lines: null, limit: 80, persisted: true },
+    { t: 9000, ev: 'read-cap', session: 'B', tool: 'Read', what: '/w/big.js', bytes: 80000, lines: 1900, limit: 300, persisted: false },
+  ];
+  const cf = T.readCapFiles(capLed, null);
+  t('the cap counter splits the two knobs apart', cf.source.n === 2 && cf.persisted.n === 1, JSON.stringify({ s: cf.source, p: cf.persisted }));
+  t('a double install logs each cap twice; the duplicate is dropped once and reported',
+    cf.deduped === 1 && cf.n === 3, JSON.stringify({ deduped: cf.deduped, n: cf.n }));
+  t('the delivered share is limit/lines', Math.abs(cf.files.find(f => /big/.test(f.what)).delivered - 300 / 1900) < 1e-9);
+  t('a row with no line count reports no fraction rather than a guess',
+    cf.files.find(f => /a\.txt/.test(f.what)).delivered === null && cf.unknownLines === 1);
+  t('the same file capped in two sessions is one row, counted twice',
+    cf.files.find(f => /big/.test(f.what)).n === 2 && cf.sessions === 2);
+  t('pooled counts equal the sum of the per-session ones',
+    T.readCapFiles(capLed, 'A').n + T.readCapFiles(capLed, 'B').n === cf.n,
+    String(T.readCapFiles(capLed, 'A').n) + '+' + String(T.readCapFiles(capLed, 'B').n) + ' vs ' + String(cf.n));
 
   console.log('\n-- the bill, and the guard\'s own cost');
   /* ab10 measured that the saving lives in `carried`, so the report has to price a re-read, not a byte. */

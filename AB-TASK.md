@@ -472,6 +472,51 @@ The column that matters is the last one: bytes withheld and answer withheld are
 different numbers, and reading them as one is what made lowering the trigger look
 like a saving before the A/B and a 10% loss after it.
 
+## The Read cap's strength — pre-registered 2026-09-12, before the numbers
+
+`readLimitLines` is the other half of the Read cap: `readMaxBytes` decides *which* reads get capped,
+`readLimitLines` decides how much a capped read withholds. The sweep settled that the trigger cannot change
+the saving per capped read; only this knob can. It has never been argued for either.
+
+**What made it answerable, and what nearly made it wrong.** `report --where` pools a person's own *ranged*
+reads — a `Read` with an offset, a `sed -n 'A,Bp'` — because a range is the model saying where it expects to
+find something. Run over seventeen of the owner's real sessions it gave **111 ranged reads, median start line
+351, 57% of targets past line 300.**
+
+That figure is confounded, and in the guard's favour. A capped Read delivers lines 1..300 and its
+`additionalContext` tells the model in words to come back with an offset. The follow-up is a ranged read
+starting just past 300 — counted as a target the cap would hide, when it is the cap's own instruction being
+measured. Every one of those seventeen sessions ran with the guard on, and round 1 recorded the cap firing one
+to four times per ON run. A median of 351, sitting just past the 300 the guard had been applying all along, is
+what that looks like. It is the same circularity that disqualified the earlier 48% figure, arriving from the
+other direction: the first time it was fixtures built with the evidence past line 300, this time the guard
+instructing the model to read past line 300.
+
+So the ledger's `read-cap` rows are joined against the reads — same session, same file, issued after the cap
+fired — and the report prints two columns: all ranged reads, and the **spontaneous** subset.
+
+**The decision rule, fixed before the split was run.** From the spontaneous subset only, take the smallest
+L in {300, 500, 800, 1200} whose share of hidden targets is **≤ 25%**.
+
+- Spontaneous subset **under 20 reads** → change nothing; the sample does not carry the decision.
+- **No** candidate at ≤ 25% → change nothing, and record it: on this workload the cap cannot be made safe
+  without becoming a no-op. The trigger is 60,000 bytes, so every file the cap touches runs roughly 1,500
+  lines or more, and a limit near 1,200 on a 1,500-line file barely cuts.
+- No paid session either way. The distribution is observational and the saving per capped read is arithmetic.
+  Only `readMaxBytes` needs a session, because only there is the question behavioural.
+
+**Written expectation, before the numbers.** The spike diagnostic fires at 300 and at 80, and the spontaneous
+past-300 share falls from 57% into roughly 20–35%, leaving 300 or 500 as the answer. If the spike reports
+`none` and the spontaneous share holds at or above 50%, the confound was small, 57% stands, and the rule picks
+800 or refuses. Either is a result and gets recorded as one.
+
+**What no version of this can establish.** Attribution is by file identity, so one cap marks every later
+ranged read of that file — which inflates the excluded count rather than the clean one. And a cap on one file
+that teaches the model to read a *different* file with an offset stays counted as spontaneous, so that column
+is a **lower bound** on the guard's influence. Only a hooks-off arm settles it.
+
+**Result:** _pending — the owner runs `report --caps` then `report --where` on their own machine._
+
 ## Feature round — run 2026-09-07, Opus 5 both arms
 
 The audit is reading without writing and the debugging round is a test loop;
