@@ -182,7 +182,7 @@ leaves your machine.
 
 ```
 npx tokenbrake report                     # last session
-npx tokenbrake report --all               # one line per session on disk
+npx tokenbrake report --all               # one line per session on disk, and which had the guard running
 npx tokenbrake report --session=<prefix>  # a particular one; --transcript=<path> for a file
 npx tokenbrake report --top=25            # widen the ranking
 npx tokenbrake report --where             # where your ranged reads land -- the evidence for readLimitLines

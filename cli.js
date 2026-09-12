@@ -759,10 +759,41 @@ function report() {
     const want = opt('--session');
     if (flag('--all')) {
       if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '. Try --transcript=<path>, or --ledger for the trimming record alone.'); return; }
-      console.log('Sessions, newest first (' + found.length + '):');
-      for (const f of found.slice(0, 30)) {
-        try { console.log(transcript.renderSummaryLine(transcript.parseTranscript(f.file))); } catch (e) { console.log('  ' + f.session.slice(0, 8) + '...  unreadable: ' + e.message); }
+      /* This printed the newest 30 under a header that said 65, with nothing to say 35 were missing, and a
+         conclusion was drawn from the visible part within the hour. --top now governs it and an omission
+         says so. The counts below are taken over EVERY session, not the printed ones: a count whose
+         population is smaller than the header says is the same defect one line further down. */
+      const allTop = Number(opt('--top') || 30) || 30;
+      const guardSessions = new Set(ledger.map((r) => r && r.session).filter(Boolean));
+      const rows = found.map((f) => {
+        let p;
+        try { p = transcript.parseTranscript(f.file); } catch (e) { return { f, err: e.message }; }
+        const cwd = p.cwd || '';
+        return { f, p, cwd, bench: /tokenbrake-bench/i.test(cwd), guard: guardSessions.has(String(p.sessionId || f.session)) };
+      });
+      const shown = rows.slice(0, allTop);
+      console.log('Sessions, newest first (' + rows.length
+        + (rows.length > shown.length ? ', newest ' + shown.length + ' shown' : '') + '):');
+      for (const x of shown) {
+        if (x.err) { console.log('  ' + x.f.session.slice(0, 8) + '...  unreadable: ' + x.err); continue; }
+        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '' }));
       }
+      if (rows.length > shown.length) console.log('  (' + (rows.length - shown.length)
+        + ' older session(s) not listed -- add --top=' + rows.length + ' for every one)');
+      const readable = rows.filter((x) => !x.err);
+      const bench = readable.filter((x) => x.bench).length;
+      const guarded = readable.filter((x) => x.guard).length;
+      const outside = readable.filter((x) => x.guard && !x.bench).length;
+      console.log('\n  guard = the guard wrote ledger rows in that session. A blank means it was not running there,');
+      console.log('  which is a different conclusion from running and leaving everything alone, and the two look');
+      console.log('  identical in every other column. bench = a cwd under tokenbrake-bench, which --where, --reads');
+      console.log('  and --reach skip by default as a staged workload.');
+      console.log('  Of ' + readable.length + ' readable session(s): ' + bench + ' benchmark, ' + guarded
+        + ' with guard records, ' + outside + ' with guard records outside the benchmark.');
+      console.log('  That last number is the population a claim about ordinary work has to come from. It is still');
+      console.log('  not a count of eligible sessions: an A/B arm is ordinary work by its cwd and is not ordinary');
+      console.log('  work, and no transcript says it was an arm. Those come off by hand -- HANDOFF.md lists the');
+      console.log('  ones on record.');
       console.log('\nOpen one with: tokenbrake report --session=<prefix>');
       return;
     }

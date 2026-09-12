@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **`report --all` stopped truncating silently, and now says which sessions the guard was running in.** It
+  printed the newest 30 sessions under a header that said how many exist -- `(65)` above a list of 30, with
+  nothing to say 35 were missing. A conclusion about which sessions were on disk was drawn from the visible
+  part within the hour of reading it, and it was wrong in the direction the list made easy. `--top` governs the
+  count now, and an omission names itself and the flag that lifts it.
+  The same line gained the two columns the question it gets read for actually needs: **guard**, meaning the
+  guard wrote ledger rows in that session, and **bench**, meaning a cwd under `tokenbrake-bench` that
+  `--where`, `--reads` and `--reach` skip by default. Without the first, "the guard did nothing here" and "the
+  guard was not here" look identical in every column -- the distinction that has decided three separate
+  readings in this repository. Both columns are omitted entirely when the caller has not established them,
+  because a column reading *no guard* from a caller that never opened the ledger is a claim made from nothing.
+  Underneath, the counts over **every** session rather than the printed ones: how many are benchmark, how many
+  carry guard records, and how many carry them outside the benchmark -- that last being the population any
+  claim about ordinary work has to come from. It says in the same breath that this is **still not** a count of
+  eligible sessions, because an A/B arm is ordinary work by its cwd and is not ordinary work, and no transcript
+  says it was an arm.
+
 ## 0.2.7 — 2026-09-12
 
 - **`report` says where you actually read, which is the only evidence that can set `readLimitLines`.**
