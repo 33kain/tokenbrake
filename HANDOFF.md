@@ -539,7 +539,37 @@ never had now exists, measured: the limit that keeps his targets makes the cap n
 reads, so a lower trigger fires more often and saves almost nothing. Full record in `AB-TASK.md`, "The Read
 cap's trigger — pre-registered 2026-09-12".
 
-**Q2, the shape, has no verdict and the reason is worth keeping.** Whether the cap should be an absolute line
+**Q2, the shape — answered 2026-09-12: `readLimitLines` is the wrong FORM.** Over 45 reads with an exact file
+length, holding safety fixed at a 25% miss budget: the best absolute cap (first 800 lines) withholds **22%**,
+the best fractional cap (first 60% of the file) withholds **40%** and misses slightly less. Fractional wins by
+18 points against a 10-point threshold.
+
+The mechanism, and it is the opposite of what I predicted: the bimodal depth distribution defeats the absolute
+shape, not both. A 60% cap clears the 50-60% cluster while still cutting 40% off every file; an absolute cap
+loose enough to clear that cluster on a long file withholds nothing from a short one.
+
+**What it licenses:** a fractional cap designed under its **own** pre-registration and its own A/B. Nothing
+ships from the measurement itself, and `readLimitLines` does not change value.
+
+**The condition that design must answer first.** The statistic was the median share of *lines* withheld, which
+weights every file equally regardless of size — so part of the 18-point margin is saving on short files, which
+in tokens is small. A token-weighted measure could narrow or reverse it. That question goes into the fractional
+cap's pre-registration before a line of it is written.
+
+**Superseded — the first attempt, which licensed nothing.** With the off-the-end length
+source the exact count went from 1 to 45. Absolute-line spread 1.12, fractional 0.98 — the fraction is tighter
+by 12.5% against a 25% threshold, so **not met, and `readLimitLines` stays an absolute line count.** The rule's
+second branch ("absolute tighter means a fixed line count is right") does not fire either, because the fraction
+*is* tighter, just not enough: a threshold rule needs three outcomes and mine named two. Not re-scored.
+
+The useful part is why neither shape wins. Depth is **bimodal** — 23 of 50 reads in the first 10% of a file,
+15 at 50-60%, almost nothing between. Two habits, and no single parameter of either shape serves both. So the
+open question is not "absolute or fractional" but whether **one number is the right form at all**. A next
+attempt needs its own pre-registration and a decision-relevant statistic: per candidate of each shape, miss
+rate against median withholding, then which frontier dominates. Exact arithmetic over the same 45 reads, free,
+but written down before it is computed.
+
+**Superseded note — the earlier "no verdict" and why it changed.** Whether the cap should be an absolute line
 count or a fraction of the file needs 20 reads whose file length is known exactly; there is 1, because the
 other 42 lengths came off disk today and a file may have changed since. `report --reads` resolves lengths from
 a whole-file read in the same session first, and those are rare in his sessions. The question reopens on its

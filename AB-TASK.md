@@ -537,7 +537,8 @@ Three reads could not be sized. They were checked before the rule was applied, b
 exactly where they could swing the withholding median: all three failed for reasons other than Claude Code's
 size refusal, so they are failures and not large files, and the grid is complete.
 
-**Q2: no verdict.** The rule requires 20 reads whose file length came from an exact source. There is **1** —
+**Q2: no verdict on the first attempt, and the reason was fixable.** The rule requires 20 reads whose file
+length came from an exact source. There was **1** —
 the other 42 lengths were read off disk today, which the rule excludes because a file may have changed since
 the read. The numbers exist (absolute CV 1.21, fractional 1.05, so the fraction is 13% tighter, short of the
 25% the rule demands) and are **not admissible**. The shape question stays open, and the expectation that the
@@ -545,7 +546,143 @@ absolute spread would be tighter is neither confirmed nor refuted: the test did 
 
 Worth a second look, from the inadmissible source and so a lead rather than a finding: target depth is
 **bimodal** — 21 reads in the first 10% of a file, then 15 at 50-60%. Two habits, "read the top" and "read the
-middle", which one cap value cannot serve.
+middle", which one cap value cannot serve. **Caveat added the same day:** that histogram was built from
+disk-today lengths, which are systematically too long because files grow, so every depth in it is too shallow.
+It is a lead about shape, not a measurement of it.
+
+**Two exact sources added afterwards, so the rule can actually run.** First, the guard now writes a
+`read-whole` ledger row for every unbounded Read it does not cap, with the statSync size and a newline count.
+Second, and retroactively over transcripts that already exist: **a read that ran off the end of its file says
+exactly how long that file was.** A `sed -n 'A,Bp'` or an offset+limit `Read` that comes back short ended at
+EOF, and the last delivered line is the file's length. On this repo's transcripts 40 of 163 sed ranges
+qualified; the report's own session went from 1 exact length to 17. A result the guard trimmed is refused
+outright -- it is short because the guard cut it, and without that check every capped read would read as a
+short file, which is the same error that has now been caught five times today and always in the guard's
+favour.
+
+**Q2, second attempt — the rule ran, and my rule had a hole in it.**
+
+With the off-the-end source the exact count went from 1 to **45**, past the 20 the rule needs. 44 of those 45
+lengths came from a read that ran off the end of its file; 1 from a whole-file read in the same session; 5 more
+reads resolved only off disk and are excluded from the verdict, as the rule requires.
+
+| spread over 45 exact reads | coefficient of variation |
+|---|---|
+| absolute start line | **1.12** |
+| depth as a fraction of the file | **0.98** |
+
+The fraction is tighter by **12.5%**. The rule demanded **25%**. **Not met, so no change to the shape is
+licensed** — and `readLimitLines` stays an absolute line count.
+
+**But the rule's two branches do not cover this, and that is my error, not the data's.** It said: fractional at
+least 25% tighter means the knob is the wrong shape; *absolute tighter* means a fixed line count is the right
+shape and is the first evidence for it. Here the fractional spread **is** tighter, just not by enough. So the
+second branch does not fire either: this is not evidence that a fixed line count is right, it is a refusal to
+act on a 12.5% lean. A rule with a threshold needs three outcomes and mine named two. **Recorded as written and
+not re-scored** — the same refusal as round 1's band statistic. What it licenses is nothing, which is the
+correct outcome of a threshold that was not met.
+
+**And the likely reason neither shape wins, which is the useful part.** Target depth is strongly **bimodal**:
+23 of 50 reads land in the first 10% of a file, then 15 cluster at 50-60%, with almost nothing between. Two
+habits -- "read the top" and "read the middle" -- and **no single parameter of either shape serves both.** A
+similar CV for the two shapes is what that looks like. This survives the disk-length caveat, because the
+off-the-end source now supplies most of the lengths.
+
+So the shape question is not "absolute or fractional" but **"is one number the right form at all"**, which
+neither this rule nor its data was built to answer. Any next attempt needs its own pre-registration, and the
+statistic should be the decision-relevant one rather than a spread: for each candidate of each shape, the miss
+rate against the median withholding, and then which shape's frontier dominates. That comparison is exact
+arithmetic over these same 45 reads and costs nothing -- but it must be written down before it is computed.
+
+## The Read cap's form — pre-registered 2026-09-12, before the frontier is computed
+
+The spread rule licensed nothing and named the reason it could not: a coefficient of variation says how
+concentrated a distribution is, which is only a proxy for what actually matters — whether **one number of that
+shape** can keep the model's targets without withholding so little that the cap does nothing. This is the
+decision-relevant comparison, over the same 45 reads whose file length is known exactly. It is arithmetic and
+costs nothing. Written down first because the thresholds are the whole argument.
+
+**The two shapes.** An **absolute** cap delivers the first `L` lines whatever the file's length — so it
+withholds most of a long file and nothing at all from a short one. A **fractional** cap delivers the first
+`f` of the file — so it withholds `1 − f` of every file, the same share regardless of size. They are genuinely
+different trades, not two spellings of one.
+
+**Computed per candidate, over each read's (start line, file length):**
+
+- **miss rate** — the share of reads whose target sits past what the cap delivers. Absolute `L`: hidden when
+  `start > L`. Fractional `f`: hidden when `start > floor(f × lines)`.
+- **withholding** — the median over those same reads of `(lines − delivered) / lines`.
+
+Candidates: `L ∈ {100, 200, 300, 500, 800, 1200}` and `f ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}`, plus
+**no cap at all** (miss 0, withholding 0) as the anchor, because a shape that cannot beat doing nothing is not
+a shape worth having.
+
+**The rule — WITHDRAWN 2026-09-12, before it was ever run on real data, and replaced below.** One shape
+dominates the other if, at every withholding level the other reaches — matched to the nearest candidate within
+5 percentage points — its miss rate is no higher, and is lower by at least 10 points at one or more of them.
+
+**Why it was withdrawn.** It cannot discriminate. A fractional cap is all-or-nothing on targets that sit at a
+fixed depth — it misses everything below that depth and nothing above it — while an absolute cap degrades
+gradually. Two curves of different curvature are almost never one uniformly below the other, so a single bad
+level at the aggressive end (where both miss nearly everything and the result is useless either way) breaks
+domination. Run against synthetic data **built to favour each shape in turn**, it returned "neither" for both.
+An instrument that returns the same answer whatever it measures is not measuring.
+
+Found on those fixtures **before** it touched the owner's data, which is the only reason replacing it is not
+re-scoring. The fixtures are in `test.mjs` and the replacement must separate all four of them: targets at a
+fixed depth, targets at a fixed line, a bimodal habit, and targets at the end of their files.
+
+**The rule, replacing it.** Hold **safety** fixed and compare **saving**, which is the trade the cap actually
+makes. For each shape, among its candidates whose miss rate is at or under **25%** — the same budget the
+strength rule used — take the **most any of them withholds**. `no cap` is always on that list at zero
+withholding, so a shape whose best safe candidate withholds nothing cannot be both safe and useful here.
+A shape wins by withholding at least **10 percentage points** more than the other.
+
+- Fractional wins → `readLimitLines` is the wrong **form**; a fractional cap gets designed under its own
+  pre-registration and its own A/B. Not today, and not as a value change.
+- Absolute wins → the current form is right, and this is the first evidence for it in the project.
+- Within 10 points of each other → **a tie**, and no change. Note that if every file were the same length the
+  two shapes would be the same cap and a tie would be arithmetic rather than a finding; his files are not.
+- **Neither can be safe and useful** — both best-safe candidates withhold nothing → one number is the wrong
+  form for this workload, and no value of either shape fixes it. Record it and stop tuning the shape.
+
+Fewer than **20** reads with an exact length: no verdict.
+
+**Written expectation.** Neither dominates. Target depth is bimodal — 23 of 50 reads in the first 10% of a file
+and 15 at 50-60% — so any single threshold that keeps the shallow group cheaply must miss the middle group, in
+either shape. If that is right, the answer to "absolute or fractional" is "neither, and the question was
+wrong", which is a more useful result than picking one.
+
+**Result — 2026-09-12, over the owner's 45 reads with an exact file length.**
+
+| shape | safest useful cap at a 25% miss budget | withholds | misses |
+|---|---|---|---|
+| absolute | first **800 lines** | **22%** | 13% |
+| fractional | first **60% of the file** | **40%** | 11% |
+
+**FRACTIONAL wins, by 18 points of withholding** — nearly twice the saving, at slightly better safety. The
+threshold was 10. **`readLimitLines` is the wrong form.** What that licenses is exactly what the rule said:
+a fractional cap gets designed under its own pre-registration and its own A/B. **Not today, and not as a value
+change.** Nothing ships from this.
+
+**My written expectation — "neither dominates" — was wrong.** I expected the bimodal depth distribution to
+defeat both shapes. It defeats the absolute one and not the fractional: the 60% cap clears the 50-60% cluster
+while still cutting 40% off every file, whereas an absolute cap loose enough to clear that cluster on a long
+file (800 lines) withholds nothing from a short one. That is the mechanism, and it is the opposite of the
+reason I gave for expecting a tie.
+
+**The hole in this rule, and it is the third of the day.** The statistic is the median share of *lines*
+withheld, which weights every file equally regardless of size. A fractional cap also cuts short files, where
+the saving in tokens is small — so part of its 18-point margin may be saving that is not worth having. A
+**token-weighted** withholding measure could narrow or reverse it. Recorded as a condition on the verdict, not
+as a reason to discount it: the rule ran as written and returned fractional, and any fractional cap design must
+carry this question into its own pre-registration and answer it before a line of it is written.
+
+**A bug in the reporting, caught by the owner's console rather than by the suite.** The block crashed after
+printing the table, and the sentence above the crash still described the *withdrawn* criterion. The shape block
+needs 20 exact lengths before it prints at all, and no test fixture ever reached that, so a green suite shipped
+both. A fixture that reaches it is now in `test.mjs`; the numbers above were computed before the crash and are
+unaffected.
 
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on

@@ -109,6 +109,21 @@
   exits 0; a read the model had already bounded is still not recorded at all, because the guard still returns
   before it stats anything; and `logAllTools: false` keeps the row out like every other non-event row.
 
+- **A read that ran off the end of its file says exactly how long that file was, and it was in every transcript
+  all along.** `sed -n '375,480p'` asking for 106 lines and getting 105 means the file ended at line 479. So
+  does a `Read` with an offset and a limit that comes back short. This matters because the question of whether
+  the cap should be an **absolute line count or a fraction of the file** needs file lengths, and had **one
+  exact length in forty-three** — every other length read off disk today, which its decision rule excludes
+  because a file may have changed since. On this repo's own transcripts 40 of 163 sed ranges ran off the end;
+  in the report's own session the exact count went from **1 to 17**.
+  Two ways it would lie, both refused: a result the **guard trimmed** is short because the guard cut it, not
+  because the file ended — so a marker refuses the whole reading, and without that check every capped read
+  would be reported as a short file. And a range beginning past the end returns nothing, which bounds the
+  length without giving it.
+  It also showed the source it displaced was biased: total resolved reads **fell** from 43 to 33, because a
+  contemporaneous length is often shorter than today's — the files grew — so reading lengths off disk had been
+  making every target look shallower than it was.
+
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the
   report existed. Every report, status and help string is ASCII now; the guard's own `…` marker inside a

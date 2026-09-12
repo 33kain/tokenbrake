@@ -295,9 +295,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
      real work would set readLimitLines from a fixture design. */
   const T0 = Date.parse('2026-09-12T10:00:00.000Z');
-  const mkSession = (dir, name, offsets, cwd, wholes) => {
+  const mkSession = (dir, name, offsets, cwd, wholes, eofPairs) => {
     mkdirSync(join(cfg, 'projects', dir), { recursive: true });
     const rows = [];
+    /* Ranged reads that run off the end of their file: each gives an exact file length, which is what the
+       shape comparison needs and what no other fixture here supplies. */
+    for (let n = 0; n < (eofPairs || 0); n++) {
+      const at = new Date(T0 + 900 + n).toISOString();
+      const lines = 300 + 37 * n, start = n % 3 === 0 ? 8 + n : Math.floor(lines * 0.55);
+      const got = lines - start + 1;
+      rows.push(JSON.stringify({ type: 'assistant', uuid: 'e' + n, requestId: 'e' + n, cwd, timestamp: at,
+        message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'tool_use', id: 'te' + n, name: 'Bash',
+            input: { command: "sed -n '" + start + "," + (start + got + 50) + "p' /s" + n + ".js" } }] } }));
+      rows.push(JSON.stringify({ type: 'user', cwd, timestamp: at,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'te' + n, content: Array(got).fill('x').join('\n') }] } }));
+    }
     (wholes || []).forEach((w, n) => {
       const at = new Date(T0 + 500 + n).toISOString();
       const lines = Math.ceil(w.bytes / 60);
@@ -378,6 +391,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reads says whether the guard was even running there, because that is the whole question',
     /the guard was not running there/.test(r.stdout) && /opposite conclusions/.test(r.stdout));
   rmSync(join(cfg, 'projects', '-c-work-bigrepo'), { recursive: true, force: true });
+  /* The shape block needs 20 reads with an EXACT file length before it prints at all, so no CLI fixture ever
+     reached it -- and a crash plus wording left over from the withdrawn criterion shipped past a green suite
+     into the owner's console. A fixture that reaches it is the test that was missing. */
+  mkSession('-c-work-shaperepo', 'shapesess', [], 'C:\\work\\shaperepo', [], 24);
+  r = run(['--reads']);
+  t('cli: --reads prints the shape comparison once there are enough exact lengths',
+    /Which SHAPE of cap serves your reading/.test(r.stdout) && /Safest useful cap of each shape/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Which SHAPE[^\n]*/) || [])[0]);
+  t('cli: --reads names a winning shape by what it saves at the same safety, not by domination',
+    /Verdict: (FRACTIONAL|ABSOLUTE) saves more at the same safety, by \d+ points|Verdict: a TIE|Verdict: NEITHER shape can be/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Verdict:[^\n]*/) || [])[0]);
+  t('cli: --reads does not crash printing the verdict', r.status === 0 && !/TypeError/.test(r.stderr), r.stderr.slice(0, 120));
+  rmSync(join(cfg, 'projects', '-c-work-shaperepo'), { recursive: true, force: true });
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code
@@ -901,6 +927,87 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       readFileSync(ledgerAt, 'utf8').trim().split('\n').length === 1);
     rmSync(dir, { recursive: true, force: true });
   }
+  /* Which SHAPE of cap, not which value. An absolute cap withholds most of a long file and nothing from a
+     short one; a fractional cap withholds the same share of every file. A coefficient of variation cannot
+     tell those apart, because it measures concentration rather than what one threshold of that shape costs.
+     AB-TASK.md, "The Read cap's form" -- rule and thresholds committed before it was first computed. */
+  {
+    const shallow = Array.from({ length: 40 }, (_, i) => ({ start: 5 + (i % 20), lines: 200 + 10 * i }));
+    const fs2 = T.capFrontier(shallow);
+    t('a cap is scored on both what it withholds and what it hides',
+      fs2.absolute[0].miss === 0 && Math.abs(fs2.absolute[0].withheld - 0.75) < 0.02,
+      JSON.stringify(fs2.absolute[0]));
+    t('no cap at all is on the list, because a shape that cannot beat doing nothing is not worth having',
+      fs2.none.miss === 0 && fs2.none.withheld === 0);
+    t('a fractional cap withholds the same share of every file, whatever its length',
+      fs2.fractional.every(p => Math.abs(p.withheld - (1 - p.param)) < 0.02),
+      JSON.stringify(fs2.fractional.map(p => [p.param, p.withheld.toFixed(2)])));
+    /* The verdict holds SAFETY fixed and compares SAVING: among the candidates of a shape whose miss rate is
+       at or under the budget, the most any withholds. The first criterion asked for no higher miss at every
+       matched withholding level and could not discriminate -- a fractional cap is all-or-nothing on targets at
+       a fixed depth while an absolute one degrades gradually, so two curves of different curvature are almost
+       never one uniformly below the other. It returned "neither" for data built to favour each shape in turn.
+       Found on these fixtures before it ran on real data, withdrawn, and recorded as withdrawn. The three
+       fixtures below are what an instrument has to separate before it is allowed to measure anything. */
+    const proportional = Array.from({ length: 40 }, (_, i) => ({ lines: 100 + 50 * i, start: Math.floor((100 + 50 * i) * 0.55) }));
+    t('targets at a fixed DEPTH: the fractional shape saves more at the same safety',
+      T.frontierVerdict(T.capFrontier(proportional)).verdict === 'fractional',
+      JSON.stringify(T.frontierVerdict(T.capFrontier(proportional)).verdict));
+    t('and an absolute cap cannot be safe there at all without withholding nothing',
+      T.frontierVerdict(T.capFrontier(proportional)).absolute.withheld === 0);
+    /* Two habits at once -- some targets at the top, some in the middle. An absolute cap can still hold the
+       deeper group by keeping a fixed number of lines that is a small share of a long file; a fraction cannot
+       be small and deep at once. */
+    const bimodal = Array.from({ length: 40 }, (_, i) => (i % 8 < 5
+      ? { lines: 300 + 40 * i, start: 6 + (i % 4) }
+      : { lines: 300 + 40 * i, start: Math.floor((300 + 40 * i) * 0.55) }));
+    t('a bimodal habit is separated too, and does not collapse to no answer',
+      T.frontierVerdict(T.capFrontier(bimodal)).verdict === 'absolute');
+    /* Shallow targets in files of every length: a small absolute cap and a small fraction are nearly the same
+       thing, and the 10-point edge refuses to call a 4-point difference a win. */
+    const fixedLine = Array.from({ length: 40 }, (_, i) => ({ lines: 400 + 60 * i, start: 90 + (i % 5) }));
+    t('when both shapes serve equally the answer is a tie, not the larger number',
+      T.frontierVerdict(T.capFrontier(fixedLine)).verdict === 'tie',
+      JSON.stringify([T.frontierVerdict(T.capFrontier(fixedLine)).absolute.withheld,
+        T.frontierVerdict(T.capFrontier(fixedLine)).fractional.withheld]));
+    /* Files all one length make the two shapes the same thing by construction, so a tie there is arithmetic
+       rather than a finding -- worth pinning, because it is the case that would make a real tie meaningless. */
+    const uniform = Array.from({ length: 40 }, (_, i) => ({ lines: 1000, start: 10 + 24 * i }));
+    t('when every file is the same length the two shapes ARE the same cap, and the answer is a tie',
+      T.frontierVerdict(T.capFrontier(uniform)).verdict === 'tie'
+      && Math.abs(T.frontierVerdict(T.capFrontier(uniform)).absolute.withheld
+        - T.frontierVerdict(T.capFrontier(uniform)).fractional.withheld) < 1e-9);
+    /* The strongest finding the rule can return: targets sitting at the end of their files, where the only
+       safe cap is no cap and no value of either shape saves anything. */
+    const deep = Array.from({ length: 40 }, (_, i) => ({ lines: 2000 + 50 * i, start: Math.floor((2000 + 50 * i) * 0.95) }));
+    t('targets at the end of their files means neither shape can be safe and useful, and it says so',
+      T.frontierVerdict(T.capFrontier(deep)).verdict === 'neither can be safe and useful',
+      JSON.stringify(T.frontierVerdict(T.capFrontier(deep)).verdict));
+  }
+  /* A read that ran off the end of its file says exactly how long that file was, and it was in every
+     transcript already. `sed -n '375,480p'` asking for 106 lines and getting 105 means the file ended at 479.
+     On this repo's own transcripts 40 of 163 sed ranges ran off the end -- against one exact file length in
+     forty-three from every other source combined, which is why the shape question had no evidence. */
+  t('a sed range that ran off the end gives the file\'s exact length',
+    T.eofLength('Bash', { command: "sed -n '375,480p' a.js" }, Array(105).fill('x').join('\n'), false) === 479);
+  t('a Read with offset and limit does the same',
+    T.eofLength('Read', { file_path: 'a.js', offset: 300, limit: 100 }, Array(48).fill('1\tx').join('\n'), false) === 347);
+  t('a range that filled up says only that the file is at least that long, so it says nothing here',
+    T.eofLength('Bash', { command: "sed -n '1,30p' a.js" }, Array(30).fill('x').join('\n'), false) === null);
+  /* The one way this would lie, and it would lie systematically: a result the guard trimmed is short because
+     the guard cut it, not because the file ended -- which would report every capped read as a short file. */
+  t('a result the guard trimmed is refused outright, not read as a short file',
+    T.eofLength('Bash', { command: "sed -n '1,999p' a.js" }, 'x\n[tokenbrake] capped at 300 lines', true) === null);
+  t('a range beginning past the end is a bound, not a length',
+    T.eofLength('Bash', { command: "sed -n '900,910p' a.js" }, '', false) === null);
+  t('an off-the-end length resolves a ranged read, and counts as exact',
+    (() => {
+      const p5 = { cwd: '/w', sessionId: 'w4', requests: [{}], compactions: [], results: [
+        { file: '/w/a.js', whole: false, chars: 10, lines: 5, shape: null, readFrom: 200, askedAt: 1, at: 1, eofAt: 479 },
+        { file: '/w/a.js', whole: false, chars: 10, lines: 5, shape: null, readFrom: 100, askedAt: 2, at: 2, eofAt: null }] };
+      const d5 = T.readDepths(p5, [], { sessionId: 'w4' });
+      return d5.n === 2 && d5.bySource.eof === 2 && d5.exactN === 2 && Math.abs(d5.rows[0].depth - 200 / 479) < 1e-9;
+    })());
   t('a file length from one of those rows resolves a ranged read exactly, instead of off disk today',
     (() => {
       const p3 = { cwd: '/w', sessionId: 'w2', requests: [{}], compactions: [],

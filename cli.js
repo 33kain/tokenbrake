@@ -404,7 +404,7 @@ function readsReport() {
   let capped = 0, recOrig = 0, recRew = 0, nearCeiling = 0, noLines = 0, unresolved = 0;
   let hostLines = 0, refused = 0, errored = 0, persistedSkipped = 0, files = 0;
   const sources = { ledger: 0, ledgerWhole: 0, ledgerPost: 0, numbering: 0, text: 0 };
-  const bySource = { session: 0, ledger: 0, disk: 0 };
+  const bySource = { session: 0, ledger: 0, eof: 0, disk: 0 };
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
     let p;
@@ -496,11 +496,14 @@ function readsReport() {
     + (unresolved ? ', ' + unresolved + ' unresolved and left out' : ''));
   if (depths.length) {
     console.log('    line length known from: ' + bySource.session + ' a whole-file read in the same session, '
-      + bySource.ledger + ' the ledger, ' + bySource.disk + ' the file on disk now (may have changed)');
+      + bySource.ledger + ' the ledger, ' + bySource.eof + ' a read that ran off the end of the file,'
+      + '\n      ' + bySource.disk + ' the file on disk now (may have changed -- excluded from the verdict below)');
     const d2 = { n: depths.length, rows: depths };
     const cv = (xs) => { const m = xs.reduce((a, b) => a + b, 0) / xs.length;
       return m ? Math.sqrt(xs.reduce((a, b) => a + (b - m) * (b - m), 0) / (xs.length - 1)) / m : null; };
-    const exact = depths.filter(r => r.source !== 'disk');
+    /* Exact means the length was established at the time of the read: a whole-file read in the session, a
+       ledger row the guard wrote, or a read that ran off the end. The file on disk today is none of those. */
+    const exact = depths.filter(r => r.source !== 'disk' && r.lines > 0 && r.start > 0);
     const absCV = depths.length > 1 ? cv(depths.map(r => r.start)) : null;
     const frCV = depths.length > 1 ? cv(depths.map(r => r.depth)) : null;
     const eAbs = exact.length > 1 ? cv(exact.map(r => r.start)) : null;
@@ -511,6 +514,39 @@ function readsReport() {
     console.log('    The tighter one is the shape the cap should have. readLimitLines is an absolute line count,');
     console.log('    so if the fraction is markedly tighter the knob is the wrong shape -- too tight on a short');
     console.log('    file and too loose on a long one -- and no value of it is right everywhere.');
+    /* The form question, computed only from lengths established at the time of the read. AB-TASK.md,
+       "The Read cap's form": the rule and its thresholds were committed before this ran. */
+    const rows = exact.map(r => ({ start: r.start, lines: r.lines }));
+    const front = transcript.capFrontier(rows);
+    if (front.n >= 20) {
+      const v = transcript.frontierVerdict(front);
+      console.log('\n  Which SHAPE of cap serves your reading -- over the ' + front.n + ' reads with an exact file length:');
+      console.log('    cap                    withholds   misses');
+      const line = (label, p) => console.log('    ' + label.padEnd(22)
+        + (Math.round(100 * p.withheld) + '%').padStart(8) + (Math.round(100 * p.miss) + '%').padStart(9));
+      line('no cap at all', front.none);
+      for (const p of front.absolute) line('first ' + p.param + ' lines', p);
+      for (const p of front.fractional) line('first ' + Math.round(100 * p.param) + '% of the file', p);
+      const name = (p) => !p ? 'nothing' : p.shape === 'none' ? 'no cap at all'
+        : p.shape === 'absolute' ? 'the first ' + p.param + ' lines'
+        : 'the first ' + Math.round(100 * p.param) + '% of the file';
+      const at = (p) => !p ? '' : name(p) + ' (withholds ' + Math.round(100 * p.withheld) + '%, misses '
+        + Math.round(100 * p.miss) + '%)';
+      console.log('    Safest useful cap of each shape, at a miss budget of ' + Math.round(100 * v.maxMiss) + '%:');
+      console.log('      absolute:   ' + at(v.absolute));
+      console.log('      fractional: ' + at(v.fractional));
+      console.log('    Verdict: ' + (v.verdict === 'tie'
+        ? 'a TIE -- the two shapes save within ' + Math.round(100 * v.edge) + ' points of each other at the same'
+          + '\n    safety, so nothing here argues for changing the form.'
+        : v.verdict === 'neither can be safe and useful'
+          ? 'NEITHER shape can be both safe and useful. The only cap of either shape that stays inside'
+            + '\n    the miss budget is no cap at all, so one number is the wrong form and no value fixes it.'
+          : v.verdict.toUpperCase() + ' saves more at the same safety, by '
+            + Math.round(100 * Math.abs((v.fractional ? v.fractional.withheld : 0) - (v.absolute ? v.absolute.withheld : 0)))
+            + ' points of withholding.'));
+      console.log('    Safety is held fixed and saving compared, because that is the trade a cap makes. A miss');
+      console.log('    rate on its own is beaten by any cap that withholds less, down to withholding nothing.');
+    }
     console.log('\n  Target depth as a share of the file:');
     for (const b of transcript.startHistogram(depths.map(r => Math.round(100 * r.depth)), [0, 10, 20, 30, 40, 50, 60, 80, 101])) {
       const to = b.to > 100 ? '100%' : String(b.to) + '%';

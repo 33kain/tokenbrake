@@ -232,6 +232,38 @@ function readCapIndex(ledgerRecs, sessionId) {
   return { rows, byFile, source, persisted, n: rows.length, bytes, limits, deduped, noTime };
 }
 
+/* A read that ran off the end of its file tells you exactly how long that file was.
+
+   `sed -n '375,480p'` asked for 106 lines and got 105: the file ended at line 479. A `Read` with offset and
+   limit does the same. This is exact, contemporaneous, and it was in every transcript already -- which
+   matters, because the shape question (should the cap be a line count or a fraction of the file?) needs file
+   lengths and had one exact length in forty-three, the rest read off disk today. On this repo's own
+   transcripts 40 of 163 sed ranges ran off the end.
+
+   Two ways this would lie, both excluded. A read the guard TRIMMED comes back short because the guard cut it,
+   not because the file ended -- so any result carrying the marker is refused outright. And a range starting
+   past the end returns nothing, which says only that the file is shorter than the start, not how much.
+
+   The convention: this counts delivered lines, so a file with no trailing newline reads one longer than the
+   ledger's newline count for the same file. At the sizes the cap argues over that is noise, but the two
+   numbers are not the same number. */
+function eofLength(name, input, text, marker) {
+  if (marker) return null;                       // short because the guard cut it, not because the file ended
+  const i = input || {};
+  let from = null, want = null;
+  if (name === 'Read' && i.file_path && i.offset && i.limit) { from = Number(i.offset); want = Number(i.limit); }
+  else if ((name === 'Bash' || name === 'PowerShell') && typeof i.command === 'string') {
+    const m = /sed\s+-n\s+['"]?(\d+),(\d+)p/.exec(i.command);
+    if (m) { from = Number(m[1]); want = Number(m[2]) - Number(m[1]) + 1; }
+  }
+  if (!from || !want || want < 1) return null;
+  const t = String(text || '');
+  if (t === '') return null;                     // the range began past the end: a bound, not a length
+  const got = t.replace(/\n$/, '').split('\n').length;
+  if (got >= want) return null;                  // the range filled up: only a lower bound on the length
+  return from + got - 1;
+}
+
 /* Whole-file reads the cap did NOT act on, from the ledger rather than the transcript. The guard records one
    per unbounded Read under the trigger with the size from statSync and a newline count -- so a file's real
    size and length are available for every file read whole in a session, not only for the ones capped. Before
@@ -417,6 +449,8 @@ function parseTranscript(file) {
           /* Only for a failed read, and only the head of it: the reason a read failed decides whether it is
              evidence of a large file or of nothing at all, and that cannot be recovered later. */
           text: b.is_error ? text.slice(0, 400) : undefined,
+          /* Exact file length when this read ran off the end of the file; null otherwise. */
+          eofAt: eofLength(use.name, use.input, text, /\[tokenbrake\]/.test(text)),
           tokens: Math.round(text.length / CHARS_PER_TOKEN),
           afterReq: requests.length - 1,     // it entered context after this request, before the next
           /* Two clocks, both Claude Code's own and both on this host: askedAt is when the model emitted the
@@ -807,6 +841,14 @@ function readDepths(parsed, ledgerRecs, opts) {
   const sessionId = o.sessionId || parsed.sessionId || null;
   const idx = readCapIndex(ledgerRecs, sessionId);
   const whole = wholeReadIndex(ledgerRecs, sessionId);
+  /* Lengths this session revealed by running off the end of a file. Largest sighting wins: a file that grew
+     was that long by the end, and the shorter sighting is the one that throws a deeper read away. */
+  const fromEof = new Map();
+  for (const r of parsed.results) {
+    if (!r.eofAt || !r.file) continue;
+    const key = normReadPath(r.file, parsed.cwd);
+    if (key && (!fromEof.has(key) || r.eofAt > fromEof.get(key))) fromEof.set(key, r.eofAt);
+  }
   const fromSession = new Map();
   for (const r of parsed.results) {
     if (!r.whole || !r.file) continue;
@@ -818,7 +860,7 @@ function readDepths(parsed, ledgerRecs, opts) {
     if (key && !fromSession.has(key)) fromSession.set(key, sh.lines);
   }
   const cls = classifyRangedReads(parsed, ledgerRecs, { sessionId });
-  const rows = []; const bySource = { session: 0, ledger: 0, disk: 0 };
+  const rows = []; const bySource = { session: 0, ledger: 0, eof: 0, disk: 0 };
   let unresolved = 0;
   for (const r of cls.spontaneous) {
     const key = normReadPath(r.file, parsed.cwd);
@@ -826,6 +868,7 @@ function readDepths(parsed, ledgerRecs, opts) {
     if (key && fromSession.has(key)) { lines = fromSession.get(key); source = 'session'; }
     else if (key && whole.byFile.get(key) && whole.byFile.get(key).lines) { lines = whole.byFile.get(key).lines; source = 'ledger'; }
     else if (key && idx.byFile.get(key) && idx.byFile.get(key).lines) { lines = idx.byFile.get(key).lines; source = 'ledger'; }
+    else if (key && fromEof.has(key)) { lines = fromEof.get(key); source = 'eof'; }
     else if (o.linesOnDisk && r.file) { const n = o.linesOnDisk(r.file); if (n) { lines = n; source = 'disk'; } }
     if (!lines || r.readFrom > lines) { unresolved++; continue; }
     bySource[source]++;
@@ -846,6 +889,62 @@ function readDepths(parsed, ledgerRecs, opts) {
     absCV: cv(abs), fracCV: cv(frac),
     exactN: exact.length, exactAbsCV: cv(exact.map((r) => r.start)), exactFracCV: cv(exact.map((r) => r.depth)),
     absMedian: q(abs, 0.5), fracMedian: q(frac, 0.5), fracP90: q(frac, 0.9) };
+}
+
+/* Which SHAPE of cap serves a person's reading, not which value.
+
+   An absolute cap delivers the first L lines whatever the file's length, so it withholds most of a long file
+   and nothing from a short one. A fractional cap delivers the first f of the file, so it withholds 1-f of
+   every file whatever its size. Genuinely different trades, and a coefficient of variation cannot tell them
+   apart because it measures concentration, not what a single threshold of that shape costs.
+
+   Per candidate, over reads whose file length is known exactly: how often the cap hides the target, and the
+   median share of lines it withholds. `no cap` is on the list as the anchor -- a shape that cannot beat doing
+   nothing is not a shape worth having. AB-TASK.md, "The Read cap's form". */
+function capFrontier(rows, opts) {
+  const o = opts || {};
+  const abs = o.absolute || [100, 200, 300, 500, 800, 1200];
+  const frac = o.fractional || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
+  const usable = (rows || []).filter((r) => r && r.lines > 0 && r.start > 0);
+  const med = (xs) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+  const point = (shape, param, deliveredOf) => {
+    const delivered = usable.map((r) => Math.max(0, Math.min(r.lines, deliveredOf(r))));
+    const missed = usable.filter((r, i) => r.start > delivered[i]).length;
+    return { shape, param,
+      miss: usable.length ? missed / usable.length : 0,
+      withheld: med(usable.map((r, i) => (r.lines - delivered[i]) / r.lines)) };
+  };
+  return { n: usable.length,
+    none: point('none', null, (r) => r.lines),
+    absolute: abs.map((L) => point('absolute', L, () => L)),
+    fractional: frac.map((f) => point('fractional', f, (r) => Math.floor(f * r.lines))) };
+}
+
+/* Which shape can save more at the same safety.
+
+   The first criterion here asked for no higher miss at every matched withholding level. It cannot discriminate,
+   and that was found on synthetic fixtures before it ever ran on real data: a fractional cap is all-or-nothing
+   on targets that sit at a fixed depth -- it misses everything below the depth and nothing above it -- while an
+   absolute cap degrades gradually. Two curves of different curvature almost never have one uniformly below the
+   other, so "neither" came back for data built to favour each shape in turn. An instrument that returns the
+   same answer whatever it measures is not measuring. Withdrawn, and recorded as withdrawn in AB-TASK.md.
+
+   What replaces it holds SAFETY fixed and compares SAVING, which is the trade the cap actually makes: among
+   the candidates of a shape whose miss rate is at or under `maxMiss`, the most any of them withholds. `no cap`
+   is always available at zero withholding, so a shape whose best safe candidate withholds nothing is a shape
+   that cannot be both safe and useful on this reading -- and if that is true of both, one number is the wrong
+   form and no value of either will fix it. */
+function frontierVerdict(front, opts) {
+  const o = opts || {};
+  const maxMiss = o.maxMiss == null ? 0.25 : o.maxMiss;
+  const edge = o.edge == null ? 0.10 : o.edge;
+  const best = (points) => [front.none, ...points].filter((p) => p.miss <= maxMiss)
+    .reduce((b, p) => (b == null || p.withheld > b.withheld ? p : b), null);
+  const a = best(front.absolute), f = best(front.fractional);
+  const wa = a ? a.withheld : 0, wf = f ? f.withheld : 0;
+  return { maxMiss, edge, absolute: a, fractional: f,
+    verdict: (wa === 0 && wf === 0) ? 'neither can be safe and useful'
+      : wf - wa >= edge ? 'fractional' : wa - wf >= edge ? 'absolute' : 'tie' };
 }
 
 /* What each candidate trigger would catch, and what each candidate limit would then withhold. Pure
@@ -1111,4 +1210,5 @@ function renderSummaryLine(parsed) {
 
 module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
-  unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+  unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
+  capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
