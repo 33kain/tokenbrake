@@ -515,7 +515,44 @@ ranged read of that file — which inflates the excluded count rather than the c
 that teaches the model to read a *different* file with an offset stays counted as spontaneous, so that column
 is a **lower bound** on the guard's influence. Only a hooks-off arm settles it.
 
-**Result:** _pending — the owner runs `report --caps` then `report --where` on their own machine._
+**Result — 2026-09-12, run on the owner's machine over 62 sessions on disk.**
+
+**The prediction failed, and it failed in the direction that matters.** I expected the spike diagnostic to
+fire and the spontaneous past-300 share to fall from 57% into 20–35%. Neither happened. The confound is
+**3 of 111 reads, 2.7%** — all three from one persisted spill file — and the share moved from 57% to **56%**.
+The spike test reports `too few to say` at both 300 and 80, because there was almost no echo to find.
+
+Why I got it wrong: I took round 1's firing rate — one to four caps per ON run — as the rate on real work.
+Round 1 is the benchmark, running fixtures built large on purpose. That is the exact substitution the
+workload filter in `report --where` exists to prevent, made one level up, about the ledger instead of the
+transcripts.
+
+**What `--caps` found instead, and it is the larger finding.** Twelve caps across seven sessions. **Eleven of
+the twelve are benchmark sessions.** Exactly one fired on real work: a 112 KB Claude Code spill file in a
+`contexa` session, capped at 80 of 2,011 lines, 4% delivered — and that one cap is what produced all three
+induced reads. So the model came back three times for one cap on real work, n=1 and not a measurement, but
+the mechanism in miniature.
+
+**Source-file caps on real work: zero.** Every one of the six fired inside the benchmark — five on
+`settle.js`, one on `ledger-entries.json`. `readLimitLines` governs a cap that has **never once fired on this
+owner's own work** across every session on disk. It agrees with the 40-request audit: unbounded reads there
+ran 1, 8, 15, 16, 31 and 34 KB, and the 60,000-byte trigger needs roughly double the largest of them.
+
+**The rule's verdict.** Spontaneous subset 108 reads, over the 20 needed. Hidden share by candidate:
+300 → 56%, 500 → 40%, **800 → 20%**, 1200 → 8%. The smallest L at or under 25% is **800**.
+
+The no-op clause does not bite. The two source files ever seen over the trigger ran 1,297 lines (68 KB) and
+2,570 lines (72 KB) — 53 and 28 bytes per line, so the "1,500 lines or more" I assumed when writing the rule
+was itself a guess, and wrong in both directions. At 800 those two withhold 38% and 69%. Against 300's 77%
+and 88%, the cut roughly halves while the miss rate falls from 56% to 20%.
+
+**So: 800, and it changes nothing today.** The knob is inert on this workload, which is why the choice is
+free — and why it is a prerequisite rather than an improvement. It matters only if `readMaxBytes` ever comes
+down, and 56% past line 300 is exactly why the 2026-09-07 attempt to bring it down cost +10%.
+
+**Unchecked, and it stays on the record.** One session contributes 29 of the 111 reads, 27% of the pool. No
+jackknife was run. The decision is insensitive to it today because the cap does not fire on real work at all;
+it becomes live the moment the trigger moves.
 
 ## Feature round — run 2026-09-07, Opus 5 both arms
 
