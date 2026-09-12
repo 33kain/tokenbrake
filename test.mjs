@@ -179,6 +179,21 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('status spawns the PreToolUse hook', /PreToolUse spawn test \(.*\): ok/.test(r.stdout));
   const ledgerLines = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').length;
   r = cli(['status']);
+  /* `init` copies guard.js and nothing afterwards keeps the copy in step. The project copy is pinned by this
+     suite; the user-scope copy had nothing watching it, so a guard.js change with no re-run leaves a machine
+     running an older build while its ledger is read as evidence about the current one. */
+  t('status says the installed guard matches this checkout', /guard build: matches this checkout/.test(r.stdout),
+    (r.stdout.match(/[^\n]*guard build:[^\n]*/) || [])[0]);
+  {
+    const gf = join(CFG, 'hooks', 'tokenbrake', 'guard.js');
+    const keep = readFileSync(gf, 'utf8');
+    writeFileSync(gf, keep + '\n// drift\n');
+    const drifted = cli(['status']);
+    t('status calls a stale installed guard stale, and says what it costs',
+      /guard build: STALE/.test(drifted.stdout) && /records an older guard/.test(drifted.stdout),
+      (drifted.stdout.match(/[^\n]*guard build:[^\n]*/) || [])[0]);
+    writeFileSync(gf, keep);
+  }
   t('status does not write to the ledger', readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').length === ledgerLines);
 
   r = cli(['init', '--node=/definitely/not/a/node']);

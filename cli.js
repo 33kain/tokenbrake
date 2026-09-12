@@ -125,7 +125,22 @@ function status() {
   console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
   console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
+  /* Is the INSTALLED guard the one this checkout ships? `init` copies guard.js; nothing afterwards keeps the
+     copy in step. `test.mjs` pins the project-scope copy, and the user-scope copy had nothing watching it at
+     all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its
+     ledger is read as evidence about the current one. That matters most exactly when the ledger is being
+     collected on purpose, which is what a user-scope install is for. */
+  const sha = (p2) => { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p2)).digest('hex'); } catch { return null; } };
+  const srcSha = sha(path.join(__dirname, 'guard.js'));
+  const copySha = sha(guardFile);
+  const drift = srcSha && copySha && srcSha !== copySha;
   console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
+  console.log(`  guard build: ${!copySha ? 'no copy installed'
+    : !srcSha ? 'installed, and this checkout has no guard.js to compare against'
+    : drift ? 'STALE -- the installed copy is not this checkout\'s guard.js (' + copySha.slice(0, 12) + ' vs '
+      + srcSha.slice(0, 12) + '). Re-run `' + (PROJECT ? 'node cli.js init --project' : 'node cli.js init')
+      + '`: until you do, the ledger records an older guard while the report reads it as this one.'
+    : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
   for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) for (const g of ours(ev)) for (const h of g.hooks) {
     if (!isOurs({ hooks: [h] })) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
