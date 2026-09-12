@@ -440,12 +440,13 @@ function readsReport() {
   }
   console.log('What you read whole -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
-  if (!reads.length) {
-    console.log('\n  No whole-file reads in any pooled session. readMaxBytes has nothing to act on here.');
-    printPool(pooled, skipped);
-    return;
-  }
+  /* No whole-file reads says everything about readMaxBytes and nothing about the cap's SHAPE, which is
+     answered from ranged reads alone. Bailing out of the whole report here hid the shape block from anyone who
+     reads with offsets, which is the reading the guard most wants to encourage. */
+  if (!reads.length) console.log('\n  No whole-file reads in any pooled session. readMaxBytes has nothing to act'
+    + ' on here at any value:\n  every read arrived bounded, which is the cheapest shape there is.');
   const sized = reads.filter(r => !r.ceiling);
+  if (reads.length) {
   const sizes = sized.map(r => r.bytes || 0).sort((a, b) => a - b);
   const q = (f) => sizes.length ? sizes[Math.min(sizes.length - 1, Math.floor(sizes.length * f))] : 0;
   console.log('\n  ' + reads.length + ' whole-file read(s) of ' + files + ' file(s) -- '
@@ -485,8 +486,9 @@ function readsReport() {
   /* The miss rate belongs beside the grid but not inside it: it is measured over ranged reads, a different
      population from the whole-file reads the trigger catches. Printing them in one table would invite adding
      them up. */
+  }
   const tgt = transcript.readTargets({ results: depths.map(d => ({ readFrom: d.start })) }, LIMITS);
-  if (tgt.n) {
+  if (tgt.n && reads.length) {
     console.log('\n  Chance each capped read sends the model back, by limit -- from your ranged reads, which are a');
     console.log('  DIFFERENT population from the whole-file reads above. Read it beside the grid, not added to it:');
     console.log('    ' + LIMITS.map(l => l + ': ' + Math.round(100 * tgt.past[l] / tgt.n) + '%').join('   '));
@@ -516,7 +518,7 @@ function readsReport() {
     console.log('    file and too loose on a long one -- and no value of it is right everywhere.');
     /* The form question, computed only from lengths established at the time of the read. AB-TASK.md,
        "The Read cap's form": the rule and its thresholds were committed before this ran. */
-    const rows = exact.map(r => ({ start: r.start, lines: r.lines }));
+    const rows = exact.map(r => ({ start: r.start, lines: r.lines, bpl: r.bpl }));
     const front = transcript.capFrontier(rows);
     if (front.n >= 20) {
       const v = transcript.frontierVerdict(front);
@@ -546,6 +548,21 @@ function readsReport() {
             + ' points of withholding.'));
       console.log('    Safety is held fixed and saving compared, because that is the trade a cap makes. A miss');
       console.log('    rate on its own is beaten by any cap that withholds less, down to withholding nothing.');
+      /* The same comparison priced in tokens. A share of a file's LINES weights a 200-line file like a
+         2,000-line one, and a fractional cap's extra saving lands mostly on short files -- which is cheap.
+         AB-TASK.md, "A fractional Read cap", Step A: this is the measure that decides whether the line-share
+         margin is saving worth having. */
+      const vt = transcript.frontierVerdict(front, { measure: 'tokens' });
+      console.log('\n    Priced in tokens instead of in share of lines -- ' + front.priced + ' of ' + front.n
+        + ' reads carry a\n    bytes-per-line of their own; the rest are outside this measure, never estimated into it:');
+      console.log('      absolute:   ' + (vt.absolute ? name(vt.absolute) + ' saves ' + Math.round(100 * vt.saved.absolute) + '% of these reads\' tokens' : 'nothing'));
+      console.log('      fractional: ' + (vt.fractional ? name(vt.fractional) + ' saves ' + Math.round(100 * vt.saved.fractional) + '% of these reads\' tokens' : 'nothing'));
+      console.log('      Verdict on tokens: ' + (vt.verdict === 'tie' ? 'a TIE'
+        : vt.verdict === 'neither can be safe and useful' ? 'NEITHER can be safe and useful' : vt.verdict.toUpperCase())
+        + (vt.verdict === 'fractional' || vt.verdict === 'absolute'
+          ? ', by ' + Math.round(100 * Math.abs(vt.saved.fractional - vt.saved.absolute)) + ' points' : ''));
+      if (front.priced < 20) console.log('      (under 20 reads with a bytes-per-line: no verdict on tokens, and'
+        + ' the line above says so\n      rather than reporting a shape that nothing was measured for.)');
     }
     console.log('\n  Target depth as a share of the file:');
     for (const b of transcript.startHistogram(depths.map(r => Math.round(100 * r.depth)), [0, 10, 20, 30, 40, 50, 60, 80, 101])) {

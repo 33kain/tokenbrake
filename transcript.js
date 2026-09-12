@@ -872,7 +872,11 @@ function readDepths(parsed, ledgerRecs, opts) {
     else if (o.linesOnDisk && r.file) { const n = o.linesOnDisk(r.file); if (n) { lines = n; source = 'disk'; } }
     if (!lines || r.readFrom > lines) { unresolved++; continue; }
     bySource[source]++;
-    rows.push({ file: r.file, start: r.readFrom, lines, depth: r.readFrom / lines, source });
+    /* Bytes per line for THIS file, from this read's own delivered text: N lines in C characters, with Claude
+       Code's numbering already subtracted by fileShape. Contemporaneous and specific to the file, which is the
+       point -- the figure runs 28 to 56 across the files on record, so no global number can stand in for it. */
+    const bpl = (r.shape && r.shape.lines > 0 && r.shape.bytes > 0) ? r.shape.bytes / r.shape.lines : null;
+    rows.push({ file: r.file, start: r.readFrom, lines, depth: r.readFrom / lines, source, bpl });
   }
   const cv = (xs) => {
     if (xs.length < 2) return null;
@@ -907,14 +911,24 @@ function capFrontier(rows, opts) {
   const frac = o.fractional || [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8];
   const usable = (rows || []).filter((r) => r && r.lines > 0 && r.start > 0);
   const med = (xs) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
+  /* Two ways to say what a cap costs, and they are not the same question. `withheld` is the median SHARE of a
+     file's lines, which weights a 200-line file the same as a 2,000-line one. `withheldTokens` is the share of
+     all the tokens these reads represent, which is what a bill is made of -- and it is the measure that decides
+     whether a fractional cap's extra saving on short files is saving worth having. AB-TASK.md, "A fractional
+     Read cap", Step A. Reads whose bytes-per-line could not be established are outside the token measure and
+     are counted, never estimated into it. */
+  const priced = usable.filter((r) => r.bpl > 0);
+  const totalTokens = priced.reduce((t, r) => t + (r.lines * r.bpl) / 4, 0);
   const point = (shape, param, deliveredOf) => {
     const delivered = usable.map((r) => Math.max(0, Math.min(r.lines, deliveredOf(r))));
     const missed = usable.filter((r, i) => r.start > delivered[i]).length;
+    const tok = usable.reduce((t, r, i) => t + (r.bpl > 0 ? ((r.lines - delivered[i]) * r.bpl) / 4 : 0), 0);
     return { shape, param,
       miss: usable.length ? missed / usable.length : 0,
-      withheld: med(usable.map((r, i) => (r.lines - delivered[i]) / r.lines)) };
+      withheld: med(usable.map((r, i) => (r.lines - delivered[i]) / r.lines)),
+      withheldTokens: totalTokens ? tok / totalTokens : 0 };
   };
-  return { n: usable.length,
+  return { n: usable.length, priced: priced.length, totalTokens,
     none: point('none', null, (r) => r.lines),
     absolute: abs.map((L) => point('absolute', L, () => L)),
     fractional: frac.map((f) => point('fractional', f, (r) => Math.floor(f * r.lines))) };
@@ -938,12 +952,17 @@ function frontierVerdict(front, opts) {
   const o = opts || {};
   const maxMiss = o.maxMiss == null ? 0.25 : o.maxMiss;
   const edge = o.edge == null ? 0.10 : o.edge;
+  const key = o.measure === 'tokens' ? 'withheldTokens' : 'withheld';
   const best = (points) => [front.none, ...points].filter((p) => p.miss <= maxMiss)
-    .reduce((b, p) => (b == null || p.withheld > b.withheld ? p : b), null);
+    .reduce((b, p) => (b == null || p[key] > b[key] ? p : b), null);
   const a = best(front.absolute), f = best(front.fractional);
-  const wa = a ? a.withheld : 0, wf = f ? f.withheld : 0;
-  return { maxMiss, edge, absolute: a, fractional: f,
-    verdict: (wa === 0 && wf === 0) ? 'neither can be safe and useful'
+  const wa = a ? a[key] : 0, wf = f ? f[key] : 0;
+  /* Nothing priced means nothing measured, and "neither shape can be safe and useful" is a finding -- one this
+     data cannot support. A measure with no input says so instead of reporting the shape of its own emptiness. */
+  const unmeasured = key === 'withheldTokens' && !(front.priced > 0 && front.totalTokens > 0);
+  return { maxMiss, edge, measure: key, absolute: a, fractional: f, saved: { absolute: wa, fractional: wf },
+    verdict: unmeasured ? 'no verdict'
+      : (wa === 0 && wf === 0) ? 'neither can be safe and useful'
       : wf - wa >= edge ? 'fractional' : wa - wf >= edge ? 'absolute' : 'tie' };
 }
 

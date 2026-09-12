@@ -684,6 +684,117 @@ needs 20 exact lengths before it prints at all, and no test fixture ever reached
 both. A fixture that reaches it is now in `test.mjs`; the numbers above were computed before the crash and are
 unaffected.
 
+## A fractional Read cap — pre-registered 2026-09-12, before any of it is built
+
+The form comparison said `readLimitLines` is the wrong shape: at a 25% miss budget the best absolute cap
+withholds 22% of a file and the best fractional one withholds 40%, missing slightly less. This is what that
+licenses and nothing more. **Written before a line of it exists, including the two conditions that would kill
+it.**
+
+### Step A — the token-weighted re-test, and nothing proceeds until it passes
+
+The winning statistic was the **median share of lines** withheld, which weights a 200-line file the same as a
+2,000-line one. A fractional cap cuts short files where an absolute cap does nothing, and on a short file that
+saving is small in tokens. **Part of the 18-point margin may be saving not worth having**, and that has to be
+settled before anything is designed, not after.
+
+Tokens per file are estimated per file, not globally: a ranged read delivers *N* lines in *C* characters, so
+that file's bytes per line is `C / N` — exact, contemporaneous, and specific to the file rather than an
+assumption about source code. It varies from 28 to 56 in the files already on record, which is exactly why a
+global figure will not do.
+
+Re-run the same comparison with withholding measured as **total tokens withheld across all reads** —
+`sum(lines_withheld x bytes_per_line) / 4` — instead of the median share of lines. Same 25% miss budget, same
+candidates, same 10-point margin expressed as a share of the total tokens the reads represent.
+
+- Fractional still wins by ≥10 points → proceed to Step B.
+- Tie, or absolute wins → **stop.** `readLimitLines` stays, in form and in value, and the line-share result is
+  recorded as an artifact of weighting every file equally. No fractional cap is built.
+- Fewer than 20 reads with both an exact length and a measurable bytes-per-line → no verdict, and nothing is
+  built on a verdict that does not exist.
+
+**Written expectation for Step A.** Fractional still wins, but by less — I would guess 8 to 14 points, which
+straddles the threshold. His whole-file reads have a median of 18 KB, so short files are a real share of the
+population and the correction is not negligible.
+
+### Step B — what gets built, and what deliberately does not
+
+A `readLimitFraction` setting, **default unset**, alongside `readLimitLines` rather than replacing it:
+
+- When set, a capped read delivers `floor(fraction x lineCount)` lines. The guard already counts lines when it
+  caps (`guard.js`), so nothing new is read from disk.
+- When `lineCount` is null — a file over 20 MB, where the guard skips the count — it falls back to
+  `readLimitLines`. A fraction of an unknown length is not a number.
+- Both set: the cap keeps the **smaller** of the two. A fraction is a safety floor on short files, not a licence
+  to deliver more than the absolute cap allows.
+
+**The default does not change, and that is the point.** 0.6 came from one person's 45 reads. The product now
+has `report --reads`, which tells any user which shape suits their own reading and what value of it — so the
+honest shipping decision is the capability plus the measurement, not a new default inherited from the owner's
+files. Shipping 0.6 for everyone would repeat, in a new place, the thing that put an unargued 60,000 and an
+unargued 300 in the defaults in the first place.
+
+### Step C — the A/B, and the reason it cannot be a cost A/B
+
+**The obstacle, stated before choosing an endpoint.** The Read cap has never fired on the owner's real work in
+any session where the guard was running, so his own workload cannot test this at all. The benchmark can trip
+it, but round 1 measured its OFF/OFF control band at **±30.3% on cost** — a band far too wide to resolve an
+18-point difference in withholding. **A cost endpoint cannot answer this question at any affordable number of
+sessions, and pretending otherwise is how the 2026-09-07 trigger A/B produced a number nobody can use.**
+
+So the endpoints are the two that are not swamped by that band:
+
+1. **Deterministic, free, and first:** the bench's `cap-sweep` gains a fractional arm. Per fixture and per
+   candidate, whether the cap withholds the **decisive line** — the column that already exists and already
+   distinguishes bytes withheld from answer withheld. A fractional cap that hides the decisive line more often
+   than the absolute one at equal withholding is refused here, before any session is paid for.
+2. **Session-level, and the same endpoint round 2 is pre-registered on: recovery reads.** Sign test over ≥7
+   pairs, two-sided p ≤ 0.05. **Kill condition:** if the fractional arm shows more recovery reads than the
+   absolute arm in a majority of pairs, the design is refused regardless of what it withheld. Round 1 found
+   every ON arm making more recovery reads than its OFF arm, which is the failure mode this endpoint exists to
+   catch.
+
+Cost and tokens are recorded from every run, as always, and **may not be quoted as a result** — the band
+forbids it. They are there to notice a disaster, not to declare a win.
+
+### What would make me abandon this entirely
+
+- Step A reverses or ties. Most likely outcome, and it costs nothing to find out.
+- The sweep shows the fractional cap hiding decisive lines more often at equal withholding.
+- The recovery-read kill condition fires.
+- A fourth hole turns up in this rule before it runs. Three rules today have had one, all three in the
+  product's favour, and the next one is not free — it is the reason nothing here ships on a single measurement.
+
+**Result — Step A, 2026-09-12. TIE at 9 points against a threshold of 10. STOP: nothing is built.**
+
+45 of 45 reads carried a bytes-per-line of their own, over the 20 the rule needs.
+
+| shape | safest useful cap | saves, by median share of lines | saves, by share of tokens | misses |
+|---|---|---|---|---|
+| absolute | first 800 lines | 22% | **31%** | 13% |
+| fractional | first 60% of the file | 40% | **40%** | 11% |
+
+**Exactly half the margin was a weighting artifact.** 18 points on share of lines, 9 on tokens. The mechanism is
+clean and worth keeping: a fractional cap withholds the same share of every file, so its number does not move
+between the two measures at all. An absolute cap cuts hardest on long files, which is where the tokens are, so
+its share rises from 22% to 31% once tokens are what is counted. Step A existed for precisely this, and it
+found precisely this.
+
+**9 against 10, and the rule decides.** That is one point, on a threshold I chose myself, for a design I
+proposed. It would take one sentence to call it "essentially ten" or "inside the noise". **No.** The rule was
+written before the measurement, it says tie, and a tie means `readLimitLines` stays **in form and in value** and
+no fractional cap is built. Recorded here rather than argued down.
+
+**My written expectation was half right, which is the honest way to score it.** I predicted "fractional still
+wins, by 8 to 14 points". The magnitude was right — 9 sits in that range. The verdict was wrong, because 9 is
+below the line I had already drawn. Predicting the number and missing the conclusion is not a successful
+prediction.
+
+**So the form question closes with no change, and the whole Read cap is now settled:** `readMaxBytes` 60,000
+(rule failed at every candidate), `readLimitLines` 300 with 800 decided and held for a trigger change that the
+same evidence says should not happen, and the form absolute (tie on the measure that decides). Three questions,
+three answers, none of them a change, and every one of them now has an argument where before it had a guess.
+
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
 this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`

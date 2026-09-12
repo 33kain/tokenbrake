@@ -548,8 +548,21 @@ The mechanism, and it is the opposite of what I predicted: the bimodal depth dis
 shape, not both. A 60% cap clears the 50-60% cluster while still cutting 40% off every file; an absolute cap
 loose enough to clear that cluster on a long file withholds nothing from a short one.
 
-**What it licenses:** a fractional cap designed under its **own** pre-registration and its own A/B. Nothing
-ships from the measurement itself, and `readLimitLines` does not change value.
+**And Step A of that design closed it the same day: a TIE at 9 points against a threshold of 10, so nothing
+is built.** Priced in tokens instead of in share of lines, the best absolute cap saves 31% and the best
+fractional one 40%. **Exactly half the 18-point margin was a weighting artifact** — a fractional cap withholds
+the same share of every file so its number does not move, while an absolute cap cuts hardest on the long files
+where the tokens are, lifting it from 22% to 31%.
+
+One point below a threshold I set myself, for a design I proposed. The rule was written first and it says tie,
+so `readLimitLines` stays in **form and in value** and no fractional cap exists. My prediction had the
+magnitude right (8-14) and the verdict wrong.
+
+**The Read cap is therefore settled end to end**, three questions and three answers, none of them a change:
+trigger 60,000, strength 300 (with 800 decided and held), form absolute. Every one now has an argument where
+it previously had a guess.
+
+**Superseded — what the form comparison licensed before Step A ran.**
 
 **The condition that design must answer first.** The statistic was the median share of *lines* withheld, which
 weights every file equally regardless of size — so part of the 18-point margin is saving on short files, which
