@@ -411,6 +411,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reach pools sessions and reports the share of carried tokens the trim can act on',
     /Where the trim can reach/.test(r.stdout) && /W = [\d.]+% of carried tokens/.test(r.stdout),
     (r.stdout.match(/[^\n]*W = [^\n]*/) || [])[0]);
+  t('cli: --reach names the tools from the guard\'s own sessions, not from every session',
+    /Only the \d+ session\(s\) the guard was recording in|No session had the guard/.test(r.stdout),
+    (r.stdout.match(/[^\n]*session\(s\) the guard was recording in, since[^\n]*/) || [])[0]);
   t('cli: --reach separates sessions the guard ran in from sessions it did not',
     /the guard was recording in \d+/.test(r.stdout),
     (r.stdout.match(/[^\n]*guard was recording in[^\n]*/) || [])[0]);

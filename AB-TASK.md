@@ -838,7 +838,40 @@ been shown never to fire on this owner's real work, and `--where` showed his rea
 The picture those three make is of an agent that mostly asks for what it wants. If that is right, the useful
 product is the report rather than the guard — which is a finding about tokenbrake, not about this session.
 
-**Result:** _pending — the owner runs `report --reach`._
+**Result — 2026-09-12: NO VERDICT, and the rule's own minimum is why.**
+
+Pooled over 40 non-benchmark sessions: 679 tool results, 16.4M carried tokens, 54 results inside the trim's
+reach carrying 2.71M — **16.5%**.
+
+**That number is not the measurement.** The guard was recording in only **8 of the 40 sessions**; in the other
+32 it was never installed, and there "inside the reach and untouched" says nothing about the product. Measured
+over the 8 sessions it did run in: **11 results in reach, 260,475 carried, W = 4.4%**, of which it acted on 4
+and left 7 alone — reaching **22% of the carried tokens it could have**.
+
+**8 sessions is under the rule's minimum of 10, so there is no verdict.** 4.4% sits in the band the rule calls
+"essentially absent", and it does not get to be quoted as that. The minimum exists for exactly this moment:
+the number that arrived is the one I expected, and wanting it is not a reason to accept a sample the rule
+already refused.
+
+**What it needs:** 10 sessions with the guard actually running, and 200 shell results inside them. That
+accumulates on its own, and much faster with a user-scope install — currently 8 of 40 sessions had the guard
+at all, which is a coverage fact worth knowing in its own right.
+
+**A prediction I scored against the wrong number.** I called my written expectation ("W under 10%") a failure
+on seeing 16.5%. But 16.5% pools 32 sessions the guard never ran in. Properly measured it is 4.4%, consistent
+with the expectation — and with no verdict, neither reading is a result. The retraction is of my own scoring,
+not of the expectation.
+
+**And a defect in the view, one line below the one it had just fixed.** The tool table — `sed` at 32 results
+and 77% of in-reach carried tokens — was pooled over all 40 sessions while the verdict was taken from 8. A
+tool list from sessions without the guard describes a machine that is not running this product. Now split the
+same way, with the all-session figures kept as labelled context rather than as evidence.
+
+**The question this was built to ask remains open**, and the suspicion behind it is unresolved: that 0.2.6's
+excerpt exemption — shipped on the evidence of one pair, and documented as trading "acting less for acting
+wrongly less often" — took most of the guard's remaining reach. `sed` ranges are exactly what it exempted.
+Whether that is true needs the guard running in enough sessions to see, and it is the first thing this project
+has measured that could overturn a change I made myself rather than a default someone inherited.
 
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on

@@ -469,13 +469,25 @@ function reachReport() {
       : W >= 0.20 ? 'At or above 20%: the mechanism is present and worth having on your work.'
         : 'Between 5% and 20%: present but marginal. That is the number; there is no claim to make from it.'));
 
-  if (r.tools.length) {
-    console.log('\n  What put results in the trim\'s reach -- the tooling question, not the workload one:');
+  /* Split the same way the verdict is. A tool list pooled over sessions the guard never ran in answers the
+     tooling question for a machine with no guard on it -- which is a different question, and mixing them is
+     the error this view had one line below the one it had just fixed. */
+  const toolRows = withGuard.length ? rg.tools : r.tools;
+  if (toolRows.length) {
+    console.log('\n  What put results in the trim\'s reach -- the tooling question, not the workload one.');
+    console.log('  ' + (withGuard.length
+      ? 'Only the ' + withGuard.length + ' session(s) the guard was recording in, since a tool list from sessions'
+        + '\n  without it describes a machine that is not running this product:'
+      : 'No session had the guard, so this is every pooled session and says nothing about the guard:'));
     console.log('    results      carried  tool');
-    for (const t of r.tools.slice(0, top)) {
+    for (const t of toolRows.slice(0, top)) {
       console.log('    ' + String(t.n).padStart(7) + fmt(t.carried).padStart(13) + '  ' + t.tool);
     }
-    if (r.tools.length > top) console.log('    (+ ' + (r.tools.length - top) + ' more; --top=N)');
+    if (toolRows.length > top) console.log('    (+ ' + (toolRows.length - top) + ' more; --top=N)');
+    if (withGuard.length && r.tools.length) {
+      console.log('    (across all ' + pooled.length + ' pooled session(s), guard or not, the heaviest were: '
+        + r.tools.slice(0, 3).map((t) => t.tool + ' ' + fmt(t.carried)).join(', ') + ' -- context, not evidence.)');
+    }
     console.log('    A tool that only dumps makes trimmable output; one that can slice does not, and a model');
     console.log('    that can slice will. If this list is short and every entry is a dump with no ranged mode,');
     console.log('    the reach is a property of the tools and the honest fix is to give them a ranged mode.');
