@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pricing — Nimbus</title>
+  <meta name="description" content="Simple plans for individuals and teams. Start free, then choose monthly or team pricing that grows with you." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container nav">
+      <a href="index.html" class="brand"><span class="logo">N</span> Nimbus</a>
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="pricing.html" class="active">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+      </ul>
+      <div class="nav-actions">
+        <a href="login.html" class="login-link">Log in</a>
+        <a href="login.html#signup" class="btn btn-primary">Get started</a>
+      </div>
+      <button class="nav-toggle" aria-label="Menu" aria-expanded="false">&#9776;</button>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="section center" style="padding-bottom: 0;">
+    <div class="container">
+      <span class="eyebrow">Pricing</span>
+      <h1>Plans that grow with your team</h1>
+      <p class="lead">Start free, upgrade when you're ready, and pick monthly or team pricing. Prices are per member.</p>
+      <div class="billing-toggle" role="tablist" aria-label="Billing period">
+        <button class="active" data-mode="monthly">Monthly</button>
+        <button data-mode="annual">Annual <span class="save">save ~17%</span></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Plans -->
+  <section class="section" style="padding-top: 0;">
+    <div class="container">
+      <div class="pricing-grid">
+
+        <!-- Free -->
+        <div class="price-card">
+          <div class="tier">Free</div>
+          <div class="tier-desc">For individuals and small groups getting started.</div>
+          <div class="price">
+            <span class="amount">$0</span>
+          </div>
+          <div class="price-sub">Free forever</div>
+          <a href="login.html#signup" class="btn btn-ghost">Get started</a>
+          <ul class="feat-list">
+            <li><span class="tick">✓</span> Up to 3 members</li>
+            <li><span class="tick">✓</span> 5 active projects</li>
+            <li><span class="tick">✓</span> 2 GB file storage</li>
+            <li><span class="tick">✓</span> Boards, lists, and docs</li>
+            <li><span class="tick">✓</span> Community support</li>
+          </ul>
+        </div>
+
+        <!-- Pro -->
+        <div class="price-card popular">
+          <div class="tier">Pro</div>
+          <div class="tier-desc">For growing teams that need more room and control.</div>
+          <div class="price">
+            <span class="amount" data-monthly>$12</span>
+            <span class="amount" data-annual>$10</span>
+            <span class="per" data-monthly>/ member / mo</span>
+            <span class="per" data-annual>/ member / mo</span>
+          </div>
+          <div class="price-sub" data-monthly>Billed monthly</div>
+          <div class="price-sub" data-annual>Billed annually</div>
+          <a href="login.html#signup" class="btn btn-primary">Start free trial</a>
+          <ul class="feat-list">
+            <li><span class="tick">✓</span> Up to 50 members</li>
+            <li><span class="tick">✓</span> Unlimited projects</li>
+            <li><span class="tick">✓</span> 100 GB file storage</li>
+            <li><span class="tick">✓</span> Timelines and dashboards</li>
+            <li><span class="tick">✓</span> Integrations</li>
+            <li><span class="tick">✓</span> Priority email support</li>
+          </ul>
+        </div>
+
+        <!-- Team -->
+        <div class="price-card">
+          <div class="tier">Team</div>
+          <div class="tier-desc">For organizations running many teams together.</div>
+          <div class="price">
+            <span class="amount" data-monthly>$9</span>
+            <span class="amount" data-annual>$7</span>
+            <span class="per" data-monthly>/ member / mo</span>
+            <span class="per" data-annual>/ member / mo</span>
+          </div>
+          <div class="price-sub" data-monthly>Billed monthly · 5 members minimum</div>
+          <div class="price-sub" data-annual>Billed annually · 5 members minimum</div>
+          <a href="login.html#signup" class="btn btn-ghost">Choose Team</a>
+          <ul class="feat-list">
+            <li><span class="tick">✓</span> Everything in Pro</li>
+            <li><span class="tick">✓</span> Unlimited members</li>
+            <li><span class="tick">✓</span> 1 TB file storage</li>
+            <li><span class="tick">✓</span> Admin console</li>
+            <li><span class="tick">✓</span> Roles &amp; permissions</li>
+            <li><span class="tick">✓</span> Single sign-on (SSO)</li>
+          </ul>
+        </div>
+
+        <!-- Enterprise -->
+        <div class="price-card">
+          <div class="tier">Enterprise</div>
+          <div class="tier-desc">For large organizations with advanced needs.</div>
+          <div class="price">
+            <span class="amount" style="font-size:1.9rem;">Custom</span>
+          </div>
+          <div class="price-sub">Tailored to your organization</div>
+          <a href="login.html#signup" class="btn btn-ghost">Contact sales</a>
+          <ul class="feat-list">
+            <li><span class="tick">✓</span> Everything in Team</li>
+            <li><span class="tick">✓</span> SAML SSO &amp; SCIM</li>
+            <li><span class="tick">✓</span> Unlimited storage</li>
+            <li><span class="tick">✓</span> Advanced security controls</li>
+            <li><span class="tick">✓</span> Dedicated success manager</li>
+            <li><span class="tick">✓</span> 24/7 priority support</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- Comparison -->
+  <section class="section section-soft">
+    <div class="container">
+      <div class="section-head">
+        <h2>Compare plans</h2>
+        <p>A closer look at what's included in each plan.</p>
+      </div>
+      <div class="compare-wrap">
+        <table class="compare">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Free</th>
+              <th>Pro</th>
+              <th>Team</th>
+              <th>Enterprise</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Members included</td><td>3</td><td>Up to 50</td><td>Unlimited</td><td>Unlimited</td></tr>
+            <tr><td>Active projects</td><td>5</td><td>Unlimited</td><td>Unlimited</td><td>Unlimited</td></tr>
+            <tr><td>File storage</td><td>2 GB</td><td>100 GB</td><td>1 TB</td><td>Unlimited</td></tr>
+            <tr><td>Boards, lists &amp; docs</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Timelines &amp; dashboards</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Integrations</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Admin console</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Roles &amp; permissions</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>Single sign-on (SSO)</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>SAML &amp; SCIM</td><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="yes">✓</td></tr>
+            <tr><td>Support</td><td>Community</td><td>Priority email</td><td>Priority email</td><td>24/7 dedicated</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="section" id="faq">
+    <div class="container">
+      <div class="section-head">
+        <h2>Pricing questions</h2>
+        <p>A few things people often ask about our plans.</p>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary>Is the Free plan really free?</summary>
+          <p>Yes. The Free plan supports up to 3 members and 5 active projects at no cost, and there's no time limit.</p>
+        </details>
+        <details>
+          <summary>How does per-member pricing work?</summary>
+          <p>Paid plans are billed for each member in your workspace. You can add or remove members at any time, and your bill adjusts accordingly.</p>
+        </details>
+        <details>
+          <summary>What's the difference between Pro and Team?</summary>
+          <p>Pro is built for a single growing team with up to 50 members. Team adds an admin console, roles and permissions, single sign-on, and more storage for organizations running many teams.</p>
+        </details>
+        <details>
+          <summary>Can I switch between monthly and annual billing?</summary>
+          <p>Yes. You can move between monthly and annual billing whenever you like. Annual billing is offered at a lower per-member rate.</p>
+        </details>
+        <details>
+          <summary>Do you offer plans for larger organizations?</summary>
+          <p>Yes. The Enterprise plan includes SAML SSO, SCIM provisioning, advanced security controls, and a dedicated success manager. Contact sales to build a plan for your organization.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section section-soft">
+    <div class="container">
+      <div class="cta-band">
+        <h2>Start free today</h2>
+        <p>Create a workspace in minutes and upgrade whenever your team is ready.</p>
+        <a href="login.html#signup" class="btn btn-light btn-lg">Get started free</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a href="index.html" class="brand"><span class="logo">N</span> Nimbus</a>
+          <p>One workspace for your team's projects, documents, and daily updates.</p>
+        </div>
+        <div class="footer-col">
+          <h4>Product</h4>
+          <ul>
+            <li><a href="features.html">Features</a></li>
+            <li><a href="pricing.html">Pricing</a></li>
+            <li><a href="login.html">Log in</a></li>
+            <li><a href="login.html#signup">Get started</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Company</h4>
+          <ul>
+            <li><a href="about.html">About</a></li>
+            <li><a href="about.html#values">Values</a></li>
+            <li><a href="about.html#team">Team</a></li>
+          </ul>
+        </div>
+        <div class="footer-col">
+          <h4>Resources</h4>
+          <ul>
+            <li><a href="features.html">Documentation</a></li>
+            <li><a href="pricing.html#faq">FAQ</a></li>
+            <li><a href="index.html">Status</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© 2026 Nimbus. A demo marketing site.</span>
+        <div class="social">
+          <a href="index.html">Community</a>
+          <a href="index.html">Changelog</a>
+          <a href="index.html">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script src="main.js"></script>
+</body>
+</html>

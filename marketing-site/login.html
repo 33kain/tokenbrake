@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Log in or sign up — Nimbus</title>
+  <meta name="description" content="Log in to Nimbus or create a free workspace for your team." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container nav">
+      <a href="index.html" class="brand"><span class="logo">N</span> Nimbus</a>
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+      </ul>
+      <div class="nav-actions">
+        <a href="index.html" class="login-link">Back to site</a>
+      </div>
+      <button class="nav-toggle" aria-label="Menu" aria-expanded="false">&#9776;</button>
+    </div>
+  </header>
+
+  <div class="auth-wrap">
+
+    <!-- Aside -->
+    <aside class="auth-aside">
+      <a href="index.html" class="brand" style="color:#fff; margin-bottom: 28px;"><span class="logo">N</span> Nimbus</a>
+      <h2>Welcome to your team's workspace</h2>
+      <p>Bring projects, documents, and updates together in one calm place.</p>
+      <ul class="check-list">
+        <li><span class="tick">✓</span> Free plan for up to 3 members</li>
+        <li><span class="tick">✓</span> Set up your first project in minutes</li>
+        <li><span class="tick">✓</span> Invite your team and start collaborating</li>
+      </ul>
+    </aside>
+
+    <!-- Main -->
+    <main class="auth-main">
+      <div class="auth-card">
+
+        <div class="auth-tabs" role="tablist">
+          <button class="active" data-pane="login">Log in</button>
+          <button data-pane="signup" id="tab-signup">Sign up</button>
+        </div>
+
+        <!-- Login pane -->
+        <div id="pane-login">
+          <h2 style="font-size:1.5rem;">Log in to Nimbus</h2>
+          <p style="font-size:0.95rem;">Welcome back. Enter your details to continue.</p>
+          <form data-demo novalidate>
+            <div class="field">
+              <label for="login-email">Work email</label>
+              <input id="login-email" type="email" placeholder="you@company.com" autocomplete="email" />
+            </div>
+            <div class="field">
+              <label for="login-password">Password</label>
+              <input id="login-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+            </div>
+            <div class="auth-row">
+              <label><input type="checkbox" /> Remember me</label>
+              <a href="login.html">Forgot password?</a>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Log in</button>
+          </form>
+          <div class="divider">or continue with</div>
+          <div class="social-row">
+            <a href="login.html" class="btn btn-ghost">Google</a>
+            <a href="login.html" class="btn btn-ghost">Microsoft</a>
+          </div>
+          <p class="hint">New to Nimbus? <a href="#signup" id="to-signup">Create an account</a></p>
+        </div>
+
+        <!-- Signup pane -->
+        <div id="pane-signup" hidden>
+          <h2 style="font-size:1.5rem;">Create your workspace</h2>
+          <p style="font-size:0.95rem;">Start free with up to 3 members. No credit card required.</p>
+          <form data-demo novalidate>
+            <div class="field">
+              <label for="signup-name">Full name</label>
+              <input id="signup-name" type="text" placeholder="Ada Lovelace" autocomplete="name" />
+            </div>
+            <div class="field">
+              <label for="signup-email">Work email</label>
+              <input id="signup-email" type="email" placeholder="you@company.com" autocomplete="email" />
+            </div>
+            <div class="field">
+              <label for="signup-workspace">Workspace name</label>
+              <input id="signup-workspace" type="text" placeholder="Acme Team" />
+            </div>
+            <div class="field">
+              <label for="signup-password">Password</label>
+              <input id="signup-password" type="password" placeholder="Create a password" autocomplete="new-password" />
+            </div>
+            <div class="auth-row">
+              <label><input type="checkbox" /> I agree to the Terms &amp; Privacy Policy</label>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Create free workspace</button>
+          </form>
+          <div class="divider">or sign up with</div>
+          <div class="social-row">
+            <a href="login.html" class="btn btn-ghost">Google</a>
+            <a href="login.html" class="btn btn-ghost">Microsoft</a>
+          </div>
+          <p class="hint">Already have an account? <a href="#login" id="to-login">Log in</a></p>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script src="main.js"></script>
+  <script>
+    // Open the signup pane when arriving via #signup, and wire the in-page links.
+    (function () {
+      var tabs = document.querySelector(".auth-tabs");
+      function show(pane) {
+        tabs.querySelectorAll("button").forEach(function (b) {
+          b.classList.toggle("active", b.dataset.pane === pane);
+        });
+        document.getElementById("pane-login").hidden = pane !== "login";
+        document.getElementById("pane-signup").hidden = pane !== "signup";
+      }
+      if (location.hash === "#signup") show("signup");
+      var toSignup = document.getElementById("to-signup");
+      var toLogin = document.getElementById("to-login");
+      if (toSignup) toSignup.addEventListener("click", function (e) { e.preventDefault(); show("signup"); });
+      if (toLogin) toLogin.addEventListener("click", function (e) { e.preventDefault(); show("login"); });
+    })();
+  </script>
+</body>
+</html>
