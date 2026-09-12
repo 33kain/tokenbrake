@@ -594,6 +594,48 @@ statistic should be the decision-relevant one rather than a spread: for each can
 rate against the median withholding, and then which shape's frontier dominates. That comparison is exact
 arithmetic over these same 45 reads and costs nothing -- but it must be written down before it is computed.
 
+## The Read cap's form — pre-registered 2026-09-12, before the frontier is computed
+
+The spread rule licensed nothing and named the reason it could not: a coefficient of variation says how
+concentrated a distribution is, which is only a proxy for what actually matters — whether **one number of that
+shape** can keep the model's targets without withholding so little that the cap does nothing. This is the
+decision-relevant comparison, over the same 45 reads whose file length is known exactly. It is arithmetic and
+costs nothing. Written down first because the thresholds are the whole argument.
+
+**The two shapes.** An **absolute** cap delivers the first `L` lines whatever the file's length — so it
+withholds most of a long file and nothing at all from a short one. A **fractional** cap delivers the first
+`f` of the file — so it withholds `1 − f` of every file, the same share regardless of size. They are genuinely
+different trades, not two spellings of one.
+
+**Computed per candidate, over each read's (start line, file length):**
+
+- **miss rate** — the share of reads whose target sits past what the cap delivers. Absolute `L`: hidden when
+  `start > L`. Fractional `f`: hidden when `start > floor(f × lines)`.
+- **withholding** — the median over those same reads of `(lines − delivered) / lines`.
+
+Candidates: `L ∈ {100, 200, 300, 500, 800, 1200}` and `f ∈ {0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}`, plus
+**no cap at all** (miss 0, withholding 0) as the anchor, because a shape that cannot beat doing nothing is not
+a shape worth having.
+
+**The rule.** One shape **dominates** the other if, at every withholding level the other reaches — matched to
+the nearest candidate within **5 percentage points** — its miss rate is **no higher**, and is **lower by at
+least 10 percentage points at one or more** of them.
+
+- Fractional dominates → `readLimitLines` is the wrong **form**; a fractional cap gets designed under its own
+  pre-registration and its own A/B. Not today, and not as a value change.
+- Absolute dominates → the current form is right, and this is the first evidence for it in the project.
+- **Neither dominates** → one number is not the right form for this workload. Record it and stop tuning the
+  shape; the next idea has to be something other than a single threshold.
+
+Fewer than **3** matched withholding levels, or fewer than **20** reads with an exact length: no verdict.
+
+**Written expectation.** Neither dominates. Target depth is bimodal — 23 of 50 reads in the first 10% of a file
+and 15 at 50-60% — so any single threshold that keeps the shallow group cheaply must miss the middle group, in
+either shape. If that is right, the answer to "absolute or fractional" is "neither, and the question was
+wrong", which is a more useful result than picking one.
+
+**Result:** _pending — computed in the same session, after this section was committed._
+
 **And a discrepancy that outranks the knob.** `--reads` finds **2 whole-file reads over 60,000 bytes** on real
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
 this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`
