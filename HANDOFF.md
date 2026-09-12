@@ -709,15 +709,46 @@ back, so the trim's saving survives.
 - If the trigger is ever revisited, the untested shape is a session that reads a 40 KB file **once and moves
   on**. The 2026-09-07 A/B's task said "read in full", which forbids the saving by construction.
 
+## Decided 2026-09-12 — the bench stays private, and the table changes its source
+
+**`33kain/tokenbrake-bench` stays private.** The question is closed; it is not revisited without a reason
+written down here first. Nothing depends on it: `AB-TASK.md` carries every pre-registration and every number
+in this repository, and the links into the bench are for the owner, not for a reader. A claim that cites the
+bench must therefore stand on what is quoted here, because nobody else can open the source -- which is a cost
+of the decision and is accepted, not argued away.
+
+**The Saturday table's source changes from `33kain/contexa` branches to `report --all` on the owner's own
+machine.** Step 1 below -- fetch every `claude/…` branch, copy each `ab-results/real/*.txt`, dedupe by name --
+was written when the guard was installed per project and a session's report had to be committed to be kept. It
+is now installed at user scope and records in every session, so the same columns come out of the transcripts
+directly. That removes three of the four defects the 2026-09-10 inventory found, by construction rather than by
+care: a session cannot enter three times as three snapshots, an A/B arm is not sitting in the same folder as
+ordinary work, and everything collected was written by the current report.
+
+What does **not** change: the minimum. No median is printed under eight sessions, and the first line of the
+table says how many sessions it rests on. Today the owner's disk holds 40 transcripts with the guard recording
+in **8** of them, so the table is short by the same thing the reach verdict is short by -- sessions, not work.
+Both cross their minimum on their own as he works, and neither is a task until then.
+
+Two notes that survive the change of source. The files under `ab-results/real/` all predate 0.2.3 and describe
+versions that no longer ship; if any of them is used at all, the post says so rather than letting the reader
+assume otherwise. And a report prices a session as it stood when it ran, so any snapshot taken mid-session is
+short of that session's end -- which is now avoidable, since `report --all` reads a finished session rather
+than a committed snapshot of a running one.
+
 ## Then — Saturday 2026-09-13, the distribution table and the post
 
-Still open, unchanged, and now second in line behind the Read cap above. Note one thing round 1 does not
-fix: every `ab-results/real/` file on record predates 0.2.3, so the table describes versions that no longer
-ship. Say so in the post rather than letting the reader assume otherwise. Nothing to build before then. The task is collection and one table, then publishing. Steps:
+Still open, and its **source changed on 2026-09-12** -- see the section directly above before following step 1,
+which is kept only as the record of how collection worked before the guard was installed at user scope. Note one
+thing round 1 does not fix: every `ab-results/real/` file on record predates 0.2.3, so the table describes
+versions that no longer ship. Say so in the post rather than letting the reader assume otherwise. Nothing to
+build before then. The task is collection and one table, then publishing. Steps:
 
-1. In a checkout of `33kain/contexa`, run the loop in `ab-results/real/README.md` (fetch every `claude/…` branch,
-   copy each `ab-results/real/*.txt`, dedupe by name). Expect one file per session since 2026-09-06; the writing
-   session's own file is `2026-09-06-ced42a1a.txt` and a second one dated 09-09.
+1. **Superseded -- the source is now `report --all` on the owner's machine, not these branches.** Kept as the
+   record of how collection worked before user-scope install existed: in a checkout of `33kain/contexa`, run
+   the loop in `ab-results/real/README.md` (fetch every `claude/…` branch, copy each `ab-results/real/*.txt`,
+   dedupe by name). Expect one file per session since 2026-09-06; the writing session's own file is
+   `2026-09-06-ced42a1a.txt` and a second one dated 09-09.
 2. Per file, read off: requests; "Tool results entered ≈ N"; "carried through later requests ≈ N"; "tokenbrake
    trimmed N of them: ≈ N tokens kept out, ≈ N token-reads not carried" (files from before 0.2.2's report may
    over-credit, see the Windows section of `AB-TASK.md`; note which version wrote each); "Under the trim threshold"
