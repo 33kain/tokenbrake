@@ -551,7 +551,24 @@ middle", which one cap value cannot serve.
 work; `--caps` finds **0** caps on real work from either path. Identical evidence supports "the cap is inert on
 this workload" and "the cap is not running on this workload", and those are opposite conclusions. `--reads`
 now separates them from the ledger: a session with no ledger row never had the guard; a session the guard was
-recording in, whose over-trigger read still went through, is a defect. Unresolved until that line is read.
+recording in, whose over-trigger read still went through, is a defect.
+
+**Resolved the same day: not a defect.** Both reads sit in sessions with **no ledger row at all** (`460d9673`,
+`3c9cde47`) -- the guard was not running there and the cap never had a chance. So the zero is genuine and the
+"inert, not broken" reading is the right one.
+
+It also sharpens the finding past where the rule needed it. Every read over 60,000 bytes is in a session
+without the guard, so across the **11 sessions where the guard was running, not one whole-file read reached the
+trigger.** The cap is not rarely useful on this workload; in the sessions where it runs it is never reached.
+
+Two consequences worth carrying:
+
+- A paid test of the trigger **cannot use this owner's own workload as its scenario**, because his workload with
+  the guard on never trips it. Any such test is measuring a task constructed to trip it, which is what the
+  2026-09-07 A/B did and is the weakness already on its record.
+- 2 of 13 real sessions ran without the guard at all. That is a coverage gap rather than a tuning question:
+  project-scope installs only cover the repo that carries them, and `tokenbrake status` says what is installed
+  where.
 
 ## The Read cap's strength — pre-registered 2026-09-12, before the numbers
 

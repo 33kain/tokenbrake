@@ -92,7 +92,10 @@
   ids, counted apart.
   It exists because the owner's own numbers disagreed: 2 whole-file reads over 60,000 bytes on real work, and
   0 caps on real work from either path. Every conclusion drawn about this feature so far assumed the first
-  reading without checking the second.
+  reading without checking the second. **Checked: not a defect** — both reads are in sessions with no ledger
+  row at all, so the guard was not running there. And the check paid for itself immediately, because it sharpens
+  the result: every read over the trigger is in a guard-less session, so in the 11 sessions where the guard
+  *was* running, **not one whole-file read reached 60,000.**
 
 - **`report` prints ASCII.** Its output used typographic characters -- an ellipsis, a right arrow, em dashes --
   which a Windows console renders as `ΓÇª` and `ΓåÆ`. The owner's daily surface has been mojibake since the

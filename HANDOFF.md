@@ -545,12 +545,21 @@ other 42 lengths came off disk today and a file may have changed since. `report 
 a whole-file read in the same session first, and those are rare in his sessions. The question reopens on its
 own as more sessions accumulate — no work needed, just time.
 
-**The open item, and it outranks both knobs.** `--reads` finds 2 whole-file reads over 60,000 bytes on real
-work and `--caps` finds 0 caps on real work from either path. That is the same evidence for "the cap is inert
-on this workload" and for "the cap is not running on this workload" — opposite conclusions, and every
-statement made about this feature so far assumed the first. `--reads` now separates them from the ledger and
-prints the session ids. **Read that line first next session.** If the guard was recording in those sessions
-and the read still went through unbounded, it is a defect, not a setting.
+**The discrepancy that outranked both knobs, and how it closed.** `--reads` found 2 whole-file reads over
+60,000 bytes on real work while `--caps` found 0 caps from either path — the same evidence for "the cap is
+inert on this workload" and for "the cap is not running on this workload", which are opposite conclusions.
+`--reads` separates them from the ledger, and the answer is **not a defect**: both reads are in sessions with
+no ledger row at all, so the guard was not running there.
+
+**Which sharpens the result past where the rule needed it.** Every read over the trigger is in a guard-less
+session, so across the **11 sessions where the guard was running, not one whole-file read reached 60,000.** The
+Read cap is not rarely useful on this workload; where it runs it is never reached. Two things follow:
+
+- A paid test of the trigger **cannot use this owner's workload as its scenario** — with the guard on, that
+  workload never trips it. Any such test measures a task built to trip it, which is the weakness already on the
+  2026-09-07 A/B's record.
+- 2 of 13 real sessions ran with no guard at all. A coverage gap, not a tuning question: project-scope installs
+  cover only the repo carrying them, and `tokenbrake status` says what is installed where.
 
 ## Then — round 2 on CI logs, and the Saturday table
 
