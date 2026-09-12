@@ -317,6 +317,18 @@ function handlePost(input, cfg) {
   emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: updated } });
 }
 
+/* Lines in a file, by counting newline bytes -- the ledger's `lines` convention throughout, so a file with no
+   trailing newline reads one short. Skipped above 20 MB rather than reading that much to count. */
+function countLines(fp, size) {
+  if (size > 20 * 1024 * 1024) return null;
+  try {
+    const buf = fs.readFileSync(fp);
+    let n = 0;
+    for (let i = 0; i < buf.length; i++) if (buf[i] === 10) n++;
+    return n;
+  } catch { return null; }
+}
+
 function handleReadPre(input, cfg) {
   const ti = input.tool_input || {};
   const fp = ti.file_path;
@@ -327,13 +339,21 @@ function handleReadPre(input, cfg) {
   try { st = fs.statSync(fp); } catch { return; }
   if (!st.isFile()) return;
   const persisted = PERSISTED.test(fp) && st.size > cfg.maxChars;
-  if (!persisted && st.size <= cfg.readMaxBytes) return;
-  const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;
-
-  let lineCount = null;
-  if (st.size <= 20 * 1024 * 1024) {
-    try { const buf = fs.readFileSync(fp); lineCount = 0; for (let i = 0; i < buf.length; i++) if (buf[i] === 10) lineCount++; } catch { lineCount = null; }
+  /* A whole-file read the cap did NOT act on is still worth recording, and until now nothing recorded it.
+     Without it, `report --reads` had to infer every file's size from the delivered text -- which Claude Code
+     line-numbers, so every file came out 5-6% large and the long ones worse -- and `report --where` could
+     resolve a file's length for only one ranged read in forty-three, leaving the question of whether the cap
+     should be a line count or a fraction of the file unanswerable. statSync has already run here, so the size
+     is free; the line count costs one read of a file that is under the trigger by definition.
+     This changes no decision the guard makes and alters no output: it writes a ledger row and returns, exactly
+     as before. Its value is that the trigger's own evidence stops being an inference. */
+  if (!persisted && st.size <= cfg.readMaxBytes) {
+    if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
+      bytes: st.size, lines: countLines(fp, st.size) });
+    return;
   }
+  const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;
+  const lineCount = countLines(fp, st.size);
 
   log({ ev: 'read-cap', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, limit, persisted });
 

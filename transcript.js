@@ -232,6 +232,29 @@ function readCapIndex(ledgerRecs, sessionId) {
   return { rows, byFile, source, persisted, n: rows.length, bytes, limits, deduped, noTime };
 }
 
+/* Whole-file reads the cap did NOT act on, from the ledger rather than the transcript. The guard records one
+   per unbounded Read under the trigger with the size from statSync and a newline count -- so a file's real
+   size and length are available for every file read whole in a session, not only for the ones capped. Before
+   this the only exact sizes came from cap rows, which on real work meant almost none: sizes had to be inferred
+   from the delivered text and file lengths read off disk today, which is why the question of whether the cap
+   should be a line count or a fraction of the file could not be answered. */
+function wholeReadIndex(ledgerRecs, sessionId) {
+  const byFile = new Map();
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'read-whole') continue;
+    if (sessionId && r.session && r.session !== sessionId) continue;
+    const key = normReadPath(r.what);
+    if (!key) continue;
+    const e = byFile.get(key);
+    const bytes = Number(r.bytes) || 0;
+    /* The largest sighting wins: a file that grew during the session was that long by the end, and a length
+       shorter than a read's own start line is the one that would be thrown away as unresolvable. */
+    if (!e || bytes > e.bytes) byFile.set(key, { bytes, lines: r.lines == null ? null : Number(r.lines), what: r.what, n: (e ? e.n : 0) + 1 });
+    else e.n++;
+  }
+  return { byFile, n: byFile.size };
+}
+
 /* Split this session's ranged reads into the ones the cap provoked and the ones it did not.
 
    Why this exists. A capped Read delivers lines 1..limit and its additionalContext tells the model, in
@@ -686,6 +709,7 @@ function readCapFiles(ledgerRecs, sessionId) {
 function unboundedReads(parsed, ledgerRecs, opts) {
   const o = opts || {};
   const idx = readCapIndex(ledgerRecs, o.sessionId || parsed.sessionId || null);
+  const whole = wholeReadIndex(ledgerRecs, o.sessionId || parsed.sessionId || null);
   const reads = [];
   const postByIdChars = new Map();
   for (const r of ledgerRecs || []) {
@@ -714,6 +738,9 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     }
     let sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
     let source = sh.numbered ? 'numbering' : 'text';
+    /* The guard stat'd this file at the moment of the read. That beats anything the delivered text can say. */
+    const wr = key ? whole.byFile.get(key) : null;
+    if (wr && wr.bytes) { sh = { bytes: wr.bytes, lines: wr.lines, numbered: false, from: null, to: null }; source = 'ledger-whole'; }
     /* The same correction the Read cap needs, for the other path. A `cat` the guard capped as an excerpt
        delivered only readLimitLines lines and says so in its marker; its ledger `post` row carries `chars`,
        the size BEFORE the cap, which for a cat is the file itself. Without this a capped cat is sized at its
@@ -751,6 +778,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     refused: reads.filter((r) => r.ceiling === 'refused').length,
     errored: reads.filter((r) => r.ceiling === 'errored').length,
     sources: { ledger: reads.filter((r) => r.source === 'ledger').length,
+      ledgerWhole: reads.filter((r) => r.source === 'ledger-whole').length,
       ledgerPost: reads.filter((r) => r.source === 'ledger-post').length,
       numbering: reads.filter((r) => r.source === 'numbering').length,
       text: reads.filter((r) => r.source === 'text').length },
@@ -778,6 +806,7 @@ function readDepths(parsed, ledgerRecs, opts) {
   const o = opts || {};
   const sessionId = o.sessionId || parsed.sessionId || null;
   const idx = readCapIndex(ledgerRecs, sessionId);
+  const whole = wholeReadIndex(ledgerRecs, sessionId);
   const fromSession = new Map();
   for (const r of parsed.results) {
     if (!r.whole || !r.file) continue;
@@ -795,6 +824,7 @@ function readDepths(parsed, ledgerRecs, opts) {
     const key = normReadPath(r.file, parsed.cwd);
     let lines = null, source = null;
     if (key && fromSession.has(key)) { lines = fromSession.get(key); source = 'session'; }
+    else if (key && whole.byFile.get(key) && whole.byFile.get(key).lines) { lines = whole.byFile.get(key).lines; source = 'ledger'; }
     else if (key && idx.byFile.get(key) && idx.byFile.get(key).lines) { lines = idx.byFile.get(key).lines; source = 'ledger'; }
     else if (o.linesOnDisk && r.file) { const n = o.linesOnDisk(r.file); if (n) { lines = n; source = 'disk'; } }
     if (!lines || r.readFrom > lines) { unresolved++; continue; }
@@ -1081,4 +1111,4 @@ function renderSummaryLine(parsed) {
 
 module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
-  unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+  unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

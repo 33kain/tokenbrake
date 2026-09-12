@@ -543,7 +543,9 @@ cap's trigger — pre-registered 2026-09-12".
 count or a fraction of the file needs 20 reads whose file length is known exactly; there is 1, because the
 other 42 lengths came off disk today and a file may have changed since. `report --reads` resolves lengths from
 a whole-file read in the same session first, and those are rare in his sessions. The question reopens on its
-own as more sessions accumulate — no work needed, just time.
+own as more sessions accumulate, and 0.2.7 makes that happen faster: the guard now writes a `read-whole` ledger
+row for every unbounded Read it does *not* cap, with the statSync size and a newline count, so every file read
+whole in a session has an exact length on record instead of one read in forty-three. Nothing to do but collect.
 
 **The discrepancy that outranked both knobs, and how it closed.** `--reads` found 2 whole-file reads over
 60,000 bytes on real work while `--caps` found 0 caps from either path — the same evidence for "the cap is
