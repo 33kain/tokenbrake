@@ -44,13 +44,35 @@ const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/
    passes resp through" is not an error. Without this, a suite whose test names mention errors fills the
    keepErrorLines budget with green lines and the real FAIL further down never makes the cut. */
 const PASS = /^\s*(?:ok|pass(?:ed)?|✓|✔|√)\b/i;
-/* A shell command that only prints one file: cat, sed -n with a range, head, tail, with no pipe. That is a read,
-   the same act as the Read tool, and the guard leaves a Read whole up to readMaxBytes. Until 0.2.3 it trimmed
-   the same bytes to head, tail and error-looking lines when they came through sed, which for source is the
-   wrong three things to keep, and a model that met that once sized every read after it to stay under maxChars:
-   eighty-line sed ranges, ninety-one requests, twice the bill (AB-TASK.md, "Three arms"). Same shape as
-   readKey in transcript.js; keep them together. */
-const EXCERPT = /^\s*(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?|tail(?:\s+-n?\s*[0-9]+)?)\s+(['"]?)[^|;&<>'"\s]+\1\s*$/;
+/* A shell command whose whole output is one file's contents: cat, sed -n with a range, head, tail, or a grep
+   of a single named file — with no pipe and no redirect. That is a read, the same act as the Read tool, and
+   the guard leaves a Read whole up to readMaxBytes. Until 0.2.3 it trimmed the same bytes to head, tail and
+   error-looking lines when they came through sed, which for source is the wrong three things to keep, and a
+   model that met that once sized every read after it to stay under maxChars: eighty-line sed ranges,
+   ninety-one requests, twice the bill (AB-TASK.md, "Three arms"). Same shape as readKey in transcript.js;
+   keep them together.
+
+   Three things the first version got wrong, all found in one measured session (AB-TASK.md, pair 5):
+
+   - **A `cd … &&` prefix lost the exemption.** Models working in a fixed directory write
+     `cd "…/repo" && sed -n '502,535p' data.ndjson`, and that 34-line range — the model had already narrowed
+     it — was shredded to head, tail and error lines. A `cd` adds no output, so it cannot change what the
+     command prints.
+   - **A label before or after lost it too.** `echo '=== settle.js ==='; sed -n '320,345p' settle.js` and
+     `… && echo done` are the same read with one line of chrome around it. Models label their output
+     constantly.
+   - **A quoted path with a space lost it.** `cat "Settlement Batch.csv"` — and Windows paths have spaces.
+
+   Pipes and redirects stay excluded on purpose: `sed -n '1,50p' f | grep x` no longer prints the file, it
+   prints a filter over it, and trimming that is fair game. Recursive and list-only greps are excluded for
+   the same reason — they are a search across files, not one file's contents. */
+const PATH_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+const LABEL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
+const READ_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![rRlL])[a-zA-Z]+)*\s+${PATH_})\s+${PATH_}`;
+const EXCERPT = new RegExp(
+  String.raw`^\s*(?:cd\s+${PATH_}\s*&&\s*)?(?:${LABEL_}\s*(?:&&|;)\s*)?${READ_}` +
+  String.raw`(?:\s*(?:&&|;)\s*${LABEL_})*\s*$`);
 
 const ERR = /\b(error|err!|fail(ed|ure|ing)?|exception|traceback|panic|fatal|warn(ing)?|not found|cannot|denied|refused)\b|✗|✖/i;
 

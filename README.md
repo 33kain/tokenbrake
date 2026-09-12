@@ -105,8 +105,23 @@ that is, what the trims took off this session's bill at list price, what is left
 is worth — and what the model's return trips for trimmed content cost you. The benchmark found the saving
 lives in *carried* tokens rather than in the size of any one result, and that the number of trims does not
 predict it: two trims produced a 39% paired difference where seven produced 12%. On the session that produced the count above
-it read 2 of 450 results, 8% of everything carried, acted on none. No other tool in this space reports its
-own inapplicability, and it is the only number that answers "would this have helped me".
+it read 2 of 450 results, 8% of everything carried, acted on none. That is the number that answers "would
+this have helped me", and it is the one thing here worth running whatever you decide about the hooks.
+
+**What it is not: the only tool that reads your transcripts.** An earlier version of this file claimed no
+other tool in this space reports its own inapplicability. That was written without checking and is
+withdrawn. Several projects already parse the same `~/.claude/projects/**/*.jsonl` files for tokens and
+cost — [token-dashboard](https://github.com/nateherkai/token-dashboard),
+[cc-analyzer](https://github.com/yorch/cc-analyzer),
+[claude-token-analyzer](https://github.com/li195111/claude-token-analyzer),
+[claude-session-analyzer](https://github.com/yonk-labs/claude-session-analyzer),
+[ccost](https://github.com/toolsu/ccost) among them — and Claude Code itself now ships `/usage`,
+`/context` and OpenTelemetry export with per-tool attribution. If you want tokens and cost by session or
+by day, use one of those; they do it better and they are not attached to a hook.
+What this report has that a survey of those did not turn up is narrower: `carried`, which charges a cost
+to an **individual tool result** by how many later requests re-read it, and the reach denominator, which
+is specific to the question of whether a trimming hook could act on your sessions at all. "Did not turn
+up" is not "does not exist", and this file will not make that mistake twice.
 
 What follows from all of that: **run `tokenbrake report` on your own last session before installing
 anything.** The "Tool results entered" and "Under the trim threshold" lines say whether you have the kind

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.6 — 2026-09-12
+
+- **The excerpt exemption now survives how models actually write a read.** It exempted a read of one file
+  from the trim — because head, tail and error lines are the wrong summary of a range the model had already
+  narrowed — but only when the command was a bare `cat`/`sed -n`/`head`/`tail` with one unquoted,
+  space-free path and nothing before or after it. A `cd … &&` prefix, an `echo` label on either side, or a
+  quoted path containing a space each disqualified the read. All three are how models write. It now also
+  covers a `grep` of one named file, whose every line is a hit the model asked for.
+  Pipes, redirects, recursive and list-only greps stay excluded: those do not print one file's contents.
+  An unquoted path with spaces stays excluded too — it is genuinely ambiguous.
+  **Measured, not assumed:** the benchmark's Experiment A gained a spelling matrix that runs one file
+  through every spelling, for a fixture under `readMaxBytes` and one over it, and fails the build if any is
+  handled against intent.
+  **The cost of the old behaviour, measured:** in one paired run the guard shredded a 34-line range and a
+  single-file grep on spelling alone; the model made four return trips for what had been cut, took three
+  extra rounds, and the pair came out at −8.0% where others in the same round reached −39%. One of those
+  return trips was the model reading **tokenbrake's own overflow file** — the escape hatch paying for the
+  saving with a round trip. Recorded in the benchmark's `results/DEVIATIONS.md`.
+  Note what this trades: those commands are no longer trimmed at all below `readMaxBytes`, so the guard
+  acts less often. Pair 5 is the argument that acting less is worth more than acting wrongly.
+
 ## 0.2.5 — 2026-09-11
 
 - **`report` says what the guard did to the bill, and what the mechanism cost.** Four lines gain money,
