@@ -732,6 +732,10 @@ to solve before it was worth paying for.
   does, because its question is behavioural — does the model come back.
 - If the trigger is ever revisited, the untested shape is a session that reads a 40 KB file **once and moves
   on**. The 2026-09-07 A/B's task said "read in full", which forbids the saving by construction.
+- **And the search space starts at `maxChars`, not at zero.** For a shell read the POST hook returns at or under
+  `maxChars` before any cap logic (`guard.js:272`), so a trigger below it is a dead knob -- "the trigger question
+  is arithmetic" is true only above 6,000. Found 2026-09-13 when the grid overstated a trigger of 2,000 by one
+  read of five; recorded in `AB-TASK.md`, and `report --reads` now says so under the grid.
 
 ## Decided 2026-09-12 — the bench stays private, and the table changes its source
 

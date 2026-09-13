@@ -831,7 +831,8 @@ function unboundedReads(parsed, ledgerRecs, opts) {
          then argue for a lower trigger using the cap's own output as the evidence. */
       recordedOriginal++;
       capSeen.add(key);
-      reads.push({ file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null });
+      reads.push({ file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
+        via: r.name === 'Read' ? 'read-cap' : 'post' });
       continue;
     }
     let sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
@@ -857,7 +858,13 @@ function unboundedReads(parsed, ledgerRecs, opts) {
     if (r.isError) ceiling = TOO_LARGE.test(r.text || '') ? 'refused' : 'errored';
     else if (sh.numbered && sh.from === 1 && sh.lines === HOST_READ_LINES) { ceiling = 'host-lines'; hostLines++; }
     else if (r.chars >= 0.9 * HOST_READ_CEILING) { ceiling = 'near'; nearCeiling++; }
-    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source });
+    /* Which of the two paths readMaxBytes reaches this read by, because they do not share its floor: the
+       PreToolUse cap compares statSync().size and nothing gates it, while a shell excerpt goes through the
+       POST hook, which returns before any cap logic at or under maxChars (guard.js:272). A trigger below
+       maxChars is therefore a dead knob for a shell read, and a grid that does not know that overstates
+       every row below it. */
+    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source,
+      via: r.name === 'Read' ? 'read-cap' : 'post' });
   }
   /* A cap row whose file never appears as an unbounded read means the transcript recorded the guard's
      rewritten input instead -- the read is in there carrying a `limit`, which is not a whole-file read.
@@ -866,7 +873,8 @@ function unboundedReads(parsed, ledgerRecs, opts) {
   for (const [key, cap] of idx.byFile) {
     if (capSeen.has(key) || cap.persisted) continue;
     recordedRewritten++;
-    reads.push({ file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null });
+    reads.push({ file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
+      via: 'read-cap' });
   }
   const sized = reads.filter((r) => !r.ceiling);
   return { reads, sized, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
@@ -1034,18 +1042,26 @@ function frontierVerdict(front, opts) {
    arithmetic over the reads -- the half of the readMaxBytes question that needs no session. The half it
    cannot answer is whether the model comes back for what was withheld, which is behavioural and costs money
    to find out (AB-TASK.md, "The Read cap's trigger"). */
-function triggerGrid(reads, triggers, limits) {
+function triggerGrid(reads, triggers, limits, opts) {
   const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
   const totalBytes = reads.reduce((t, r) => t + (r.bytes || 0), 0);
+  /* `maxChars` is the shell path's floor and the Read path has none, so a read is caught only if the guard
+     would actually reach the cap on it. Without this the rows below maxChars count reads the POST hook returns
+     on, and -- worse than the count -- the withheld medians are taken over that same inflated set, so the
+     saving a low trigger appears to offer is a saving on reads it never touches. Omitting opts keeps the old
+     arithmetic exactly, so no existing caller changes meaning by being left alone. */
+  const maxChars = opts && opts.maxChars != null ? Number(opts.maxChars) : null;
+  const gated = (r) => maxChars != null && r.via === 'post' && (r.bytes || 0) <= maxChars;
   return (triggers || []).map((trigger) => {
-    const caught = reads.filter((r) => (r.bytes || 0) > trigger);
+    const overBytes = reads.filter((r) => (r.bytes || 0) > trigger);
+    const caught = overBytes.filter((r) => !gated(r));
     const caughtBytes = caught.reduce((t, r) => t + r.bytes, 0);
     const byLimit = {};
     for (const L of (limits || [])) {
       const withheld = caught.filter((r) => r.lines).map((r) => Math.max(0, (r.lines - Math.min(L, r.lines)) / r.lines));
       byLimit[L] = withheld.length ? med(withheld) : null;
     }
-    return { trigger, caught: caught.length, caughtBytes,
+    return { trigger, caught: caught.length, caughtBytes, inert: overBytes.length - caught.length,
       byteShare: totalBytes ? caughtBytes / totalBytes : 0, byLimit };
   });
 }

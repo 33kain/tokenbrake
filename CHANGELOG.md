@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **`readMaxBytes` has a floor, it is `maxChars`, and the trigger grid did not know it.** The two paths that
+  share this knob do not share its floor: an unbounded `Read` is capped by the PreToolUse hook, which compares
+  `statSync().size` and is gated by nothing, while a `cat` of one file goes through the POST hook, which returns
+  at or under `maxChars` **before any cap logic runs** (`guard.js:272`). So for a shell read, a trigger below
+  `maxChars` is a dead knob -- setting `readMaxBytes` to 2,000 changes nothing for a result under 6,000 chars.
+  Asked what a trigger of 2,000 with a 30-line cap would have saved on one session, the grid answered **2 of 5**
+  whole-file reads caught; the guard's own path catches **1**. The count was the visible half; the damaging half
+  was that each row's withheld median was taken over that same inflated set, so a low trigger appeared to save on
+  reads it never touches. `triggerGrid` now takes `maxChars`, excludes a shell read the gate would stop, reports
+  how many rows went inert, and computes the medians over what is left. `--reads` states the floor **whether or
+  not a row trips it**: with the default candidate triggers all sitting above 6,000 no row is ever marked, and a
+  reader asking about a lower one would otherwise never be told. Each read now also records which path it would
+  be capped by. Third time these two paths have answered differently -- after the `--caps` zero that counted one
+  of them and the capped-`cat` sizing that used the guard's own output as evidence about the file.
+  No default moves and no published number changes: every candidate trigger was already above the floor.
+  `guard.js` is untouched -- the gate is correct behaviour, not a bug.
+
 - **`report --all` stopped truncating silently, and now says which sessions the guard was running in.** It
   printed the newest 30 sessions under a header that said how many exist -- `(65)` above a list of 30, with
   nothing to say 35 were missing. A conclusion about which sessions were on disk was drawn from the visible

@@ -179,9 +179,10 @@ const fmt = (n) => n.toLocaleString();
    the ranking; --where pools every session's ranged reads into the one distribution that can set
    readLimitLines. */
 function guardCfg() {
-  const cfg = { readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
+  const cfg = { maxChars: 6000, readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
+    if (c.maxChars) cfg.maxChars = c.maxChars;
     if (c.readMaxBytes) cfg.readMaxBytes = c.readMaxBytes;
     if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
     if (c.persistedLimitLines) cfg.persistedLimitLines = c.persistedLimitLines;
@@ -610,12 +611,25 @@ function readsReport() {
 
   console.log('\n  What lowering readMaxBytes would catch, and what each limit would then withhold (median):');
   console.log('    trigger   reads  bytes' + LIMITS.map(l => String(l).padStart(6)).join(''));
-  for (const g of transcript.triggerGrid(sized, TRIGGERS, LIMITS)) {
+  const rows = transcript.triggerGrid(sized, TRIGGERS, LIMITS, { maxChars: cfg.maxChars });
+  for (const g of rows) {
     console.log('    ' + String(g.trigger).padStart(7) + String(g.caught).padStart(8)
       + (Math.round(100 * g.byteShare) + '%').padStart(7)
       + LIMITS.map(l => (g.byLimit[l] == null ? '-' : Math.round(100 * g.byLimit[l]) + '%').padStart(6)).join('')
-      + (g.trigger === cfg.readMaxBytes ? '   <- your readMaxBytes' : ''));
+      + (g.trigger === cfg.readMaxBytes ? '   <- your readMaxBytes' : '')
+      + (g.inert ? '   <- ' + g.inert + ' read(s) inert here: a shell read at or under maxChars never reaches the cap' : ''));
   }
+  /* The two paths that share readMaxBytes do not share its floor, and the grid used to model only one of them.
+     An unbounded Read is capped by the PreToolUse hook, which compares statSync().size and has no floor. A cat
+     goes through the POST hook, which returns at or under maxChars before any cap logic runs (guard.js:272) --
+     so below maxChars the trigger is a dead knob for it. With the default triggers all sitting above maxChars
+     no row is ever marked, which is exactly why the floor is stated here rather than only when it bites: the
+     question "what would a trigger of 2,000 have saved" was asked, and the unmodelled grid answered it too
+     high. */
+  const shellReads = sized.filter((r) => r.via === 'post').length;
+  console.log('    Floor: ' + shellReads + ' of these ' + sized.length + ' read(s) are shell reads (a cat), and for those the'
+    + '\n    effective trigger is never lower than maxChars (' + fmt(cfg.maxChars) + ') -- the POST hook returns at or under it'
+    + '\n    before any cap logic (guard.js:272). Only an unbounded Read is capped straight off readMaxBytes.');
   /* The miss rate belongs beside the grid but not inside it: it is measured over ranged reads, a different
      population from the whole-file reads the trigger catches. Printing them in one table would invite adding
      them up. */
