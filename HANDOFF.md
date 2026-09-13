@@ -695,11 +695,15 @@ from the repository, so it follows the merge rather than the npm publish.
 **`readLimitLines` = 800 travels with any change to the trigger** — that is pre-registered, so a future trigger
 change cannot pick its own limit afterwards.
 
-Round 2 on CI logs is the next paid thing and it is not urgent: ~$20, Sonnet 5, sign test over at least seven
-pairs, kill condition already recorded (if ON arms show more recovery reads than OFF in a majority of pairs,
-the hypothesis is refused regardless of cost). Its fixtures do not exist — a day's work, free. The hypothesis
-is narrow: on large **successful** logs read once for a pass/fail verdict, the model has no reason to come
-back, so the trim's saving survives.
+**Round 2 ran on 2026-09-12 and abandoned itself at the pilot** -- see its own section above. The fixtures
+exist, the scorer exists, and the schedule of 18 sessions was stopped after 2 by its own pre-registered clause:
+handed a CLI that could slice a log, the agent sliced, and the guard rewrote nothing the model saw. What stood
+in this paragraph before -- "the next paid thing", "its fixtures do not exist" -- was left behind by that run
+and is corrected here rather than left to contradict the record two screens up. The hypothesis it was built to
+test is unrefuted and unsupported: on large **successful** logs read once for a pass/fail verdict the model has
+no reason to come back, so the trim's saving should survive -- but no workload has yet been built where the
+trim had anything to act on in the first place, and that, not the cost question, is what a round 3 would have
+to solve before it was worth paying for.
 
 **What the Read cap's two settled questions leave behind, for whoever reads this next:**
 
@@ -778,7 +782,28 @@ assume otherwise. And a report prices a session as it stood when it ran, so any 
 short of that session's end -- which is now avoidable, since `report --all` reads a finished session rather
 than a committed snapshot of a running one.
 
-## Then — Saturday 2026-09-13, the distribution table and the post
+## Then — the distribution table and the post, once the table has eight rows
+
+**Decided 2026-09-13: the date moves, the rule stays.** The date arrived and the data did not -- one eligible
+row (`3be8824e`) against a minimum of eight, counted the hard way against the record rather than estimated.
+So there is no table today, and the schedule is what gives way rather than the minimum. The trigger is now a
+**condition**: the table is built when eight sessions qualify -- neither benchmark, nor this repository's own
+development, nor an A/B arm, nor trivial, and carrying guard ledger rows -- whenever that is. `report --all`
+narrows the field and the list in the section above names what comes off by hand.
+
+The alternative was considered and declined: publish the post now with the `[TABLE: …]` slot replaced by a
+sentence saying how many real sessions exist and why no distribution is claimed from them. That would have been
+honest -- this project's whole thesis is that a null gets the care of a win -- but it spends the post's one
+launch on a weaker version of itself and gives up the third number README's "Measured" paragraph was going to
+carry, for no gain except hitting a date nobody outside this file knows about.
+
+This is the third time in two days a pre-registered rule has said stop where judgement would have said go: the
+trigger stayed at 60,000, the fractional cap lost 9 against a 10-point threshold, and now a date passes with the
+table unbuilt. The rules are doing what they were written for, and the correct response to the third one is the
+same as to the first two -- record it and move on, not soften it.
+
+The name stays. "Saturday's table", "Saturday's step 5" and the other references across `AB-TASK.md` are a
+label for this piece of work, not a claim about a day, and renaming them would churn five files to no purpose.
 
 Still open, and its **source changed on 2026-09-12** -- see the section directly above before following step 1,
 which is kept only as the record of how collection worked before the guard was installed at user scope. Note one
