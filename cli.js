@@ -758,6 +758,7 @@ function report() {
   if (flag('--caps')) return capsReport();
   if (flag('--reads')) return readsReport();
   if (flag('--reach')) return reachReport();
+  if (flag('--cost')) return costReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -1049,6 +1050,95 @@ function doctor() {
   process.exitCode = errors.length ? 1 : 0;
 }
 
+/* Cost (feature 8): the picked session(s) at list price, broken down by token type and by model, with the
+   guard's saving in dollars, and a --model=<id> what-if that reprices the same tokens at another model's
+   rate. Built on transcript.js's priceOf / usage / trimSavings -- the same figures the report's one-line
+   cost rests on. --all pools every session; --session=<prefix>/--transcript=<path> pick one. */
+const MODEL_ALIASES = { opus: 'claude-opus-5', sonnet: 'claude-sonnet-5', haiku: 'claude-haiku-4-5', fable: 'claude-fable-5-1' };
+
+function costReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const usd = (x) => x == null ? 'n/a' : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+
+  let files = [];
+  const tpath = opt('--transcript');
+  const want = opt('--session');
+  if (tpath) files = [tpath];
+  else if (flag('--all')) files = found.map(f => f.file);
+  else if (want) {
+    const hit = found.find(f => String(f.session).startsWith(want));
+    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
+    files = [hit.file];
+  } else {
+    const lastRow = [...ledger].reverse().find(r => r && r.transcript && fs.existsSync(r.transcript));
+    files = lastRow ? [lastRow.transcript] : (found[0] ? [found[0].file] : []);
+  }
+  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+
+  const modelArg = opt('--model');
+  let forced = null;
+  if (modelArg) {
+    forced = MODEL_ALIASES[modelArg.toLowerCase()] || modelArg;
+    if (!transcript.priceOf(forced)) { console.log('unpriced model "' + modelArg + '". Try: ' + Object.keys(MODEL_ALIASES).join(', ') + ', or a full claude-* id the price table knows.'); process.exitCode = 1; return; }
+  }
+
+  const type = { input: { tok: 0, usd: 0, label: 'input' }, output: { tok: 0, usd: 0, label: 'output' },
+    read: { tok: 0, usd: 0, label: 'cache read' }, write: { tok: 0, usd: 0, label: 'cache write' } };
+  const byModel = {}; const unpriced = new Set();
+  let reqsPriced = 0, forcedUsd = 0, sessions = 0, savedTok = 0, savedCarried = 0, savedUsd = 0, anySaving = false;
+
+  for (const file of files) {
+    let p; try { p = transcript.parseTranscript(file); transcript.carry(p); } catch { continue; }
+    sessions++;
+    for (const q of p.requests) {
+      const u = q.usage; if (!u) continue;
+      const pr = transcript.priceOf(q.model);
+      if (!pr) { unpriced.add(q.model || '?'); continue; }
+      reqsPriced++;
+      const inp = u.input_tokens || 0, o = u.output_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
+      type.input.tok += inp; type.input.usd += inp * pr.in / 1e6;
+      type.output.tok += o; type.output.usd += o * pr.out / 1e6;
+      type.read.tok += cr; type.read.usd += cr * pr.read / 1e6;
+      type.write.tok += cw; type.write.usd += cw * pr.write / 1e6;
+      byModel[q.model] = (byModel[q.model] || 0) + (inp * pr.in + o * pr.out + cr * pr.read + cw * pr.write) / 1e6;
+      if (forced) { const f = transcript.priceOf(forced); forcedUsd += (inp * f.in + o * f.out + cr * f.read + cw * f.write) / 1e6; }
+    }
+    const sv = transcript.trimSavings(p, ledger);
+    savedTok += sv.saved; savedCarried += sv.savedCarried;
+    if (sv.usd != null) savedUsd += sv.usd;
+    if (sv.count > 0) anySaving = true;
+  }
+
+  const total = type.input.usd + type.output.usd + type.read.usd + type.write.usd;
+  console.log('Cost -- ' + sessions + ' session(s)' + (forced ? '  (what-if model: ' + forced + ')' : ''));
+  if (!reqsPriced) {
+    console.log('  No priced requests' + (unpriced.size ? ' (models seen: ' + [...unpriced].join(', ') + ' -- not in the price table)' : ' (no API usage in the transcript)') + '.');
+    return;
+  }
+  console.log('  Total (list price):  ' + usd(total) + '   over ' + fmt(reqsPriced) + ' priced request(s)');
+  console.log('  By token type:');
+  for (const k of ['input', 'output', 'read', 'write']) {
+    const b = type[k];
+    console.log('    ' + b.label.padEnd(12) + fmt(b.tok).padStart(13) + ' tok   ' + usd(b.usd).padStart(8) + '   ' + String(total ? Math.round(100 * b.usd / total) : 0).padStart(3) + '%');
+  }
+  const models = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
+  if (models.length > 1) { console.log('  By model:'); for (const [m, c] of models) console.log('    ' + m.padEnd(22) + usd(c).padStart(8)); }
+  else console.log('  Model: ' + models[0][0]);
+  console.log('  Per request:  ~ ' + usd(total / reqsPriced) + ' averaged over ' + fmt(reqsPriced) + ' request(s)');
+  if (unpriced.size) console.log('  Unpriced (excluded from the total): ' + [...unpriced].join(', '));
+  if (anySaving) console.log('  Guard saving:  ~ ' + fmt(savedTok) + ' tokens kept out, ~ ' + fmt(savedCarried) + ' token-reads not carried'
+    + (savedUsd ? ' -- ~ ' + usd(savedUsd) + ' off at list price' : ''));
+  else if (ledger.length) console.log('  Guard saving:  none credited in these session(s)');
+  if (forced) {
+    const delta = total ? Math.round(100 * (total - forcedUsd) / total) : 0;
+    console.log('  What-if on ' + forced + ':  ~ ' + usd(forcedUsd) + '  (same tokens at ' + forced + ' rates) -- '
+      + (delta > 0 ? delta + '% less' : delta < 0 ? (-delta) + '% more' : 'about the same'));
+  }
+  console.log('\n  Dollar figures use the API usage recorded in the transcript, at list price (cache writes at the 1h rate); a model not in the price table is excluded.');
+}
+
 function help() {
   console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
 
@@ -1087,6 +1177,9 @@ function help() {
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets
                                       sit as a share of the file. The evidence for readMaxBytes
+      --cost [--model=<id>]           the session at list price, broken down by token type and model, with
+                                      the guard's saving in dollars; --model reprices the same tokens at
+                                      another model's rate (opus|sonnet|haiku|fable, or a full claude-* id)
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);

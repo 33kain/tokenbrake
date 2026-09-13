@@ -1859,6 +1859,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 1: report --cost (feature 8) -----------------------------------
+   One priced request, 1,000,000 tokens of each type on Opus 5 -> a total that is exact by construction:
+   5 + 25 + 0.5 + 10 = $40.50. Sonnet 5 reprices the same tokens to 2 + 10 + 0.2 + 4 = $16.20. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-cost-'));
+  mkdirSync(join(cfg, 'projects', '-w'), { recursive: true });
+  const M = 1000000;
+  const u = { input_tokens: M, output_tokens: M, cache_read_input_tokens: M, cache_creation_input_tokens: M };
+  writeFileSync(join(cfg, 'projects', '-w', 'cost-1.jsonl'),
+    JSON.stringify({ type: 'assistant', requestId: 'r1', uuid: 'r1-a', sessionId: 'cost-1', cwd: '/w', message: { model: 'claude-opus-5', usage: u, content: [{ type: 'text', text: 'hi' }] } }) + '\n');
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const cost = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--cost', ...a], { encoding: 'utf8', env: e });
+
+  let r = cost([]);
+  t('report --cost totals the session at list price', r.status === 0 && /Total \(list price\):\s+\$40\.50/.test(r.stdout), r.stdout.split('\n').find(l => /Total/.test(l)));
+  t('report --cost breaks the total down by token type', /output\s+1,000,000 tok\s+\$25\.00\s+62%/.test(r.stdout) && /cache write\s+1,000,000 tok\s+\$10\.00\s+25%/.test(r.stdout));
+  r = cost(['--model=sonnet']);
+  t('report --cost --model reprices the same tokens at the forced model rate', /What-if on claude-sonnet-5:\s+~ \$16\.20/.test(r.stdout) && /60% less/.test(r.stdout), r.stdout.split('\n').find(l => /What-if/.test(l)));
+  r = cost(['--model=bogus']);
+  t('report --cost --model rejects an unpriced model non-zero', r.status === 1 && /unpriced model/.test(r.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

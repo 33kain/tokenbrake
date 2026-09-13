@@ -630,6 +630,26 @@ function trimmedResults(parsed, ledgerRecs) {
   return parsed.results.filter((r) => r.marker && offeredOf(r));
 }
 
+/* The guard's saving on one session, in tokens and dollars: for each result that carries the trim marker AND
+   matches a ledger row, the removed tokens (original chars - kept, over CHARS_PER_TOKEN), and those tokens
+   re-read through every later request they no longer sit in (carriedTurns + 1). Priced at the session's
+   dominant model, cache-write + cache-read as usdOfTokens splits them. The report's savings line and
+   `report --cost` both call this, so both report the same number. */
+function trimSavings(parsed, ledgerRecs) {
+  const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
+  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+  const trimmed = parsed.results.filter((r) => r.marker && offeredOf(r));
+  let saved = 0, savedCarried = 0;
+  for (const r of trimmed) {
+    const l = offeredOf(r);
+    const tok = Math.round((l.chars - l.kept) / CHARS_PER_TOKEN);
+    saved += tok;
+    savedCarried += tok * (r.carriedTurns + 1);
+  }
+  const price = priceOf(dominantModel(parsed));
+  return { count: trimmed.length, saved, savedCarried, usd: usdOfTokens(saved, savedCarried, price), priced: !!price };
+}
+
 function reachPooled(sessions) {
   const B = () => ({ n: 0, tokens: 0, carried: 0 });
   const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
@@ -1143,13 +1163,11 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
   const trimmedOf = (r) => (r.marker ? offeredOf(r) : null);
   const trimmed = parsed.results.filter(trimmedOf);
   const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
-  const saved = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }, 0);
   const price = priceOf(dominantModel(parsed));
+  const sv = trimSavings(parsed, ledger);
   if (trimmed.length) {
-    const savedCarried = trimmed.reduce((s, r) => { const l = trimmedOf(r); return s + Math.round((l.chars - l.kept) / CHARS_PER_TOKEN) * (r.carriedTurns + 1); }, 0);
-    const money = usdOfTokens(saved, savedCarried, price);
-    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(saved)} tokens kept out, ~ ${kfmt(savedCarried)} token-reads not carried`
-      + (money == null ? '' : ` -- ~ ${usd(money)} off this session at list price`));
+    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried`
+      + (sv.usd == null ? '' : ` -- ~ ${usd(sv.usd)} off this session at list price`));
   } else if (ledger.length) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
@@ -1336,5 +1354,5 @@ function renderSummaryLine(parsed, marks) {
 module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
-  reachPooled, commandTool, trimmedResults,
+  reachPooled, commandTool, trimmedResults, trimSavings,
   capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };

@@ -61,6 +61,10 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
 
 ## Progress
 
-- **Wave 1, increment 1 (in progress):** `preset`, `outputs`/`show`, `doctor [--fix]` — `cli.js` only,
-  no guard-behavior change, tests added. Next in Wave 1: per-tool profiles (2, touches `guard.js` +
-  re-sync the committed copy) and cost (8, touches `report`).
+- **Wave 1 — DONE.** All five shipped with tests (suite green, 397 checks):
+  - increment 1: `preset`, `outputs`/`show`, `doctor [--fix]` — `cli.js` only, no guard-behavior change.
+  - `tools` map per-tool profiles (2) — `guard.js` `toolConfig()`, committed guard copy re-synced.
+  - `report --cost [--model]` (8) — cost by token type/model + saving + what-if reprice. Reuses the new
+    pure `transcript.trimSavings()`, extracted from `renderReport` (numbers unchanged, report byte-identical).
+- **Next — Wave 2** (changes what enters context; A/B per `AB-TASK.md` before any default moves): start with
+  the `trim.js` extraction, then allow/deny (9), MCP trimming (1), JSON/CSV shaping (5), dedup (6).

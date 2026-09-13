@@ -219,6 +219,8 @@ npx tokenbrake report --where             # where your ranged reads land -- the 
 npx tokenbrake report --caps              # every file the Read cap fired on
 npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
+npx tokenbrake report --cost              # the session in dollars, by token type and model, plus the saving
+npx tokenbrake report --cost --model=sonnet   # reprice the same tokens as if it had run on another model
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -260,6 +262,15 @@ log, a model slices and the trim has nothing to rewrite; handed tools that only 
 those your work looks like is not a thing to reason about either. It counts only sessions the guard was actually
 recording in, because in a session without it "untouched" means the guard was absent rather than idle, and under
 10 such sessions or 200 shell results it prints no verdict instead of a number that looks like one.
+
+`--cost` puts the same session in dollars. It uses the API usage the transcript records — input, output, cache
+read, cache write — priced per request at its own model's list price (cache writes at the one-hour rate Claude
+Code uses), and breaks the total down by token type and by model, so the cache-read line shows what carried
+context actually costs. It adds the guard's saving in dollars (the trimmed tokens, priced across the requests
+they no longer sit in) and, with `--model=<id>` (`opus`/`sonnet`/`haiku`/`fable`, or a full `claude-*` id),
+reprices the very same tokens at another model's rate — the what-would-this-have-cost-on-X question. A model
+the price table does not know is excluded rather than guessed; prices change, so treat it as list price, not a
+bill.
 
 ## Against Claude Code's compaction
 
