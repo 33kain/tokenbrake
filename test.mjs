@@ -107,6 +107,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   let r = guard('post', { session_id: 'mcp-0', tool_use_id: 'toolu_MCPOFF', tool_name: toolName,
     tool_input: {}, tool_response: mcpResp(noisy) });
   t('mcpTrim off by default: large MCP result is exit 0, no stdout (only logged)', r.status === 0 && r.stdout === '');
+  {
+    const led0 = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+    const off = led0.filter(x => x.id === 'toolu_MCPOFF').pop();
+    t('the untrimmed MCP row records the inner-text length, not the JSON wrapper (shares a basis with trimmed rows)',
+      !!off && off.chars === noisy.length && off.kept === undefined, off && String(off.chars));
+  }
 
   writeFileSync(cfgFile, JSON.stringify({ mcpTrim: true }));
   r = guard('post', { session_id: 'mcp-1', tool_use_id: 'toolu_MCPON', tool_name: toolName,
@@ -201,6 +207,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: tbFile } });
   h = parse(r.stdout) && parse(r.stdout).hookSpecificOutput;
   t("the same 40 KB under tokenbrake's own out/ is capped the same way", !!h && h.updatedInput.limit === 80);
+  /* Claude Code saves an oversized mcp__* result as tool-results/<id>.json; reading it whole is the same
+     door back into context, so PERSISTED covers .json too -- the safety net for MCP when mcpTrim is off. */
+  const ccJson = join(ccDir, 'mcp-result.json');
+  writeFileSync(ccJson, body);
+  r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: ccJson } });
+  h = parse(r.stdout) && parse(r.stdout).hookSpecificOutput;
+  t('an oversized MCP result saved as tool-results/<id>.json is capped like a persisted output',
+    !!h && h.updatedInput.limit === 80 && /saved tool output/.test(h.additionalContext) && /500 lines/.test(h.additionalContext));
   r = guard('read-pre', { tool_name: 'Read', tool_input: { file_path: ccFile, offset: 200, limit: 40 } });
   t('a bounded read of a persisted output is untouched', r.status === 0 && r.stdout === '');
   writeFileSync(join(ccDir, 'small.txt'), 'short output\n'.repeat(40));

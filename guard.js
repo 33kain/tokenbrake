@@ -43,8 +43,11 @@ const DEFAULTS = {
    (<config>/projects/<cwd>/<session>/tool-results/<id>.txt, its ~30,000-character ceiling) or by this guard
    (<config>/tokenbrake/out/<id>.txt). Reading one whole puts the oversized output back into context by another
    door; it carried 96% of the untrimmed audit arm's context (AB-TASK.md). Output that was too big to show is
-   too big to read whole, whatever readMaxBytes says. */
-const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
+   too big to read whole, whatever readMaxBytes says. An oversized mcp__* result is saved by Claude Code as
+   tool-results/<id>.json, so both extensions count -- this is the safety net for MCP when mcpTrim is off (the
+   default): the file re-read is capped even when the PostToolUse trim did not run. Still dir-scoped, so it
+   only ever matches a file inside tool-results/ or tokenbrake/out/. */
+const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.(txt|json)$/;
 
 /* A line that opens with a pass marker is a passing test whatever its name says: "ok   error render call
    passes resp through" is not an error. Without this, a suite whose test names mention errors fills the
@@ -373,11 +376,14 @@ function handlePost(input, cfg) {
      PostToolUseFailure matcher never routes MCP here, but guard defensively. `chars` on the trim row is the
      inner text length, so it shares a basis with `kept` the way the shell rows do. */
   if (isMcp) {
-    const body = (cfg.mcpTrim && !failed && !matchesAny(cfg.noTrim, tool)) ? mcpBody(resp) : null;
-    if (body && body.text.length > cfg.maxChars) {
+    const body = mcpBody(resp);
+    /* The inner text is the size that matters (rec.chars was JSON.stringify of the block array); log it the
+       same whether or not the row is trimmed, so untrimmed and trimmed MCP rows share a basis. */
+    if (body) rec.chars = body.text.length;
+    if (cfg.mcpTrim && !failed && body && !matchesAny(cfg.noTrim, tool) && body.text.length > cfg.maxChars) {
       const saved = saveOut(input, body.text);
       const trimmed = trimText(body.text, cfg, saved);
-      log({ ...rec, chars: body.text.length, mcp: true, kept: trimmed.length, saved });
+      log({ ...rec, mcp: true, kept: trimmed.length, saved });
       emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: body.rebuild(trimmed) } });
       return;
     }
