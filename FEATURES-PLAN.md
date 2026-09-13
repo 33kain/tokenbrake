@@ -76,13 +76,22 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
   - JSON-aware trim (5) — DONE. `jsonShape` (default false) makes `trimText` keep a sample of the big array
     plus a count for a JSON result, instead of a char slice. Runs only in the trim path, so the full output
     is always saved. Ships off; A/B gates turning it on. Guard copy re-synced; 5 new checks.
-  - Remaining: MCP trimming (1) and dedup (6), then the `trim.js` extraction (deferred to Wave 3, right
-    before simulation — it is the only consumer that truly needs a shared pure trim module; MCP and shaping
-    did not).
-    - **MCP trimming (1) is blocked on evidence, not code.** The guard only rewrites a result in the tool's
-      own *observed* response shape (the Bash `{stdout}` lesson, pinned by `status` + `test.mjs`); for
-      `mcp__*` tools the `tool_response` / accepted `updatedToolOutput` shape has not been captured from a
-      live session (AB-TASK.md only notes an untrimmed 6,309-char `mcp__github__actions_list`). Capture that
-      shape first, then implement — otherwise the rewrite silently no-ops (fails open, but delivers nothing).
-    - dedup (6) needs cross-call state (the guard is one stateless process per call), so it adds a small
-      per-session state file — heavier plumbing; do it after MCP.
+  - MCP trimming (1) — **code DONE, pending live-accept confirmation + A/B.** The shape was the blocker, and
+    it was captured live on 2026-09-13 from `mcp__github__list_commits` in a Cowork session with the guard on:
+    an `mcp__*` result arrives as a content-block array `[{type:'text',text},…]` — the whole result, in full —
+    and the guard sees it *before* Claude Code's own "too large → saved to a file, 2 KB preview" step (ledger
+    `chars` 52,960 against the 2,245-char preview the model was left with; the 52 KB file is then re-read whole,
+    the persisted-output carry the product exists to cut). `guard.js` now routes an `mcp__*` result through the
+    same `trimText` pipeline and rebuilds the reply in the shape it arrived in — bare array, `{content:[…]}`
+    wrapper, or bare string (`mcpBody`) — behind `mcpTrim` (default false). Full output saved to `out/`; pairs
+    with `jsonShape` since MCP bodies are usually JSON; a per-tool profile or `noTrim` (matches the tool name)
+    targets one server. Guard copy re-synced; 6 new checks pin the array shape — the MCP analogue of the Bash
+    `{stdout}` regression. **NOT yet done, and it is the reason MCP is not closed:** a fresh live session that
+    confirms Claude Code *accepts* the rewritten `updatedToolOutput` for an `mcp__*` tool (the shape is inferred
+    from `tool_response`; the accept side is the silent-rejection risk — a wrong shape no-ops with no error, so
+    only a real session with the marker landing in the MCP result proves it), then the A/B per `AB-TASK.md`
+    before the default moves.
+  - Remaining: dedup (6), then the `trim.js` extraction (deferred to Wave 3, right before simulation — it is
+    the only consumer that truly needs a shared pure trim module; MCP and shaping did not). dedup needs
+    cross-call state (the guard is one stateless process per call), so it adds a small per-session state file —
+    heavier plumbing; do it after MCP is confirmed.

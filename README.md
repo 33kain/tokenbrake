@@ -407,6 +407,16 @@ only in the trim path, so the full output is already saved to `out/` and named i
 not one of those two shapes falls back to the ordinary trim. Off until an A/B moves it, same as the shape
 filters.
 
+`mcpTrim` (default `false`) extends the guard past shell output to `mcp__*` tool results. An MCP result arrives
+as a content-block array (`[{ "type": "text", "text": … }]`) — not the Bash `{ stdout }` object — and the guard
+sees it in full *before* Claude Code's own "too large → saved to a file, 2 KB preview" step, so with it on an
+oversized MCP result is routed through the same trim as shell output (head/tail, or a JSON sample when
+`jsonShape` is on) and the full output saved to `out/`, instead of a generic preview plus a file that is then
+re-read whole. The reply is rebuilt in the exact shape the result arrived in, since Claude Code validates it
+against the tool's own schema and drops a wrong shape silently. Target one server with a per-tool profile
+(`"tools": { "mcp__github__list_commits": { … } }`) or protect one by name with `noTrim`. Off until an A/B
+moves it; pairs with `jsonShape`, since MCP bodies are usually JSON.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,

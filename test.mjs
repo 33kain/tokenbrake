@@ -95,6 +95,73 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 }
 
 {
+  console.log('\n-- PostToolUse: MCP tool-output trimming (feature 1)');
+  /* An mcp__* result arrives as a content-block array [{type:'text',text},…] (captured live on 2026-09-13
+     from mcp__github__list_commits), not the Bash {stdout} object. The guard sees it in full before Claude
+     Code's own "too large → saved to file + preview" step. mcpTrim is OFF by default and A/B'd before the
+     default moves, so the config file turns it on for this block and is removed at the end. */
+  const cfgFile = join(CFG, 'tokenbrake.json');
+  const mcpResp = (text) => [{ type: 'text', text }];
+  const toolName = 'mcp__github__list_commits';
+
+  let r = guard('post', { session_id: 'mcp-0', tool_use_id: 'toolu_MCPOFF', tool_name: toolName,
+    tool_input: {}, tool_response: mcpResp(noisy) });
+  t('mcpTrim off by default: large MCP result is exit 0, no stdout (only logged)', r.status === 0 && r.stdout === '');
+
+  writeFileSync(cfgFile, JSON.stringify({ mcpTrim: true }));
+  r = guard('post', { session_id: 'mcp-1', tool_use_id: 'toolu_MCPON', tool_name: toolName,
+    tool_input: {}, tool_response: mcpResp(noisy) });
+  t('mcpTrim on: exits 0', r.status === 0, `status=${r.status}`);
+  const out = parse(r.stdout);
+  const u = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedToolOutput;
+  t('emits PostToolUse updatedToolOutput', !!u && out.hookSpecificOutput.hookEventName === 'PostToolUse');
+  /* The regression pin, MCP edition: the reply must be the content-block ARRAY the result arrived in, or
+     Claude Code drops it silently and the whole result goes through untrimmed. */
+  t('updatedToolOutput is a content-block array, not a string or bare object',
+    Array.isArray(u) && u.length >= 1 && u[0].type === 'text' && typeof u[0].text === 'string');
+  t('the trimmed text is much shorter and carries the tokenbrake marker',
+    !!u && u[0].text.length < noisy.length / 3 && /\[tokenbrake\] \d+ lines omitted here/.test(u[0].text),
+    u && `${noisy.length} -> ${u[0].text.length}`);
+  t('head, tail and the seeded error lines survive the trim',
+    !!u && u[0].text.startsWith('line 1 filler') &&
+    /L150: ERROR: seeded failure alpha/.test(u[0].text) && /L301: Exception: seeded gamma/.test(u[0].text));
+  const saved = u && (u[0].text.match(/Full output saved to (\S+\.txt)/) || [])[1];
+  t('names the saved full-output file and it holds the full text', !!saved && existsSync(saved) && readFileSync(saved, 'utf8') === noisy);
+  const led = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+  const rec = led.filter(x => x.id === 'toolu_MCPON').pop();
+  t('ledger row is marked mcp, with the MCP tool name, chars (inner text) and kept',
+    !!rec && rec.mcp === true && rec.tool === toolName && rec.chars === noisy.length && rec.kept === u[0].text.length && rec.saved === saved);
+
+  /* Shape coverage: a { content:[…] } wrapper rebuilds under .content and keeps the wrapper's other keys; a
+     bare-string result trims to a string; a result with no text block (image only) has nothing to trim. */
+  r = guard('post', { session_id: 'mcp-2', tool_use_id: 'toolu_MCPWRAP', tool_name: toolName,
+    tool_input: {}, tool_response: { content: mcpResp(noisy), isError: false } });
+  const w = parse(r.stdout).hookSpecificOutput.updatedToolOutput;
+  t('a { content:[…] } wrapper is rebuilt in place, other keys preserved',
+    w && !Array.isArray(w) && Array.isArray(w.content) && w.content[0].type === 'text' && w.isError === false && /\[tokenbrake\]/.test(w.content[0].text));
+  r = guard('post', { session_id: 'mcp-3', tool_use_id: 'toolu_MCPSTR', tool_name: toolName,
+    tool_input: {}, tool_response: noisy });
+  const s2 = parse(r.stdout).hookSpecificOutput.updatedToolOutput;
+  t('a bare-string MCP result trims to a string', typeof s2 === 'string' && /\[tokenbrake\]/.test(s2));
+  r = guard('post', { session_id: 'mcp-4', tool_use_id: 'toolu_MCPIMG', tool_name: toolName,
+    tool_input: {}, tool_response: [{ type: 'image', source: { data: 'x'.repeat(50000) } }] });
+  t('an MCP result with no text block is left alone (exit 0, no stdout)', r.status === 0 && r.stdout === '');
+
+  /* Composition with JSON-aware shaping (feature 5): a minified-JSON MCP body under mcpTrim + jsonShape keeps
+     a sample of the big array and a count, not a broken char slice. */
+  writeFileSync(cfgFile, JSON.stringify({ mcpTrim: true, jsonShape: true }));
+  const bigArr = JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ sha: 'c' + i, msg: 'commit number ' + i })));
+  r = guard('post', { session_id: 'mcp-5', tool_use_id: 'toolu_MCPJSON', tool_name: toolName,
+    tool_input: {}, tool_response: mcpResp(bigArr) });
+  const j = parse(r.stdout).hookSpecificOutput.updatedToolOutput;
+  t('mcpTrim + jsonShape keeps a JSON sample and a count, not a char slice',
+    Array.isArray(j) && /showing the first 5 of 200 array items/.test(j[0].text) && j[0].text.length < bigArr.length,
+    j && `${bigArr.length} -> ${j[0].text.length}`);
+
+  rmSync(cfgFile, { force: true });
+}
+
+{
   console.log('\n-- PreToolUse Read cap');
   const big = join(PROJ, 'big.txt');
   writeFileSync(big, Array.from({ length: 12000 }, (_, i) => `bigline ${i + 1}`).join('\n') + '\n');
