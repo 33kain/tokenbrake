@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **"Was the guard running here" no longer needs the ledger to be sitting next to the transcript.** That question
+  decides the reach verdict, and it was answered from ledger rows alone -- but the ledger lives beside the
+  transcript and does not travel with it. A session read away from the machine it ran on (teleported into a
+  terminal, copied out of a cloud container, opened after that container was reclaimed) arrives with no ledger
+  rows at all and was filed as a session the guard had been **absent** from. That is the same defect as pooling
+  sessions the guard never ran in -- the one corrected the day before -- one level down, and it would have made
+  every route for getting a phone or web session's numbers back to a desktop produce a wrong classification on
+  arrival.
+  The transcript carries its own proof: a result the guard rewrote and the model actually received holds the
+  `[tokenbrake]` marker. One `guardRan()` now decides it for both callers -- ledger rows first, the marker when
+  there are none -- and `--reach` and `--all` each report how many sessions rest on the marker alone.
+  **It can only add sessions, never remove one**, and both say so: a session the guard ran in and trimmed nothing
+  leaves no marker and still reads as a blank, so the marker route is a lower bound rather than a count.
+
 - **The install docs cover a cloud session, which they never did, and it was the case that mattered most.** A
   Claude Code session started from the web or the phone runs in a fresh container and **your `~/.claude` stays on
   your machine**, so a user-scope install is not there. What arrives is whatever the repository carries -- a
