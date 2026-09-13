@@ -656,10 +656,11 @@ guard's remaining reach. `sed` ranges are exactly what it exempted. It is the fi
 measured that could overturn a change made here rather than a default inherited from elsewhere.
 
 **What it needs is time, not work.** The owner installed the guard at **user scope** on 2026-09-12, so it now
-records in every session instead of one in five. Ten sessions with the guard running and 200 shell results in
-them, and `report --reach` returns a verdict on its own.
+records in every session **on the machine it is installed on** -- which is not the same as every session, see
+the third bullet below. Ten sessions with the guard running and 200 shell results in them, and `report --reach`
+returns a verdict on its own.
 
-Two things to remember while that accumulates:
+Three things to remember while that accumulates:
 
 - **A user-scope install makes the benchmark's OFF arms impossible** — `verify-config --expect=off` requires
   zero guards at every scope. Before any future round: `node cli.js uninstall`.
@@ -670,6 +671,22 @@ Two things to remember while that accumulates:
   `--ledger` all dedupe, and `status` reports the overlap. `status` also now hashes the installed copy against
   this checkout's `guard.js` and says **STALE** when they differ: `init` copies the guard and nothing keeps the
   copy in step, and a stale copy would answer the reach question about the wrong guard.
+- **A cloud session -- phone, web, `claude.ai/code` -- feeds neither counter, and nothing in its output says
+  so.** Found 2026-09-13, when a session started from the phone with the desktop switched off reported
+  *project scope only* and looked like the user-scope install had vanished. It had not: a cloud session gets a
+  fresh container with an empty `~/.claude`, so the user-scope install (which lives on the desktop) is not
+  there, while the project-scope one arrives with the clone because `.claude/settings.json` is committed. The
+  guard therefore **does** run and **does** trim -- it trimmed the session that found this, leaving
+  `[tokenbrake] 901 chars omitted here` in the middle of a read of this very file -- but its ledger
+  (`<CFG_DIR>/tokenbrake/ledger.jsonl`) and its transcript are inside the container and go when it does. In
+  that container `report --all` saw exactly one session: its own. **Only sessions on the desktop move the reach
+  count or the table's row count.** A week of phone work leaves both where they were, with nothing to explain it.
+  Two lines of `status` tell you which you are in, and they were right while I was the one who was surprised:
+  `settings: <path>` first -- `C:\Users\Q\.claude\settings.json` is the desktop, `/root/.claude/...` a
+  container -- and `ledger: N records`, which in a fresh container starts near zero.
+  `cli.js:159-160` treats user scope as *this* scope and project as *other*, so *"installed at project scope
+  instead"* means user scope is empty here. That is the ordinary reading for a container and for any plain
+  project install, and it is not a defect to chase.
 
 ## 0.2.7 is cut — 2026-09-12
 
@@ -727,8 +744,9 @@ of the decision and is accepted, not argued away.
 **The Saturday table's source changes from `33kain/contexa` branches to `report --all` on the owner's own
 machine.** Step 1 below -- fetch every `claude/…` branch, copy each `ab-results/real/*.txt`, dedupe by name --
 was written when the guard was installed per project and a session's report had to be committed to be kept. It
-is now installed at user scope and records in every session, so the same columns come out of the transcripts
-directly. That removes three of the four defects the 2026-09-10 inventory found, by construction rather than by
+is now installed at user scope and records in every session **on that machine** -- a cloud session records into
+a container that is then discarded, see the third trap above -- so the same columns come out of the desktop's
+transcripts directly. That removes three of the four defects the 2026-09-10 inventory found, by construction rather than by
 care: a session cannot enter three times as three snapshots, an A/B arm is not sitting in the same folder as
 ordinary work, and everything collected was written by the current report.
 
