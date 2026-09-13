@@ -76,7 +76,7 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
   - JSON-aware trim (5) — DONE. `jsonShape` (default false) makes `trimText` keep a sample of the big array
     plus a count for a JSON result, instead of a char slice. Runs only in the trim path, so the full output
     is always saved. Ships off; A/B gates turning it on. Guard copy re-synced; 5 new checks.
-  - MCP trimming (1) — **code DONE, pending live-accept confirmation + A/B.** The shape was the blocker, and
+  - MCP trimming (1) — **code DONE, accept side verified live; only the A/B remains.** The shape was the blocker, and
     it was captured live on 2026-09-13 from `mcp__github__list_commits` in a Cowork session with the guard on:
     an `mcp__*` result arrives as a content-block array `[{type:'text',text},…]` — the whole result, in full —
     and the guard sees it *before* Claude Code's own "too large → saved to a file, 2 KB preview" step (ledger
@@ -86,11 +86,15 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     wrapper, or bare string (`mcpBody`) — behind `mcpTrim` (default false). Full output saved to `out/`; pairs
     with `jsonShape` since MCP bodies are usually JSON; a per-tool profile or `noTrim` (matches the tool name)
     targets one server. Guard copy re-synced; 6 new checks pin the array shape — the MCP analogue of the Bash
-    `{stdout}` regression. **NOT yet done, and it is the reason MCP is not closed:** a fresh live session that
-    confirms Claude Code *accepts* the rewritten `updatedToolOutput` for an `mcp__*` tool (the shape is inferred
-    from `tool_response`; the accept side is the silent-rejection risk — a wrong shape no-ops with no error, so
-    only a real session with the marker landing in the MCP result proves it), then the A/B per `AB-TASK.md`
-    before the default moves.
+    `{stdout}` regression. **Accept side verified live on 2026-09-13** (this Cowork session, guard on,
+    `{mcpTrim:true, jsonShape:true}`): the same `mcp__github__list_commits` that ran untrimmed at the top of the
+    session came back carrying the marker — `[tokenbrake] showing the first 5 of 30 array items (50,196 chars).
+    Full output saved to …/out/…txt`. So Claude Code *accepts* the content-block-array `updatedToolOutput` for
+    an `mcp__*` tool; the silent-rejection risk is cleared and jsonShape composed (ledger `mcp:true`, `kept`
+    9,145, full output saved). A side finding: the guard's *content* is re-read from disk on each hook spawn, so
+    `init --project` + a live call verifies the accept side in-session — no fresh container needed. **Remaining
+    before MCP is closed:** only the A/B per `AB-TASK.md` (arm A off vs arm B on) before the default moves off
+    false.
   - Remaining: dedup (6), then the `trim.js` extraction (deferred to Wave 3, right before simulation — it is
     the only consumer that truly needs a shared pure trim module; MCP and shaping did not). dedup needs
     cross-call state (the guard is one stateless process per call), so it adds a small per-session state file —
