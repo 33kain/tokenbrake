@@ -370,6 +370,22 @@ can trim one tool hard and leave another loose, or switch the guard off for a si
 }
 ```
 
+Two lists match by **command or path** (a plain substring), for the cases size alone gets wrong. Both are
+empty by default, so neither changes anything until you set it:
+
+- `noTrim` — an allowlist. A shell command or a read path matching any of these is left **whole**: the
+  `git diff` you always want in full, a schema or a fixture a trimmed view would ruin.
+- `alwaysCap` — the other direction. A read (or a `cat`/`sed` excerpt) whose path matches is capped at
+  `readLimitLines` **even when it is under `readMaxBytes`**: a lockfile, a `*.min.js`, a generated bundle you
+  never want whole.
+
+```json
+{
+  "noTrim": ["git diff", "schema.sql"],
+  "alwaysCap": ["package-lock.json", ".min.js", "dist/"]
+}
+```
+
 `shapeFilters` (default `false`) turns on a pre-pass over shell results at least `shapeMinChars` (1,500)
 long: ANSI escapes removed, a carriage-return redraw *inside* a line reduced to its last frame, and runs of
 three or more consecutive lines carrying a run of **bar glyphs** collapsed to the last one plus a count. It

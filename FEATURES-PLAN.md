@@ -66,5 +66,13 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
   - `tools` map per-tool profiles (2) — `guard.js` `toolConfig()`, committed guard copy re-synced.
   - `report --cost [--model]` (8) — cost by token type/model + saving + what-if reprice. Reuses the new
     pure `transcript.trimSavings()`, extracted from `renderReport` (numbers unchanged, report byte-identical).
-- **Next — Wave 2** (changes what enters context; A/B per `AB-TASK.md` before any default moves): start with
-  the `trim.js` extraction, then allow/deny (9), MCP trimming (1), JSON/CSV shaping (5), dedup (6).
+- **Wave 2 — in progress.**
+  - allow/deny (9) — DONE. `noTrim` (allowlist) and `alwaysCap` (denylist), substring match on command/path,
+    in both guard handlers. Both default to empty, so they change nothing until set — no A/B needed. Guard
+    copy re-synced; 5 new checks.
+  - Resequenced: the `trim.js` extraction is moved to sit **immediately before MCP trimming (1) and JSON/CSV
+    shaping (5)**, which actually build on the trim engine — rather than up front, where it would carry the
+    single-file-install risk with no Wave-2 payoff yet. allow/deny needed no extraction and shipped first.
+  - Remaining: `trim.js` extraction → MCP trimming (1) → JSON/CSV shaping (5) → dedup (6). Each of these
+    changes what enters context, so each ships opt-in/off-by-default and is A/B'd per `AB-TASK.md` before any
+    default moves (the shapeFilters precedent).

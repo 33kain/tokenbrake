@@ -1859,6 +1859,39 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 2: allow/deny by command or path (feature 9) -------------------- */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-rules-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (mode, input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), mode], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const hOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return null; } };
+  const big = Array.from({ length: 400 }, (_, i) => 'line ' + (i + 1) + ' filler filler').join('\n');
+  const post = (cmd) => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: cmd }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+
+  // noTrim allowlist for a shell command
+  setCfg({ maxChars: 200, noTrim: ['git diff'] });
+  t('noTrim leaves a matching shell command whole (no rewrite emitted)', g('post', post('git diff HEAD~1')).stdout.trim() === '');
+  t('noTrim does not spare a non-matching command', /\[tokenbrake\]/.test((uOf(g('post', post('npm test'))) || {}).stdout || ''));
+
+  // alwaysCap forces a cat-excerpt cap under readMaxBytes
+  setCfg({ maxChars: 200, readMaxBytes: 10000000, readLimitLines: 50, alwaysCap: ['bundle.min.js'] });
+  t('alwaysCap caps a cat excerpt that would otherwise be exempt under readMaxBytes', /file excerpt capped/.test((uOf(g('post', post('cat bundle.min.js'))) || {}).stdout || ''));
+
+  // Read side: noTrim protects a path, alwaysCap forces a cap under readMaxBytes
+  const lock = join(cfg, 'package-lock.json');
+  writeFileSync(lock, Array.from({ length: 500 }, (_, i) => '"dep' + i + '": "1.0.0"').join('\n'));
+  const readPre = () => ({ session_id: 's', tool_name: 'Read', tool_input: { file_path: lock } });
+  setCfg({ readMaxBytes: 10000000, readLimitLines: 40, alwaysCap: ['package-lock.json'] });
+  const h = hOf(g('read-pre', readPre()));
+  t('alwaysCap caps a matched read even though it is under readMaxBytes', !!h && h.updatedInput && h.updatedInput.limit === 40);
+  setCfg({ readMaxBytes: 100, noTrim: ['package-lock.json'] });
+  t('noTrim leaves a matched read uncapped (no output)', g('read-pre', readPre()).stdout.trim() === '');
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 /* ---- Wave 1: report --cost (feature 8) -----------------------------------
    One priced request, 1,000,000 tokens of each type on Opus 5 -> a total that is exact by construction:
    5 + 25 + 0.5 + 10 = $40.50. Sonnet 5 reprices the same tokens to 2 + 10 + 0.2 + 4 = $16.20. */

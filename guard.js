@@ -30,7 +30,9 @@ const DEFAULTS = {
   persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
   shapeFilters: false,   // OFF by default: collapse progress redraws and repeated lines before anything else
   shapeMinChars: 1500,   // and only on results at least this long
-  logAllTools: true      // record size of every tool result in the ledger (feeds `tokenbrake report`)
+  logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
+  noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
+  alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
 };
 
 /* A persisted output: a tool result that was too big to show inline and was written to a file, by Claude Code
@@ -88,6 +90,18 @@ function loadConfig() {
 function toolConfig(cfg, tool) {
   const per = tool && cfg.tools && typeof cfg.tools === 'object' ? cfg.tools[tool] : null;
   return per && typeof per === 'object' ? { ...cfg, ...per } : cfg;
+}
+
+/* Allow/deny by command or path (feature 9). A substring match against the shell command (post) or the file
+   path (read-pre). `noTrim` protects a result from the guard entirely -- a `git diff` you always want whole,
+   a schema you always want in full. `alwaysCap` is the other direction: cap a read (or a `cat` excerpt) at
+   readLimitLines even when it is under readMaxBytes -- a lockfile, a *.min.js, a generated bundle you never
+   want whole. Both default to empty, so neither changes anything until set. */
+function matchesAny(patterns, str) {
+  if (!Array.isArray(patterns) || !patterns.length || !str) return false;
+  str = String(str);
+  for (const p of patterns) if (p && str.includes(String(p))) return true;
+  return false;
 }
 function readStdin() {
   try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return null; }
@@ -274,6 +288,9 @@ function handlePost(input, cfg) {
      result in the ledger, but pass it through untrimmed. */
   if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
 
+  /* noTrim allowlist: a matched shell command is left exactly as it came, only recorded. */
+  if (isShell && matchesAny(cfg.noTrim, String(ti.command || ''))) { if (cfg.logAllTools) log({ ...rec, noTrim: true }); return; }
+
   /* Shaping runs before the size test, so a log that collapses below maxChars is delivered clean and never
      trimmed at all. That is the point: the trim's head/tail/flagged shape is right for a log and the wrong
      thing to spend on redraws. */
@@ -297,7 +314,7 @@ function handlePost(input, cfg) {
   /* A file excerpt is read like a Read: untouched up to readMaxBytes, and above that capped to the first
      readLimitLines lines with the same note the Read cap gives, not trimmed to head, tail and error lines. */
   const excerpt = !failed && EXCERPT.test(String(ti.command || ''));
-  if (excerpt && text.length <= cfg.readMaxBytes) {
+  if (excerpt && text.length <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, String(ti.command || ''))) {
     if (cfg.logAllTools) log({ ...rec, excerpt: true });
     return;
   }
@@ -350,6 +367,7 @@ function handleReadPre(input, cfg) {
   const fp = ti.file_path;
   if (!fp || ti.limit != null || ti.offset != null) return;          // already bounded
   if (/\.(png|jpe?g|gif|webp|bmp|svg|pdf|ipynb)$/i.test(fp)) return;   // binary/paged formats handled by Read itself
+  if (matchesAny(cfg.noTrim, fp)) return;                             // allowlist: never cap this path
 
   let st;
   try { st = fs.statSync(fp); } catch { return; }
@@ -363,7 +381,7 @@ function handleReadPre(input, cfg) {
      is free; the line count costs one read of a file that is under the trigger by definition.
      This changes no decision the guard makes and alters no output: it writes a ledger row and returns, exactly
      as before. Its value is that the trigger's own evidence stops being an inference. */
-  if (!persisted && st.size <= cfg.readMaxBytes) {
+  if (!persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
       bytes: st.size, lines: countLines(fp, st.size) });
     return;
