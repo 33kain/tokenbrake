@@ -436,6 +436,35 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     /measured over the sessions the guard was actually running in/.test(r.stdout));
   t('cli: --reach refuses a verdict on a thin pool rather than printing a number that looks like one',
     /NO VERDICT, and the number above is not one/.test(r.stdout));
+  /* A transcript read away from the machine it ran on -- teleported, copied out of a cloud container, or read
+     after the container was reclaimed -- arrives with no ledger beside it. Before the fallback it was filed as a
+     session the guard was absent from, which is the pooling mistake one level down. Its own trim markers settle
+     it, in one direction only. */
+  {
+    const dir = join(cfg, 'projects', '-c-work-moved');
+    mkdirSync(dir, { recursive: true });
+    const at = new Date(T0 + 60000).toISOString();
+    writeFileSync(join(dir, 'movedsess.jsonl'), [
+      JSON.stringify({ type: 'assistant', uuid: 'm1', requestId: 'm1', cwd: 'C:\\work\\moved', timestamp: at,
+        message: { model: 'm', usage: { input_tokens: 1, output_tokens: 1 },
+          content: [{ type: 'tool_use', id: 'tm1', name: 'Bash', input: { command: 'npm test' } }] } }),
+      JSON.stringify({ type: 'user', cwd: 'C:\\work\\moved', timestamp: at,
+        message: { content: [{ type: 'tool_result', tool_use_id: 'tm1',
+          content: 'head\n\n[tokenbrake] 400 lines omitted here (12,000 chars total).\n\ntail' }] } }),
+    ].join('\n') + '\n');
+    const rm = run(['--reach']);
+    t('cli: --reach counts a session whose only proof is its own trim marker',
+      /1 of those from a trim marker in the transcript rather than a ledger row/.test(rm.stdout),
+      (rm.stdout.match(/[^\n]*trim marker in the transcript[^\n]*/) || [])[0]);
+    t('cli: --reach says the marker route is a lower bound, not a count',
+      /LOWER BOUND -- a session the guard ran in and never trimmed carries no marker/.test(rm.stdout));
+    const ra = run(['--all']);
+    t('cli: --all marks a moved session as one the guard ran in, and says what that rests on',
+      /movedses\.\.\..*carried\s+guard\s/.test(ra.stdout)
+      && /1 session\(s\) here rest on the marker alone, which is a LOWER BOUND/.test(ra.stdout),
+      (ra.stdout.match(/ +movedses[^\n]*/) || [])[0]);
+    rmSync(dir, { recursive: true, force: true });
+  }
   r = run(['--caps', '--cwd=whatever']);
   t('cli: --caps refuses --cwd and says why', /ledger rows carry no cwd/.test(r.stdout));
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code
@@ -1020,6 +1049,28 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     trimmed: [trimmedRes] };
   t('a result the guard rewrote counts as in-window by proof, not by its post-trim size',
     T.reachPooled([sess2]).window.n === 1 && T.reachPooled([sess2]).acted.n === 1);
+  /* "Was the guard running here" came only from the ledger, which lives beside the transcript and does not
+     travel with it: a session read away from the machine it ran on would be filed as one the guard was absent
+     from -- the same mistake as pooling sessions it never ran in, one level down. The transcript proves it
+     itself, in one direction: a trim the model received carries the marker. */
+  {
+    const withMark = { sessionId: 's1', results: [{ marker: true }, { marker: false }] };
+    const noMark = { sessionId: 's1', results: [{ marker: false }] };
+    const led = [{ ev: 'post', session: 's1' }];
+    t('the ledger settles it when it has rows for the session',
+      T.guardRan(noMark, led, 's1').ran === true && T.guardRan(noMark, led, 's1').via === 'ledger');
+    t('with no ledger row, a trim marker in the transcript settles it instead',
+      T.guardRan(withMark, [], 's1').ran === true && T.guardRan(withMark, [], 's1').via === 'marker');
+    t('neither is not a yes: a session with no rows and no marker stays out',
+      T.guardRan(noMark, [], 's1').ran === false && T.guardRan(noMark, [], 's1').via === null);
+    t('a ledger row for a DIFFERENT session does not establish this one',
+      T.guardRan(noMark, [{ ev: 'post', session: 'other' }], 's1').ran === false);
+    /* The direction that matters: the fallback can only add sessions. A session the guard ran in and trimmed
+       nothing carries no marker, so the marker route is a lower bound and every caller has to say so. */
+    t('the marker route is a lower bound -- ran and trimmed nothing reads as a blank',
+      T.guardRan({ sessionId: 's2', results: [{ marker: false }, { marker: false }] }, [], 's2').ran === false);
+  }
+
   t('trimmedResults credits only a rewrite the model actually saw',
     (() => {
       const p2 = { sessionId: 'x', results: [

@@ -434,8 +434,8 @@ function reachReport() {
        coverage gap. The ledger tells them apart: a session the guard ran in wrote rows in it. This is the
        third place today the same distinction decided everything. */
     const sid = p.sessionId || f.session;
-    const ran = ledger.some((r) => r && r.session === sid);
-    sessions.push({ parsed: p, trimmed, ran });
+    const g = transcript.guardRan(p, ledger, sid);
+    sessions.push({ parsed: p, trimmed, ran: g.ran, via: g.via });
     pooled.push([id, p.results.length, cwd]);
   }
   const withGuard = sessions.filter((x) => x.ran);
@@ -460,7 +460,13 @@ function reachReport() {
   /* Everything above pools sessions the guard never ran in, where "untouched" says nothing about the guard.
      The verdict is taken from the sessions it DID run in, because those are the only ones where a result
      inside the reach and left alone is a fact about the product. */
+  const byMarker = withGuard.filter((x) => x.via === 'marker').length;
   console.log('\n  Of the ' + pooled.length + ' session(s) pooled, the guard was recording in ' + withGuard.length + '.');
+  /* A transcript read away from the machine it ran on has no ledger beside it. Its own trim markers are the
+     proof instead -- and they are proof in one direction only. */
+  if (byMarker) console.log('    ' + byMarker + ' of those from a trim marker in the transcript rather than a ledger row: the'
+    + '\n    ledger does not travel with a transcript, so a session moved off the machine it ran on has none.'
+    + '\n    That route is a LOWER BOUND -- a session the guard ran in and never trimmed carries no marker.');
   if (!withGuard.length) {
     console.log('  Nothing below can be read as a fact about the guard: it was not running in any of them.');
   } else {
@@ -778,12 +784,13 @@ function report() {
          says so. The counts below are taken over EVERY session, not the printed ones: a count whose
          population is smaller than the header says is the same defect one line further down. */
       const allTop = Number(opt('--top') || 30) || 30;
-      const guardSessions = new Set(ledger.map((r) => r && r.session).filter(Boolean));
+
       const rows = found.map((f) => {
         let p;
         try { p = transcript.parseTranscript(f.file); } catch (e) { return { f, err: e.message }; }
         const cwd = p.cwd || '';
-        return { f, p, cwd, bench: /tokenbrake-bench/i.test(cwd), guard: guardSessions.has(String(p.sessionId || f.session)) };
+        const g = transcript.guardRan(p, ledger, String(p.sessionId || f.session));
+        return { f, p, cwd, bench: /tokenbrake-bench/i.test(cwd), guard: g.ran, via: g.via };
       });
       const shown = rows.slice(0, allTop);
       console.log('Sessions, newest first (' + rows.length
@@ -798,10 +805,15 @@ function report() {
       const bench = readable.filter((x) => x.bench).length;
       const guarded = readable.filter((x) => x.guard).length;
       const outside = readable.filter((x) => x.guard && !x.bench).length;
-      console.log('\n  guard = the guard wrote ledger rows in that session. A blank means it was not running there,');
-      console.log('  which is a different conclusion from running and leaving everything alone, and the two look');
-      console.log('  identical in every other column. bench = a cwd under tokenbrake-bench, which --where, --reads');
-      console.log('  and --reach skip by default as a staged workload.');
+      const byMarkerAll = readable.filter((x) => x.via === 'marker').length;
+      console.log('\n  guard = the guard was running in that session -- established from its ledger rows, or, when the');
+      console.log('  ledger has none (a transcript read away from the machine it ran on carries no ledger), from a');
+      console.log('  trim marker in the transcript itself. A blank means it was not running there, which is a');
+      console.log('  different conclusion from running and leaving everything alone, and the two look identical in');
+      console.log('  every other column. bench = a cwd under tokenbrake-bench, which --where, --reads and --reach');
+      console.log('  skip by default as a staged workload.');
+      if (byMarkerAll) console.log('  ' + byMarkerAll + ' session(s) here rest on the marker alone, which is a LOWER BOUND: one the guard'
+        + '\n  ran in and never trimmed carries no marker and reads as a blank.');
       console.log('  Of ' + readable.length + ' readable session(s): ' + bench + ' benchmark, ' + guarded
         + ' with guard records, ' + outside + ' with guard records outside the benchmark.');
       console.log('  That last number is the population a claim about ordinary work has to come from. It is still');

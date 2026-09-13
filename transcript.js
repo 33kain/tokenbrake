@@ -895,6 +895,26 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       : recordedOriginal && recordedRewritten ? 'mixed' : (recordedOriginal ? 'original' : 'rewritten') };
 }
 
+/* Was the guard running in this session?
+
+   This decides the reach verdict, and twice it has been answered from the ledger alone -- which lives beside the
+   transcript and does not travel with it. A session read on a machine that is not the one it ran on (teleported,
+   copied out of a cloud container, or restored after the container was reclaimed) arrives with no ledger rows,
+   and would be filed as a session the guard was ABSENT from. That is the same mistake as pooling sessions it
+   never ran in, one level down: "untouched" then means the record is missing, not that the guard declined.
+
+   The transcript carries its own proof. A result the guard rewrote and the model actually received holds the
+   `[tokenbrake]` marker, so the marker settles it when the ledger cannot.
+
+   The fallback can only ADD sessions, never remove one: a session the guard ran in and never trimmed leaves no
+   marker at all, so `via: 'marker'` is a LOWER BOUND on which sessions had it, and every caller says so. */
+function guardRan(parsed, ledgerRecs, sessionId) {
+  const sid = sessionId || (parsed && parsed.sessionId) || null;
+  if (sid && (ledgerRecs || []).some((r) => r && r.session === sid)) return { ran: true, via: 'ledger' };
+  if (parsed && (parsed.results || []).some((r) => r && r.marker)) return { ran: true, via: 'marker' };
+  return { ran: false, via: null };
+}
+
 /* How deep into a file the model's targets sit, as a FRACTION of the file rather than as a line number.
 
    The question this exists for is the shape of the knob, not its value. `readLimitLines` is an absolute line
@@ -1313,7 +1333,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
+module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults,
