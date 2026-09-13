@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The install docs cover a cloud session, which they never did, and it was the case that mattered most.** A
+  Claude Code session started from the web or the phone runs in a fresh container and **your `~/.claude` stays on
+  your machine**, so a user-scope install is not there. What arrives is whatever the repository carries -- a
+  committed `.claude/settings.json` from `init --project` protects that one repository and nothing else, and
+  everywhere else the guard is simply absent with nothing in the session saying so. README now documents the
+  third case: installing from the cloud environment's **Setup script** field, which runs before Claude Code
+  launches and is carried into later sessions by the container's filesystem snapshot. Verified from a real phone
+  session -- three hooks present, three spawn tests passing, and the npm-installed guard byte-identical to the
+  checkout's. What it does **not** give you is the record: that session's ledger and transcript are inside the
+  container and go with it, so `report` on your own machine never sees the work. The guard trims there; it does
+  not keep receipts.
+  Also corrected while writing it: the install section still said a double install makes `report` count
+  everything twice. It did when that was written; `--ledger`, `--caps` and `--reach` all drop the duplicate now
+  and say how many they dropped.
+
 - **`readMaxBytes` has a floor, it is `maxChars`, and the trigger grid did not know it.** The two paths that
   share this knob do not share its floor: an unbounded `Read` is capped by the PreToolUse hook, which compares
   `statSync().size` and is gated by nothing, while a `cat` of one file goes through the POST hook, which returns
