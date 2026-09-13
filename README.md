@@ -219,6 +219,8 @@ npx tokenbrake report --where             # where your ranged reads land -- the 
 npx tokenbrake report --caps              # every file the Read cap fired on
 npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
+npx tokenbrake report --cost              # the session in dollars, by token type and model, plus the saving
+npx tokenbrake report --cost --model=sonnet   # reprice the same tokens as if it had run on another model
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -260,6 +262,15 @@ log, a model slices and the trim has nothing to rewrite; handed tools that only 
 those your work looks like is not a thing to reason about either. It counts only sessions the guard was actually
 recording in, because in a session without it "untouched" means the guard was absent rather than idle, and under
 10 such sessions or 200 shell results it prints no verdict instead of a number that looks like one.
+
+`--cost` puts the same session in dollars. It uses the API usage the transcript records — input, output, cache
+read, cache write — priced per request at its own model's list price (cache writes at the one-hour rate Claude
+Code uses), and breaks the total down by token type and by model, so the cache-read line shows what carried
+context actually costs. It adds the guard's saving in dollars (the trimmed tokens, priced across the requests
+they no longer sit in) and, with `--model=<id>` (`opus`/`sonnet`/`haiku`/`fable`, or a full `claude-*` id),
+reprices the very same tokens at another model's rate — the what-would-this-have-cost-on-X question. A model
+the price table does not know is excluded rather than guessed; prices change, so treat it as list price, not a
+bill.
 
 ## Against Claude Code's compaction
 
@@ -343,6 +354,38 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
 
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
 
+A `tools` map overrides any of these knobs per tool, keyed by tool name (`Bash`, `PowerShell`, `Read`). A
+tool's entry is merged over the base config for that tool only — knobs it omits keep their base value — so you
+can trim one tool hard and leave another loose, or switch the guard off for a single tool with
+`"enabled": false` while it keeps running for the rest:
+
+```json
+{
+  "maxChars": 6000,
+  "tools": {
+    "Bash": { "maxChars": 3000, "shapeFilters": true },
+    "Read": { "readMaxBytes": 120000, "readLimitLines": 500 },
+    "PowerShell": { "enabled": false }
+  }
+}
+```
+
+Two lists match by **command or path** (a plain substring), for the cases size alone gets wrong. Both are
+empty by default, so neither changes anything until you set it:
+
+- `noTrim` — an allowlist. A shell command or a read path matching any of these is left **whole**: the
+  `git diff` you always want in full, a schema or a fixture a trimmed view would ruin.
+- `alwaysCap` — the other direction. A read (or a `cat`/`sed` excerpt) whose path matches is capped at
+  `readLimitLines` **even when it is under `readMaxBytes`**: a lockfile, a `*.min.js`, a generated bundle you
+  never want whole.
+
+```json
+{
+  "noTrim": ["git diff", "schema.sql"],
+  "alwaysCap": ["package-lock.json", ".min.js", "dist/"]
+}
+```
+
 `shapeFilters` (default `false`) turns on a pre-pass over shell results at least `shapeMinChars` (1,500)
 long: ANSI escapes removed, a carriage-return redraw *inside* a line reduced to its last frame, and runs of
 three or more consecutive lines carrying a run of **bar glyphs** collapsed to the last one plus a count. It
@@ -354,6 +397,49 @@ a settlement table; adding "or a percentage" collapsed a table of risk scores; a
 as a redraw destroyed every field of a CRLF CSV. Each was caught in a probe on the day it was written. A
 filter that misses noise is a nuisance; one that eats rows is a bug. It is off because no A/B has moved it
 yet; see `AB-TASK.md`.
+
+`jsonShape` (default `false`) changes how a **JSON** result over `maxChars` is trimmed. A char slice through a
+100-record dump leaves two broken half-objects and a shapeless gap; the head/tail line trim is no better on
+minified JSON that is one line. With it on, when the result parses as JSON tokenbrake keeps the first
+`jsonSampleItems` (5) of the big array — a top-level array, or the largest array property of a top-level
+object — and appends a one-line count, so the model gets the shape, a real sample, and the total. It runs
+only in the trim path, so the full output is already saved to `out/` and named in the note; anything that is
+not one of those two shapes falls back to the ordinary trim. Off until an A/B moves it, same as the shape
+filters.
+
+## Presets
+
+Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,
+so a key it does not set survives, and it takes effect on the next tool call (the guard reads config each
+call, no restart):
+
+```
+npx tokenbrake preset aggressive   # maxChars 3000, readMaxBytes 30000, shapeFilters on
+npx tokenbrake preset balanced     # the defaults, spelled out
+npx tokenbrake preset minimal      # high thresholds — trims rarely
+npx tokenbrake preset off          # enabled:false, without uninstalling
+npx tokenbrake preset list         # show them, and the current config
+```
+
+## Health check
+
+```
+npx tokenbrake doctor [--project]   # a prioritized problem list, each with a remedy; non-zero if an ERROR remains
+npx tokenbrake doctor --fix         # re-copies the guard if the installed copy has drifted from this checkout
+```
+
+`doctor` is `status` re-cast for scripting and CI: it exits non-zero when something is actually broken
+(no hooks, a stale guard, a hook that cannot spawn, invalid `tokenbrake.json`) and prints the fix for each.
+
+## Saved outputs
+
+When the guard trims a large result it writes the full text to `~/.claude/tokenbrake/out/<id>.txt` and names
+the path in the trimmed result. To get it back:
+
+```
+npx tokenbrake outputs        # list saved full outputs, newest first
+npx tokenbrake show <id>      # print one whole (id from `outputs`; a prefix works)
+```
 
 ## Uninstall
 

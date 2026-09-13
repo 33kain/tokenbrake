@@ -1764,6 +1764,191 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     own.hooks.PostToolUseFailure[0].matcher === 'Bash|PowerShell' && hook('PostToolUseFailure').args[1] === 'post');
 }
 
+/* ---- Wave 1: preset, outputs/show, doctor --------------------------------
+   cli.js-only features, no guard-behaviour change. A fresh config dir and a temp cwd so the dual-scope
+   check sees no project install (this repo's own .claude would otherwise trip it). */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-w1-'));
+  const proj = join(cfg, 'proj'); mkdirSync(proj, { recursive: true });
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const cli2 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e, cwd: proj });
+  const cfgFile = join(cfg, 'tokenbrake.json');
+
+  // preset (feature 7)
+  let r = cli2(['preset', 'aggressive']);
+  t('preset aggressive writes tokenbrake.json', r.status === 0 && existsSync(cfgFile));
+  let saved = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  t('preset aggressive lowers maxChars and turns shapeFilters on, tagged with the preset name',
+    saved.maxChars === 3000 && saved.shapeFilters === true && saved.preset === 'aggressive');
+  cli2(['preset', 'off']);
+  saved = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  t('preset off disables the guard but merges, not replaces (a key it does not set survives)',
+    saved.enabled === false && saved.maxChars === 3000);
+  r = cli2(['preset', 'list']);
+  t('preset list names all four presets', /off/.test(r.stdout) && /minimal/.test(r.stdout) && /balanced/.test(r.stdout) && /aggressive/.test(r.stdout));
+  r = cli2(['preset', 'nope']);
+  t('an unknown preset is rejected non-zero', r.status === 1 && /unknown preset/.test(r.stdout));
+  rmSync(cfgFile, { force: true });   // clean slate for the doctor checks below
+
+  // outputs / show (feature 3)
+  r = cli2(['outputs']);
+  t('outputs on an empty out dir says so, exit 0', r.status === 0 && /No saved outputs/.test(r.stdout));
+  const outDir = join(cfg, 'tokenbrake', 'out'); mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'abc12345-xyz9876543.txt'), 'FULL OUTPUT LINE ONE\nFULL OUTPUT LINE TWO\n');
+  r = cli2(['outputs']);
+  t('outputs lists a saved full output by id', r.status === 0 && /abc12345-xyz9876543/.test(r.stdout));
+  r = cli2(['show', 'abc12345-xyz9876543']);
+  t('show prints the whole saved output by exact id', r.status === 0 && /FULL OUTPUT LINE TWO/.test(r.stdout));
+  r = cli2(['show', 'abc12345']);
+  t('show resolves a prefix', r.status === 0 && /FULL OUTPUT LINE ONE/.test(r.stdout));
+  r = cli2(['show', 'no-such-id']);
+  t('show reports a miss non-zero', r.status === 1 && /No saved output/.test(r.stdout));
+
+  // doctor (feature 4)
+  r = cli2(['doctor']);
+  t('doctor before install flags no hooks, exit non-zero', r.status === 1 && /no tokenbrake hooks installed/.test(r.stdout));
+  cli2(['init']);
+  r = cli2(['doctor']);
+  t('doctor after init passes, exit 0', r.status === 0 && /all checks passed/.test(r.stdout), r.stdout.split('\n').find(l => /passed|ERROR|WARN/.test(l)));
+  const gf = join(cfg, 'hooks', 'tokenbrake', 'guard.js');
+  writeFileSync(gf, readFileSync('./guard.js', 'utf8') + '\n// drift\n');
+  r = cli2(['doctor']);
+  t('doctor detects a stale installed guard, exit non-zero', r.status === 1 && /STALE/.test(r.stdout));
+  r = cli2(['doctor', '--fix']);
+  t('doctor --fix re-copies the guard and then passes, exit 0', r.status === 0 && /FIXED/.test(r.stdout));
+  t('doctor --fix restored the byte-identical guard', readFileSync(gf, 'utf8') === readFileSync('./guard.js', 'utf8'));
+  writeFileSync(cfgFile, '{ not valid json');
+  r = cli2(['doctor']);
+  t('doctor flags invalid tokenbrake.json, exit non-zero', r.status === 1 && /not valid JSON/.test(r.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- Wave 1: per-tool trim profiles (feature 2) --------------------------
+   guard.js resolves a `tools` map (keyed by tool name) over the base config, per tool. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-tools-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (mode, input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), mode], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const hOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return null; } };
+  const big = Array.from({ length: 400 }, (_, i) => 'line ' + (i + 1) + ' filler filler filler').join('\n');
+  const post = () => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: 'echo hi' }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ maxChars: 100000, tools: { Bash: { maxChars: 200 } } });
+  let u = uOf(g('post', post()));
+  t('per-tool maxChars trims a tool the base maxChars would have left whole', !!u && /\[tokenbrake\]/.test(u.stdout));
+
+  setCfg({ maxChars: 200, tools: { Bash: { enabled: false } } });
+  t('tools.Bash.enabled=false passes Bash through untrimmed (no rewrite emitted)', g('post', post()).stdout.trim() === '');
+
+  setCfg({ maxChars: 200, tools: { PowerShell: { maxChars: 100000 } } });
+  u = uOf(g('post', post()));
+  t('a tools entry for another tool does not spare Bash: base maxChars still trims it', !!u && /\[tokenbrake\]/.test(u.stdout));
+
+  const bigFile = join(cfg, 'big.txt');
+  writeFileSync(bigFile, Array.from({ length: 2000 }, (_, i) => 'line ' + (i + 1)).join('\n'));
+  const readPre = () => ({ session_id: 's', tool_name: 'Read', tool_input: { file_path: bigFile } });
+  setCfg({ readMaxBytes: 10000000, tools: { Read: { readMaxBytes: 1000, readLimitLines: 50 } } });
+  const h = hOf(g('read-pre', readPre()));
+  t('a per-tool Read profile caps a read the base readMaxBytes would have left whole, at its own limit', !!h && h.updatedInput && h.updatedInput.limit === 50);
+  setCfg({ readMaxBytes: 100, tools: { Read: { enabled: false } } });
+  t('tools.Read.enabled=false leaves the read uncapped (no output)', g('read-pre', readPre()).stdout.trim() === '');
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- Wave 2: allow/deny by command or path (feature 9) -------------------- */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-rules-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (mode, input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), mode], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const hOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return null; } };
+  const big = Array.from({ length: 400 }, (_, i) => 'line ' + (i + 1) + ' filler filler').join('\n');
+  const post = (cmd) => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: cmd }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+
+  // noTrim allowlist for a shell command
+  setCfg({ maxChars: 200, noTrim: ['git diff'] });
+  t('noTrim leaves a matching shell command whole (no rewrite emitted)', g('post', post('git diff HEAD~1')).stdout.trim() === '');
+  t('noTrim does not spare a non-matching command', /\[tokenbrake\]/.test((uOf(g('post', post('npm test'))) || {}).stdout || ''));
+
+  // alwaysCap forces a cat-excerpt cap under readMaxBytes
+  setCfg({ maxChars: 200, readMaxBytes: 10000000, readLimitLines: 50, alwaysCap: ['bundle.min.js'] });
+  t('alwaysCap caps a cat excerpt that would otherwise be exempt under readMaxBytes', /file excerpt capped/.test((uOf(g('post', post('cat bundle.min.js'))) || {}).stdout || ''));
+
+  // Read side: noTrim protects a path, alwaysCap forces a cap under readMaxBytes
+  const lock = join(cfg, 'package-lock.json');
+  writeFileSync(lock, Array.from({ length: 500 }, (_, i) => '"dep' + i + '": "1.0.0"').join('\n'));
+  const readPre = () => ({ session_id: 's', tool_name: 'Read', tool_input: { file_path: lock } });
+  setCfg({ readMaxBytes: 10000000, readLimitLines: 40, alwaysCap: ['package-lock.json'] });
+  const h = hOf(g('read-pre', readPre()));
+  t('alwaysCap caps a matched read even though it is under readMaxBytes', !!h && h.updatedInput && h.updatedInput.limit === 40);
+  setCfg({ readMaxBytes: 100, noTrim: ['package-lock.json'] });
+  t('noTrim leaves a matched read uncapped (no output)', g('read-pre', readPre()).stdout.trim() === '');
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- Wave 2: JSON-aware trim (feature 5) ---------------------------------
+   OFF by default; when on, a JSON result over maxChars keeps a sample of the big array plus a count,
+   instead of a char slice. The full output is saved (this runs only in the trim path), so nothing is lost. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-json-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const arr = JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ id: i, name: 'item-' + i })));
+  const post = (stdout) => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: 'curl api' }, tool_response: { stdout, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ maxChars: 200, jsonShape: true, jsonSampleItems: 3 });
+  let u = uOf(g(post(arr)));
+  t('jsonShape keeps a sample of a big top-level array and states the count', !!u && /showing the first 3 of 100 array items/.test(u.stdout));
+  t('jsonShape keeps the kept sample as valid JSON', !!u && (() => { try { JSON.parse(u.stdout.split('\n[tokenbrake]')[0]); return true; } catch { return false; } })());
+
+  setCfg({ maxChars: 200 });   // default: jsonShape off
+  u = uOf(g(post(arr)));
+  t('with jsonShape off the same JSON gets the ordinary trim, not the item-count note', !!u && !/array items/.test(u.stdout) && /omitted here/.test(u.stdout));
+
+  const obj = JSON.stringify({ total: 100, items: Array.from({ length: 100 }, (_, i) => ({ id: i })) });
+  setCfg({ maxChars: 200, jsonShape: true, jsonSampleItems: 2 });
+  u = uOf(g(post(obj)));
+  t('jsonShape cuts the dominant array property of an object and names it', !!u && /the "items" array was cut to its first 2 of 100/.test(u.stdout));
+
+  setCfg({ maxChars: 200, jsonShape: true });
+  u = uOf(g(post('x'.repeat(9000))));   // not JSON
+  t('jsonShape falls back to the ordinary trim on non-JSON output', !!u && /omitted here/.test(u.stdout) && !/array items/.test(u.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- Wave 1: report --cost (feature 8) -----------------------------------
+   One priced request, 1,000,000 tokens of each type on Opus 5 -> a total that is exact by construction:
+   5 + 25 + 0.5 + 10 = $40.50. Sonnet 5 reprices the same tokens to 2 + 10 + 0.2 + 4 = $16.20. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-cost-'));
+  mkdirSync(join(cfg, 'projects', '-w'), { recursive: true });
+  const M = 1000000;
+  const u = { input_tokens: M, output_tokens: M, cache_read_input_tokens: M, cache_creation_input_tokens: M };
+  writeFileSync(join(cfg, 'projects', '-w', 'cost-1.jsonl'),
+    JSON.stringify({ type: 'assistant', requestId: 'r1', uuid: 'r1-a', sessionId: 'cost-1', cwd: '/w', message: { model: 'claude-opus-5', usage: u, content: [{ type: 'text', text: 'hi' }] } }) + '\n');
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const cost = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--cost', ...a], { encoding: 'utf8', env: e });
+
+  let r = cost([]);
+  t('report --cost totals the session at list price', r.status === 0 && /Total \(list price\):\s+\$40\.50/.test(r.stdout), r.stdout.split('\n').find(l => /Total/.test(l)));
+  t('report --cost breaks the total down by token type', /output\s+1,000,000 tok\s+\$25\.00\s+62%/.test(r.stdout) && /cache write\s+1,000,000 tok\s+\$10\.00\s+25%/.test(r.stdout));
+  r = cost(['--model=sonnet']);
+  t('report --cost --model reprices the same tokens at the forced model rate', /What-if on claude-sonnet-5:\s+~ \$16\.20/.test(r.stdout) && /60% less/.test(r.stdout), r.stdout.split('\n').find(l => /What-if/.test(l)));
+  r = cost(['--model=bogus']);
+  t('report --cost --model rejects an unpriced model non-zero', r.status === 1 && /unpriced model/.test(r.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

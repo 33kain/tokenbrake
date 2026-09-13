@@ -30,7 +30,11 @@ const DEFAULTS = {
   persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
   shapeFilters: false,   // OFF by default: collapse progress redraws and repeated lines before anything else
   shapeMinChars: 1500,   // and only on results at least this long
-  logAllTools: true      // record size of every tool result in the ledger (feeds `tokenbrake report`)
+  jsonShape: false,      // OFF by default: when trimming JSON, keep a sample of the big array + a count, not a char slice
+  jsonSampleItems: 5,    // how many array items the JSON-aware trim keeps
+  logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
+  noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
+  alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
 };
 
 /* A persisted output: a tool result that was too big to show inline and was written to a file, by Claude Code
@@ -79,6 +83,27 @@ const ERR = /\b(error|err!|fail(ed|ure|ing)?|exception|traceback|panic|fatal|war
 function loadConfig() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8')) }; }
   catch { return { ...DEFAULTS }; }
+}
+
+/* Per-tool profiles (feature 2). tokenbrake.json may carry a `tools` map keyed by tool name
+   (Bash, PowerShell, Read, ...); a tool's entry overrides the base knobs for that tool only, so you can
+   trim Bash hard and leave Read loose, or set "tools": { "Bash": { "enabled": false } } to skip one tool
+   while the guard still runs for the rest. Shallow merge: any knob the entry omits keeps its base value. */
+function toolConfig(cfg, tool) {
+  const per = tool && cfg.tools && typeof cfg.tools === 'object' ? cfg.tools[tool] : null;
+  return per && typeof per === 'object' ? { ...cfg, ...per } : cfg;
+}
+
+/* Allow/deny by command or path (feature 9). A substring match against the shell command (post) or the file
+   path (read-pre). `noTrim` protects a result from the guard entirely -- a `git diff` you always want whole,
+   a schema you always want in full. `alwaysCap` is the other direction: cap a read (or a `cat` excerpt) at
+   readLimitLines even when it is under readMaxBytes -- a lockfile, a *.min.js, a generated bundle you never
+   want whole. Both default to empty, so neither changes anything until set. */
+function matchesAny(patterns, str) {
+  if (!Array.isArray(patterns) || !patterns.length || !str) return false;
+  str = String(str);
+  for (const p of patterns) if (p && str.includes(String(p))) return true;
+  return false;
 }
 function readStdin() {
   try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return null; }
@@ -166,12 +191,42 @@ function shapeFilter(text) {
   return out.join('\n');
 }
 
+/* JSON-aware trim (feature 5), OFF by default and A/B'd before any default moves. A char slice through a
+   100-record JSON dump leaves two broken half-objects and a middle that is gone with no shape and no count;
+   the head/tail line trim is no better on minified JSON that is one line. When the result parses as JSON,
+   keep the first N items of the big array and say how many there were, so the model sees the shape, a real
+   sample, and the total -- and the full output is on disk (this runs only in the trim path, after the save)
+   so nothing is lost. Only two shapes are handled -- a top-level array, and an object with one dominant
+   array property; anything else returns null and the ordinary trim takes over. Conservative on purpose: an
+   array too short to be worth cutting is left to the normal trim, same caution as the shape filters. */
+function jsonTrim(text, cfg, note) {
+  const t = text.trim();
+  if (t[0] !== '[' && t[0] !== '{') return null;
+  let data;
+  try { data = JSON.parse(t); } catch { return null; }
+  const K = Math.max(1, Number(cfg.jsonSampleItems) || 5);
+  if (Array.isArray(data)) {
+    if (data.length <= K + 1) return null;
+    return `${JSON.stringify(data.slice(0, K), null, 2)}\n[tokenbrake] showing the first ${K} of ${data.length.toLocaleString()} array items (${text.length.toLocaleString()} chars).${note}`;
+  }
+  if (data && typeof data === 'object') {
+    let key = null, len = -1;
+    for (const k of Object.keys(data)) if (Array.isArray(data[k]) && data[k].length > len) { key = k; len = data[k].length; }
+    if (key == null || len <= K + 1) return null;
+    return `${JSON.stringify({ ...data, [key]: data[key].slice(0, K) }, null, 2)}\n[tokenbrake] the "${key}" array was cut to its first ${K} of ${len.toLocaleString()} items (${text.length.toLocaleString()} chars total).${note}`;
+  }
+  return null;
+}
+
 function trimText(text, cfg, savedPath) {
   const lines = text.split('\n');
   const note = savedPath ? ` Full output saved to ${savedPath} — Read or Grep it if you need more.` : '';
   let out;
 
-  if (lines.length > cfg.headLines + cfg.tailLines + 5) {
+  const shaped = cfg.jsonShape ? jsonTrim(text, cfg, note) : null;
+  if (shaped != null && shaped.length < text.length) {
+    out = shaped;
+  } else if (lines.length > cfg.headLines + cfg.tailLines + 5) {
     /* Flagged lines from the middle, each with the lines that follow it up to a blank line or
        errorContextLines, whichever comes first. A FAIL line alone names the test; the assertion, the
        expected/actual pair and the first stack frame are the lines after it, and a model that gets only
@@ -238,6 +293,7 @@ function handlePost(input, cfg) {
   const ti = input.tool_input || {};
   const resp = input.tool_response;
   const isShell = tool === 'Bash' || tool === 'PowerShell';
+  cfg = toolConfig(cfg, tool);
   /* PostToolUseFailure: for Bash, the command exited non-zero. The output arrives in `error` as one string
      ("Exit code 1", then stdout and stderr), with no tool_response on the Claude Code line this was written
      against (2.1.261) and, per the docs, possibly both. Take whichever carries the text. An interrupted
@@ -259,6 +315,13 @@ function handlePost(input, cfg) {
     transcript: input.transcript_path || undefined,
     failed: failed || undefined
   };
+
+  /* A per-tool profile can switch the guard off for one tool while it runs for the rest: still measure the
+     result in the ledger, but pass it through untrimmed. */
+  if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
+
+  /* noTrim allowlist: a matched shell command is left exactly as it came, only recorded. */
+  if (isShell && matchesAny(cfg.noTrim, String(ti.command || ''))) { if (cfg.logAllTools) log({ ...rec, noTrim: true }); return; }
 
   /* Shaping runs before the size test, so a log that collapses below maxChars is delivered clean and never
      trimmed at all. That is the point: the trim's head/tail/flagged shape is right for a log and the wrong
@@ -283,7 +346,7 @@ function handlePost(input, cfg) {
   /* A file excerpt is read like a Read: untouched up to readMaxBytes, and above that capped to the first
      readLimitLines lines with the same note the Read cap gives, not trimmed to head, tail and error lines. */
   const excerpt = !failed && EXCERPT.test(String(ti.command || ''));
-  if (excerpt && text.length <= cfg.readMaxBytes) {
+  if (excerpt && text.length <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, String(ti.command || ''))) {
     if (cfg.logAllTools) log({ ...rec, excerpt: true });
     return;
   }
@@ -330,10 +393,13 @@ function countLines(fp, size) {
 }
 
 function handleReadPre(input, cfg) {
+  cfg = toolConfig(cfg, input.tool_name || 'Read');
+  if (!cfg.enabled) return;
   const ti = input.tool_input || {};
   const fp = ti.file_path;
   if (!fp || ti.limit != null || ti.offset != null) return;          // already bounded
   if (/\.(png|jpe?g|gif|webp|bmp|svg|pdf|ipynb)$/i.test(fp)) return;   // binary/paged formats handled by Read itself
+  if (matchesAny(cfg.noTrim, fp)) return;                             // allowlist: never cap this path
 
   let st;
   try { st = fs.statSync(fp); } catch { return; }
@@ -347,7 +413,7 @@ function handleReadPre(input, cfg) {
      is free; the line count costs one read of a file that is under the trigger by definition.
      This changes no decision the guard makes and alters no output: it writes a ledger row and returns, exactly
      as before. Its value is that the trigger's own evidence stops being an inference. */
-  if (!persisted && st.size <= cfg.readMaxBytes) {
+  if (!persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
       bytes: st.size, lines: countLines(fp, st.size) });
     return;

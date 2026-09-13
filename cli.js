@@ -758,6 +758,7 @@ function report() {
   if (flag('--caps')) return capsReport();
   if (flag('--reads')) return readsReport();
   if (flag('--reach')) return reachReport();
+  if (flag('--cost')) return costReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -921,6 +922,223 @@ function clean() {
   console.log(`removed ${n} saved outputs older than ${days} days`);
 }
 
+/* Named config profiles (feature 7). Applying one merges its keys into ~/.claude/tokenbrake.json, so a
+   custom key the profile does not name survives. `balanced` is the guard's own DEFAULTS, spelled out.
+   The guard reads config on every call, so a preset takes effect on the next tool call -- no restart. */
+const PRESETS = {
+  off:        { enabled: false },
+  minimal:    { enabled: true, maxChars: 12000, readMaxBytes: 120000, readLimitLines: 500, persistedLimitLines: 120, shapeFilters: false },
+  balanced:   { enabled: true, maxChars: 6000,  readMaxBytes: 60000,  readLimitLines: 300, persistedLimitLines: 80,  shapeFilters: false },
+  aggressive: { enabled: true, maxChars: 3000,  readMaxBytes: 30000,  readLimitLines: 150, persistedLimitLines: 60,  shapeFilters: true }
+};
+
+function preset() {
+  const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
+  const name = args[1];
+  if (!name || name === 'list') {
+    console.log('presets (npx tokenbrake preset <name>):');
+    for (const [n, keys] of Object.entries(PRESETS)) console.log(`  ${n.padEnd(11)} ${JSON.stringify(keys)}`);
+    const cur = readJson(cfgPath, null);
+    console.log(`\ncurrent config: ${cur ? JSON.stringify(cur) : 'defaults (no ' + cfgPath + ')'}`);
+    if (!name) { console.log('\nUsage: npx tokenbrake preset <off|minimal|balanced|aggressive>'); }
+    return;
+  }
+  const keys = PRESETS[name];
+  if (!keys) { console.log(`unknown preset "${name}". Known: ${Object.keys(PRESETS).join(', ')}`); process.exitCode = 1; return; }
+  const next = { ...readJson(cfgPath, {}), ...keys, preset: name };
+  writeJson(cfgPath, next);
+  console.log(`preset "${name}" applied to ${cfgPath}`);
+  console.log(`  ${JSON.stringify(next)}`);
+  console.log('Takes effect on the next tool call -- the guard reads config each call, no restart needed.');
+}
+
+/* Retrieval (feature 3). The guard writes every result it trims to <config>/tokenbrake/out/<id>.txt and
+   names the path in the trimmed result. These two make that first-class: `outputs` lists them, `show <id>`
+   prints one whole -- so the full text is one command away when the trimmed view is not enough. */
+function outputs() {
+  const outDir = path.join(TB_DIR, 'out');
+  let files;
+  try { files = fs.readdirSync(outDir).filter(f => f.endsWith('.txt')); } catch { files = []; }
+  if (!files.length) { console.log(`No saved outputs in ${outDir}. The guard writes one when it trims a large result.`); return; }
+  const rows = files.map(f => {
+    let st; try { st = fs.statSync(path.join(outDir, f)); } catch { st = null; }
+    return { id: f.replace(/\.txt$/, ''), bytes: st ? st.size : 0, mtime: st ? st.mtimeMs : 0 };
+  }).sort((a, b) => b.mtime - a.mtime);
+  console.log(`Saved full outputs in ${outDir} (newest first):`);
+  for (const r of rows) console.log(`  ${r.id.padEnd(22)} ${fmt(r.bytes).padStart(10)} chars  ${new Date(r.mtime).toISOString().replace('T', ' ').slice(0, 19)}`);
+  console.log('\nPrint one with: npx tokenbrake show <id>   (id is the first column; a prefix works)');
+  console.log('Delete old ones with: npx tokenbrake clean --days=7');
+}
+
+function showOutput() {
+  const arg = args[1];
+  if (!arg) { console.log('Usage: npx tokenbrake show <id>   (npx tokenbrake outputs lists them)'); process.exitCode = 1; return; }
+  const emitFile = (p) => { try { process.stdout.write(fs.readFileSync(p, 'utf8')); return true; } catch (e) { console.log(`Could not read ${p}: ${e.message}`); process.exitCode = 1; return false; } };
+  if (arg.includes('/') || arg.includes(path.sep)) { emitFile(arg); return; }
+  const outDir = path.join(TB_DIR, 'out');
+  let files;
+  try { files = fs.readdirSync(outDir).filter(f => f.endsWith('.txt')); } catch { files = []; }
+  const stem = arg.replace(/\.txt$/, '');
+  let matches = files.filter(f => f.replace(/\.txt$/, '') === stem);
+  if (!matches.length) matches = files.filter(f => f.startsWith(stem));
+  if (!matches.length) matches = files.filter(f => f.includes(stem));
+  if (!matches.length) { console.log(`No saved output matches "${arg}". npx tokenbrake outputs lists what is there.`); process.exitCode = 1; return; }
+  if (matches.length > 1) {
+    console.log(`"${arg}" matches ${matches.length} outputs -- narrow it:`);
+    for (const m of matches) console.log('  ' + m.replace(/\.txt$/, ''));
+    process.exitCode = 1; return;
+  }
+  emitFile(path.join(outDir, matches[0]));
+}
+
+/* Doctor (feature 4): the same checks `status` prints, re-cast as a prioritized problem list with a remedy
+   for each, and an exit code (non-zero when an ERROR remains) so it can gate CI. `--fix` performs the one
+   safe, well-defined repair -- re-copying a stale guard -- and reports everything else for the human. */
+function doctor() {
+  const FIX = flag('--fix');
+  const problems = [];
+  const settings = readJson(settingsPath, {});
+  const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
+  const has = (ev) => ours(ev).length > 0;
+  const EVENTS = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'];
+
+  console.log(`tokenbrake doctor (${PROJECT ? 'project' : 'user'} scope)`);
+  console.log(`  settings: ${settingsPath}`);
+
+  const missing = EVENTS.filter(ev => !has(ev));
+  if (missing.length === EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
+  else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
+
+  const sha = (p) => { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex'); } catch { return null; } };
+  const srcSha = sha(path.join(__dirname, 'guard.js'));
+  const copySha = sha(guardFile);
+  if (!copySha) problems.push({ sev: has('PostToolUse') ? 'error' : 'warn', msg: `guard file missing (${guardFile})`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
+  else if (srcSha && srcSha !== copySha) {
+    if (FIX) {
+      try { fs.mkdirSync(guardDir, { recursive: true }); fs.copyFileSync(path.join(__dirname, 'guard.js'), guardFile);
+        problems.push({ sev: 'warn', msg: 'installed guard was STALE', fixed: `re-copied guard.js -> ${guardFile}` }); }
+      catch (e) { problems.push({ sev: 'error', msg: `installed guard is STALE and --fix could not re-copy it: ${e.message}`, fix: `check permissions on ${guardDir}` }); }
+    } else problems.push({ sev: 'error', msg: `installed guard is STALE (${copySha.slice(0, 12)} vs source ${srcSha.slice(0, 12)}); the ledger records an older guard than this checkout`, fix: `node cli.js doctor --fix, or node cli.js init${PROJECT ? ' --project' : ''}` });
+  }
+
+  const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
+  if (fs.existsSync(cfgPath)) {
+    try { const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      if (c.enabled === false) problems.push({ sev: 'warn', msg: 'guard is disabled in config (enabled:false); it runs but changes nothing', fix: 'node cli.js preset balanced, or set enabled:true' });
+    } catch { problems.push({ sev: 'error', msg: `${cfgPath} is not valid JSON; the guard silently falls back to defaults`, fix: 'fix the JSON or delete the file' }); }
+  }
+
+  for (const ev of EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
+    if (!isOurs({ hooks: [h] })) continue;
+    const v = selfTest(h);
+    if (!/^ok/.test(v)) problems.push({ sev: 'error', msg: `${ev} hook spawn (${h.command}): ${v}`, fix: 'check the node path; re-run init with --node=<path-to-node>' });
+  }
+
+  const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
+  const other = readJson(otherPath, null);
+  const otherHas = !!(other && other.hooks && EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
+  if (otherHas && EVENTS.some(has)) problems.push({ sev: 'warn', msg: `also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one scope' });
+
+  const fixed = problems.filter(p => p.fixed);
+  const errors = problems.filter(p => p.sev === 'error' && !p.fixed);
+  const warns = problems.filter(p => p.sev === 'warn' && !p.fixed);
+  for (const p of fixed) console.log(`  FIXED  ${p.msg} -- ${p.fixed}`);
+  for (const p of errors) console.log(`  ERROR  ${p.msg}\n         fix: ${p.fix}`);
+  for (const p of warns) console.log(`  WARN   ${p.msg}\n         fix: ${p.fix}`);
+  if (!errors.length && !warns.length) console.log(`  all checks passed${fixed.length ? ' (after --fix)' : ''}`);
+  else if (!FIX && errors.some(p => /STALE/.test(p.msg))) console.log('\n  Re-run with --fix to repair a stale guard automatically.');
+  process.exitCode = errors.length ? 1 : 0;
+}
+
+/* Cost (feature 8): the picked session(s) at list price, broken down by token type and by model, with the
+   guard's saving in dollars, and a --model=<id> what-if that reprices the same tokens at another model's
+   rate. Built on transcript.js's priceOf / usage / trimSavings -- the same figures the report's one-line
+   cost rests on. --all pools every session; --session=<prefix>/--transcript=<path> pick one. */
+const MODEL_ALIASES = { opus: 'claude-opus-5', sonnet: 'claude-sonnet-5', haiku: 'claude-haiku-4-5', fable: 'claude-fable-5-1' };
+
+function costReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const usd = (x) => x == null ? 'n/a' : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+
+  let files = [];
+  const tpath = opt('--transcript');
+  const want = opt('--session');
+  if (tpath) files = [tpath];
+  else if (flag('--all')) files = found.map(f => f.file);
+  else if (want) {
+    const hit = found.find(f => String(f.session).startsWith(want));
+    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
+    files = [hit.file];
+  } else {
+    const lastRow = [...ledger].reverse().find(r => r && r.transcript && fs.existsSync(r.transcript));
+    files = lastRow ? [lastRow.transcript] : (found[0] ? [found[0].file] : []);
+  }
+  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+
+  const modelArg = opt('--model');
+  let forced = null;
+  if (modelArg) {
+    forced = MODEL_ALIASES[modelArg.toLowerCase()] || modelArg;
+    if (!transcript.priceOf(forced)) { console.log('unpriced model "' + modelArg + '". Try: ' + Object.keys(MODEL_ALIASES).join(', ') + ', or a full claude-* id the price table knows.'); process.exitCode = 1; return; }
+  }
+
+  const type = { input: { tok: 0, usd: 0, label: 'input' }, output: { tok: 0, usd: 0, label: 'output' },
+    read: { tok: 0, usd: 0, label: 'cache read' }, write: { tok: 0, usd: 0, label: 'cache write' } };
+  const byModel = {}; const unpriced = new Set();
+  let reqsPriced = 0, forcedUsd = 0, sessions = 0, savedTok = 0, savedCarried = 0, savedUsd = 0, anySaving = false;
+
+  for (const file of files) {
+    let p; try { p = transcript.parseTranscript(file); transcript.carry(p); } catch { continue; }
+    sessions++;
+    for (const q of p.requests) {
+      const u = q.usage; if (!u) continue;
+      const pr = transcript.priceOf(q.model);
+      if (!pr) { unpriced.add(q.model || '?'); continue; }
+      reqsPriced++;
+      const inp = u.input_tokens || 0, o = u.output_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
+      type.input.tok += inp; type.input.usd += inp * pr.in / 1e6;
+      type.output.tok += o; type.output.usd += o * pr.out / 1e6;
+      type.read.tok += cr; type.read.usd += cr * pr.read / 1e6;
+      type.write.tok += cw; type.write.usd += cw * pr.write / 1e6;
+      byModel[q.model] = (byModel[q.model] || 0) + (inp * pr.in + o * pr.out + cr * pr.read + cw * pr.write) / 1e6;
+      if (forced) { const f = transcript.priceOf(forced); forcedUsd += (inp * f.in + o * f.out + cr * f.read + cw * f.write) / 1e6; }
+    }
+    const sv = transcript.trimSavings(p, ledger);
+    savedTok += sv.saved; savedCarried += sv.savedCarried;
+    if (sv.usd != null) savedUsd += sv.usd;
+    if (sv.count > 0) anySaving = true;
+  }
+
+  const total = type.input.usd + type.output.usd + type.read.usd + type.write.usd;
+  console.log('Cost -- ' + sessions + ' session(s)' + (forced ? '  (what-if model: ' + forced + ')' : ''));
+  if (!reqsPriced) {
+    console.log('  No priced requests' + (unpriced.size ? ' (models seen: ' + [...unpriced].join(', ') + ' -- not in the price table)' : ' (no API usage in the transcript)') + '.');
+    return;
+  }
+  console.log('  Total (list price):  ' + usd(total) + '   over ' + fmt(reqsPriced) + ' priced request(s)');
+  console.log('  By token type:');
+  for (const k of ['input', 'output', 'read', 'write']) {
+    const b = type[k];
+    console.log('    ' + b.label.padEnd(12) + fmt(b.tok).padStart(13) + ' tok   ' + usd(b.usd).padStart(8) + '   ' + String(total ? Math.round(100 * b.usd / total) : 0).padStart(3) + '%');
+  }
+  const models = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
+  if (models.length > 1) { console.log('  By model:'); for (const [m, c] of models) console.log('    ' + m.padEnd(22) + usd(c).padStart(8)); }
+  else console.log('  Model: ' + models[0][0]);
+  console.log('  Per request:  ~ ' + usd(total / reqsPriced) + ' averaged over ' + fmt(reqsPriced) + ' request(s)');
+  if (unpriced.size) console.log('  Unpriced (excluded from the total): ' + [...unpriced].join(', '));
+  if (anySaving) console.log('  Guard saving:  ~ ' + fmt(savedTok) + ' tokens kept out, ~ ' + fmt(savedCarried) + ' token-reads not carried'
+    + (savedUsd ? ' -- ~ ' + usd(savedUsd) + ' off at list price' : ''));
+  else if (ledger.length) console.log('  Guard saving:  none credited in these session(s)');
+  if (forced) {
+    const delta = total ? Math.round(100 * (total - forcedUsd) / total) : 0;
+    console.log('  What-if on ' + forced + ':  ~ ' + usd(forcedUsd) + '  (same tokens at ' + forced + ' rates) -- '
+      + (delta > 0 ? delta + '% less' : delta < 0 ? (-delta) + '% more' : 'about the same'));
+  }
+  console.log('\n  Dollar figures use the API usage recorded in the transcript, at list price (cache writes at the 1h rate); a model not in the price table is excluded.');
+}
+
 function help() {
   console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
 
@@ -930,6 +1148,13 @@ function help() {
                                       or plain 'node' for --project so the file stays shareable)
   npx tokenbrake uninstall [--project]
   npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
+  npx tokenbrake doctor [--project] [--fix]
+                                      a health check as a prioritized problem list, each with a remedy;
+                                      exits non-zero when an ERROR remains. --fix re-copies a stale guard
+  npx tokenbrake preset <name>        apply a named config profile: off | minimal | balanced | aggressive
+                                      (merged into ~/.claude/tokenbrake.json); preset list shows them
+  npx tokenbrake outputs              list the full outputs the guard saved when it trimmed a result
+  npx tokenbrake show <id>            print one saved full output whole (id from 'outputs'; a prefix works)
   npx tokenbrake report               what ate your tokens last session: every tool result ranked by
                                       the context it was carried through (size x later requests), from
                                       the Claude Code transcript, with what tokenbrake trimmed
@@ -952,9 +1177,13 @@ function help() {
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets
                                       sit as a share of the file. The evidence for readMaxBytes
+      --cost [--model=<id>]           the session at list price, broken down by token type and model, with
+                                      the guard's saving in dollars; --model reprices the same tokens at
+                                      another model's rate (opus|sonnet|haiku|fable, or a full claude-* id)
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
 }
 
-({ init, uninstall, status, report, clean, help })[cmd] ? ({ init, uninstall, status, report, clean, help })[cmd]() : help();
+const cmds = { init, uninstall, status, doctor, report, preset, show: showOutput, outputs, ls: outputs, clean, help };
+(cmds[cmd] || help)();
