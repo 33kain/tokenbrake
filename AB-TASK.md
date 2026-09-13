@@ -594,6 +594,45 @@ statistic should be the decision-relevant one rather than a spread: for each can
 rate against the median withholding, and then which shape's frontier dominates. That comparison is exact
 arithmetic over these same 45 reads and costs nothing -- but it must be written down before it is computed.
 
+## `readMaxBytes` has a floor, and it is `maxChars` — found 2026-09-13
+
+**The finding.** The two paths that share `readMaxBytes` do not share its floor, and every statement on this
+page about "lowering the trigger" was written as though they did.
+
+| path | compares | floor |
+|---|---|---|
+| PreToolUse, an unbounded `Read` | `statSync().size` against `readMaxBytes` | none |
+| PostToolUse, a `cat` of one file | delivered `text.length` against `readMaxBytes`, **only after** `text.length > maxChars` | **`maxChars`** |
+
+`guard.js:272` returns before any cap logic when a shell result is at or under `maxChars`. So **for a shell read,
+`readMaxBytes` below `maxChars` is a dead knob**: setting it to 2,000 changes nothing for a result under 6,000
+chars. That is correct behaviour in the guard -- the trim's threshold gates the whole POST path -- and it was
+simply not modelled anywhere the trigger was reasoned about.
+
+**How it surfaced, which is the part worth keeping.** Asked what a trigger of 2,000 with `readLimitLines` 30
+would have saved in one session, `report --reads`' grid answered **2 of 5** whole-file reads caught. Simulating
+the guard's own path answered **1**. The grid applied `bytes > trigger` and nothing else, so every row below
+`maxChars` overstated its count -- and the withheld medians in those rows were taken over the same inflated set,
+which is the half that would have fed a decision. Third time in two days that these two paths gave different
+answers: the `--caps` zero that counted one path, the capped-`cat` sizing that used the guard's own output, and
+now the grid's floor. `triggerGrid` takes `maxChars` now, marks a row where the gate bites, and `--reads` states
+the floor unconditionally -- with the default triggers all above 6,000 no row is ever marked, so a reader asking
+about a low trigger would otherwise never be told.
+
+**The measurement that produced it, n=1 and labelled as such.** One session, 1,479 requests over four days,
+$416.36 at list price, 58M carried token-reads. Five whole-file reads, **all** shell `cat`s: 6,557 / 2,220 /
+1,508 / 257 / 59 chars. At trigger 2,000 with cap 30 exactly one is affected -- `cat LANDSCAPE.md`, 84 lines,
+carried 871,948 token-reads across 532 requests -- and it withholds **60.6%**, not the 64.3% that `30/84` gives,
+because the model receives the guard's own 239-character note in place of the text. That is ~528k carried
+token-reads, **~$0.26**, against the $0.57 the trim actually saved in the same session. The other four reads are
+under `maxChars` and never reach the cap at any trigger.
+
+**What it does not license.** No default moves on one session, and nothing on this page changes its numbers: with
+`maxChars` 6,000 and the grid's candidate triggers starting at 10,000, every row was already above the floor.
+Q1's decision rule stands as written, with one clause now explicit -- **a candidate T below `maxChars` cannot
+satisfy it for shell reads at all**, whatever the arithmetic says, so the search space for the trigger starts at
+`maxChars` and not at zero.
+
 ## The Read cap's form — pre-registered 2026-09-12, before the frontier is computed
 
 The spread rule licensed nothing and named the reason it could not: a coefficient of variation says how

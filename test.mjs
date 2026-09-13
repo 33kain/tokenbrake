@@ -449,6 +449,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     (r.stdout.match(/Sized from:[^\n]*/) || [])[0]);
   t('cli: --reads prints the trigger grid and marks the configured readMaxBytes',
     /<- your readMaxBytes/.test(r.stdout) && /trigger   reads  bytes/.test(r.stdout));
+  t('cli: --reads states the trigger\'s floor for shell reads even when no row trips it',
+    /effective trigger is never lower than maxChars \(6,000\)/.test(r.stdout)
+    && /guard\.js:272/.test(r.stdout) && /are shell reads \(a cat\)/.test(r.stdout),
+    (r.stdout.match(/[^\n]*Floor:[^\n]*/) || [])[0]);
   t('cli: --reads keeps the miss rate out of the grid and labels it as the other population',
     /DIFFERENT population from the whole-file reads/.test(r.stdout));
   t('cli: --reads reports depth as a share of the file, which is the shape question',
@@ -1278,6 +1282,32 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     Math.abs(grid[1].byLimit[300] - (1900 - 300) / 1900) < 1e-9, String(grid[1].byLimit[300]));
   t('a limit at or above the file\'s length withholds nothing -- the cap fires and is a no-op',
     T.triggerGrid([{ bytes: 70000, lines: 600 }], [10000], [800])[0].byLimit[800] === 0);
+
+  /* The two paths that share readMaxBytes do not share its floor. An unbounded Read is capped by the PreToolUse
+     hook, which compares statSync().size against the trigger and nothing gates it. A cat of one file goes
+     through the POST hook, which returns at or under maxChars BEFORE any cap logic (guard.js:272) -- so below
+     maxChars the trigger is a dead knob for it. The grid modelled only the first, and answered "what would a
+     trigger of 2,000 have caught" with 2 where the guard's own path catches 1. */
+  const floorReads = [{ bytes: 5000, lines: 900, via: 'post' }, { bytes: 9000, lines: 100, via: 'post' }];
+  const gated = T.triggerGrid(floorReads, [2000], [30], { maxChars: 6000 })[0];
+  t('a shell read over the trigger but under maxChars is not caught, and the row says how many are inert',
+    gated.caught === 1 && gated.inert === 1, JSON.stringify({ caught: gated.caught, inert: gated.inert }));
+  t('the same size through the Read path IS caught, because that path has no floor',
+    T.triggerGrid([{ bytes: 5000, lines: 100, via: 'read-cap' }], [2000], [30], { maxChars: 6000 })[0].caught === 1);
+  /* The count is the visible half and the medians are the half that decides: taken over the inflated set, the
+     saving a low trigger appears to offer is a saving on reads the guard never touches. */
+  t('the withheld median comes from the effective set, not from every read over the trigger',
+    Math.abs(gated.byLimit[30] - (100 - 30) / 100) < 1e-9
+    && Math.abs(T.triggerGrid(floorReads, [2000], [30])[0].byLimit[30] - (900 - 30) / 900) < 1e-9,
+    'gated ' + gated.byLimit[30].toFixed(3) + '  ungated ' + T.triggerGrid(floorReads, [2000], [30])[0].byLimit[30].toFixed(3));
+  t('omitting maxChars keeps the old arithmetic exactly, so no caller changes meaning by being left alone',
+    T.triggerGrid(floorReads, [2000], [30])[0].caught === 2
+    && T.triggerGrid(floorReads, [2000], [30])[0].inert === 0);
+  t('each read records the path readMaxBytes would reach it by',
+    ur.reads.every(r => r.via === 'post' || r.via === 'read-cap')
+    && T.unboundedReads({ ...up, results: [R('/w/one.js', true, 'a\nb', null, 0, { name: 'Read' })] }, [], {}).reads[0].via === 'read-cap'
+    && T.unboundedReads({ ...up, results: [R('/w/one.js', true, 'a\nb', null, 0, { name: 'Bash' })] }, [], {}).reads[0].via === 'post',
+    JSON.stringify(ur.reads.map(r => r.via)));
 
   /* Depth: the same start line means different things in files of different lengths, and nothing before this
      paired the two. Line lengths come from three sources and the weakest (the file on disk now) is excluded
