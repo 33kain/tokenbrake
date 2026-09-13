@@ -374,7 +374,8 @@ Two lists match by **command or path** (a plain substring), for the cases size a
 empty by default, so neither changes anything until you set it:
 
 - `noTrim` — an allowlist. A shell command or a read path matching any of these is left **whole**: the
-  `git diff` you always want in full, a schema or a fixture a trimmed view would ruin.
+  `git diff` you always want in full, a schema or a fixture a trimmed view would ruin. For an `mcp__*` result
+  it matches the tool name, so `"mcp__github__get_file_contents"` spares one MCP tool from `mcpTrim`.
 - `alwaysCap` — the other direction. A read (or a `cat`/`sed` excerpt) whose path matches is capped at
   `readLimitLines` **even when it is under `readMaxBytes`**: a lockfile, a `*.min.js`, a generated bundle you
   never want whole.
@@ -406,6 +407,16 @@ object — and appends a one-line count, so the model gets the shape, a real sam
 only in the trim path, so the full output is already saved to `out/` and named in the note; anything that is
 not one of those two shapes falls back to the ordinary trim. Off until an A/B moves it, same as the shape
 filters.
+
+`mcpTrim` (default `false`) extends the guard past shell output to `mcp__*` tool results. An MCP result arrives
+as a content-block array (`[{ "type": "text", "text": … }]`) — not the Bash `{ stdout }` object — and the guard
+sees it in full *before* Claude Code's own "too large → saved to a file, 2 KB preview" step, so with it on an
+oversized MCP result is routed through the same trim as shell output (head/tail, or a JSON sample when
+`jsonShape` is on) and the full output saved to `out/`, instead of a generic preview plus a file that is then
+re-read whole. The reply is rebuilt in the exact shape the result arrived in, since Claude Code validates it
+against the tool's own schema and drops a wrong shape silently. Target one server with a per-tool profile
+(`"tools": { "mcp__github__list_commits": { … } }`) or protect one by name with `noTrim`. Off until an A/B
+moves it; pairs with `jsonShape`, since MCP bodies are usually JSON.
 
 ## Presets
 

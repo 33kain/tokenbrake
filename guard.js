@@ -6,7 +6,8 @@
 // Modes (argv[2]):
 //   post      PostToolUse (matcher *) and PostToolUseFailure (Bash|PowerShell): trims oversized shell output,
 //             logs every tool result size. A command that exits non-zero is a different event, and until 0.2.2
-//             the guard never saw it: every failing test run entered whole.
+//             the guard never saw it: every failing test run entered whole. With mcpTrim on, oversized mcp__*
+//             results (a content-block array, not {stdout}) are routed through the same trim pipeline.
 //   read-pre  PreToolUse (matcher Read): caps unbounded reads of large files via updatedInput.limit
 
 const fs = require('fs');
@@ -32,6 +33,7 @@ const DEFAULTS = {
   shapeMinChars: 1500,   // and only on results at least this long
   jsonShape: false,      // OFF by default: when trimming JSON, keep a sample of the big array + a count, not a char slice
   jsonSampleItems: 5,    // how many array items the JSON-aware trim keeps
+  mcpTrim: false,        // OFF by default: also trim oversized mcp__* results (a content-block array); A/B before flipping. Pairs with jsonShape, since MCP bodies are usually JSON.
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -41,8 +43,11 @@ const DEFAULTS = {
    (<config>/projects/<cwd>/<session>/tool-results/<id>.txt, its ~30,000-character ceiling) or by this guard
    (<config>/tokenbrake/out/<id>.txt). Reading one whole puts the oversized output back into context by another
    door; it carried 96% of the untrimmed audit arm's context (AB-TASK.md). Output that was too big to show is
-   too big to read whole, whatever readMaxBytes says. */
-const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
+   too big to read whole, whatever readMaxBytes says. An oversized mcp__* result is saved by Claude Code as
+   tool-results/<id>.json, so both extensions count -- this is the safety net for MCP when mcpTrim is off (the
+   default): the file re-read is capped even when the PostToolUse trim did not run. Still dir-scoped, so it
+   only ever matches a file inside tool-results/ or tokenbrake/out/. */
+const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.(txt|json)$/;
 
 /* A line that opens with a pass marker is a passing test whatever its name says: "ok   error render call
    passes resp through" is not an error. Without this, a suite whose test names mention errors fills the
@@ -118,6 +123,21 @@ function log(rec) {
   } catch { /* ledger is best-effort */ }
 }
 function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) + '…' : s; }
+
+/* Save a full result to out/<session>-<toolUseId>.txt before it is cut, so nothing withheld from the model is
+   lost -- the trim note names the path and `tokenbrake show <id>` retrieves it. Best-effort: any error => no
+   saved copy, and the caller passes null on to the note. */
+function saveOut(input, text) {
+  try {
+    const outDir = path.join(TB_DIR, 'out');
+    fs.mkdirSync(outDir, { recursive: true });
+    const sid = String(input.session_id || 'session').slice(0, 8);
+    const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
+    const saved = path.join(outDir, `${sid}-${tid}.txt`);
+    fs.writeFileSync(saved, text);
+    return saved;
+  } catch { return null; }
+}
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
 
@@ -218,6 +238,33 @@ function jsonTrim(text, cfg, note) {
   return null;
 }
 
+/* Extract the text of an mcp__* result and a rebuilder that returns the SAME shape with trimmed text in place.
+   Observed live (mcp__github__list_commits, 2026-09-13): a bare content-block array [{type:'text',text},…] --
+   the whole result, in full, before Claude Code's own "too large → saved to file + 2KB preview" step. Also
+   handle a { content:[…] } wrapper and a bare string, since the exact shape is per-server. Non-text blocks
+   (images, …) are preserved after the trimmed text. Returns null when there is nothing to trim, so the guard
+   falls open to log-only. Rebuilding in the arrived-in shape is the Bash {stdout} lesson: updatedToolOutput is
+   validated against the tool's own response schema and a wrong shape is rejected silently. */
+function mcpBody(resp) {
+  const fromBlocks = (blocks) => {
+    if (!Array.isArray(blocks)) return null;
+    const texts = blocks.filter(b => b && b.type === 'text' && typeof b.text === 'string');
+    if (!texts.length) return null;
+    const others = blocks.filter(b => !(b && b.type === 'text' && typeof b.text === 'string'));
+    return { text: texts.map(b => b.text).join('\n'), make: (t) => [{ type: 'text', text: t }, ...others] };
+  };
+  if (Array.isArray(resp)) {
+    const b = fromBlocks(resp);
+    return b && { text: b.text, rebuild: b.make };
+  }
+  if (resp && typeof resp === 'object' && Array.isArray(resp.content)) {
+    const b = fromBlocks(resp.content);
+    return b && { text: b.text, rebuild: (t) => ({ ...resp, content: b.make(t) }) };
+  }
+  if (typeof resp === 'string') return { text: resp, rebuild: (t) => t };
+  return null;
+}
+
 function trimText(text, cfg, savedPath) {
   const lines = text.split('\n');
   const note = savedPath ? ` Full output saved to ${savedPath} — Read or Grep it if you need more.` : '';
@@ -293,6 +340,7 @@ function handlePost(input, cfg) {
   const ti = input.tool_input || {};
   const resp = input.tool_response;
   const isShell = tool === 'Bash' || tool === 'PowerShell';
+  const isMcp = /^mcp__/.test(tool);
   cfg = toolConfig(cfg, tool);
   /* PostToolUseFailure: for Bash, the command exited non-zero. The output arrives in `error` as one string
      ("Exit code 1", then stdout and stderr), with no tool_response on the Claude Code line this was written
@@ -319,6 +367,29 @@ function handlePost(input, cfg) {
   /* A per-tool profile can switch the guard off for one tool while it runs for the rest: still measure the
      result in the ledger, but pass it through untrimmed. */
   if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
+
+  /* MCP tool-output trimming (feature 1). An mcp__* result is a content-block array the guard sees in full,
+     before Claude Code's own "too large → saved to file + preview" step (which otherwise persists the whole
+     result to a file that then gets re-read whole -- the carry the product exists to cut). Route it through
+     the same trimText pipeline as shell output, but rebuild the reply in the shape it arrived in. Off by
+     default (mcpTrim); A/B gates turning it on. noTrim matches the tool name for an MCP result. On failure the
+     PostToolUseFailure matcher never routes MCP here, but guard defensively. `chars` on the trim row is the
+     inner text length, so it shares a basis with `kept` the way the shell rows do. */
+  if (isMcp) {
+    const body = mcpBody(resp);
+    /* The inner text is the size that matters (rec.chars was JSON.stringify of the block array); log it the
+       same whether or not the row is trimmed, so untrimmed and trimmed MCP rows share a basis. */
+    if (body) rec.chars = body.text.length;
+    if (cfg.mcpTrim && !failed && body && !matchesAny(cfg.noTrim, tool) && body.text.length > cfg.maxChars) {
+      const saved = saveOut(input, body.text);
+      const trimmed = trimText(body.text, cfg, saved);
+      log({ ...rec, mcp: true, kept: trimmed.length, saved });
+      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: body.rebuild(trimmed) } });
+      return;
+    }
+    if (cfg.logAllTools) log(rec);
+    return;
+  }
 
   /* noTrim allowlist: a matched shell command is left exactly as it came, only recorded. */
   if (isShell && matchesAny(cfg.noTrim, String(ti.command || ''))) { if (cfg.logAllTools) log({ ...rec, noTrim: true }); return; }
@@ -360,15 +431,7 @@ function handlePost(input, cfg) {
     return;
   }
 
-  let saved = null;
-  try {
-    const outDir = path.join(TB_DIR, 'out');
-    fs.mkdirSync(outDir, { recursive: true });
-    const sid = String(input.session_id || 'session').slice(0, 8);
-    const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
-    saved = path.join(outDir, `${sid}-${tid}.txt`);
-    fs.writeFileSync(saved, text);
-  } catch { saved = null; }
+  const saved = saveOut(input, text);
 
   const trimmed = trimText(text, cfg, saved);
   log({ ...rec, kept: trimmed.length, saved });
