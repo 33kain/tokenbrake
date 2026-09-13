@@ -687,6 +687,23 @@ Three things to remember while that accumulates:
   `cli.js:159-160` treats user scope as *this* scope and project as *other*, so *"installed at project scope
   instead"* means user scope is empty here. That is the ordinary reading for a container and for any plain
   project install, and it is not a defect to chase.
+  **Half of this was fixed the same day.** The owner added a setup script to the cloud environment
+  (`npm i -g tokenbrake@<version>` then `tokenbrake init`, each with `|| true`), which installs at user scope
+  inside the container before Claude Code launches; the filesystem snapshot then carries it into later sessions.
+  Verified from a new phone session: three hooks present, three spawn tests passing, the npm-installed guard
+  byte-identical to this checkout's (`52228ede4c2b`, which also confirms `guard.js` has not moved since 0.2.7),
+  and the double-scope line where this repository's committed install overlaps it. **Protection and measurement
+  now differ by surface rather than both being absent**: the guard trims in a cloud session, and that session's
+  `status` still reads `Ledger: 0 records` because the ledger and the transcript are inside the container. The
+  counters are still desktop-only, and README's install section now carries the cloud case.
+- **A benchmark OFF arm must never run from the cloud now, and nothing in the arm will say so.** The environment
+  that carries the setup script also carries three repositories -- `tokenbrake`, `contexa` and
+  **`tokenbrake-bench`** -- so from the moment that script was saved, every cloud session in it has a user-scope
+  guard. This is the ab7 failure with a new door into it: an arm cannot see an install made at another scope, and
+  here it is made before Claude Code even starts. Rounds run on the desktop, which is why this is a trap and not
+  a live problem; if one is ever run from the cloud, **empty the setup script first**.
+  `verify-config --expect=off` still catches it -- it requires zero guards at every scope -- but only if it is
+  run, and ab7 is the standing proof that "the arm's settings say off" is not the same fact.
 
 ## 0.2.7 is cut — 2026-09-12
 

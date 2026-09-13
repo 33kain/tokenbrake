@@ -144,8 +144,11 @@ npx tokenbrake init --project  # this project only: .claude/settings.json (commi
                                # machine: with both, the guard runs twice per call, and `status` says so
 ```
 
-One or the other. With both, every result runs through the guard twice: the second pass is a no-op on an already
-trimmed output, but the ledger records it twice and `report` counts it twice.
+One or the other, normally. With both, every result runs through the guard twice: the second pass is a no-op on
+an already trimmed output, and the ledger records it twice -- `report --ledger`, `--caps` and `--reach` drop the
+duplicate and say how many they dropped, and `status` reports the overlap. The one case worth keeping both is a
+repository whose committed install must protect anyone who clones it while a user-scope install covers everything
+else you work on.
 
 Restart Claude Code (or run `/hooks` to confirm two tokenbrake entries). Node 18+ is the only requirement — no
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
@@ -158,6 +161,33 @@ The hooks are exec-form (no shell), so Claude Code starts the recorded executabl
 records the absolute path of the node it ran under; `--project` records plain `node` so the committed file works
 on any machine, and `--node=<path>` overrides either. If `status` prints `FAILED to start`, that is the hook
 Claude Code would also fail to start — silently, with every result going through untrimmed.
+
+### In a cloud session — the web, the phone, `claude --cloud`
+
+A cloud session starts in a fresh container, and **your `~/.claude` stays on your machine**: a user-scope install
+is not there. What does arrive is whatever the repository carries, so a committed `.claude/settings.json` from
+`init --project` is the only thing that protects a cloud session out of the box — and only in that one
+repository. Everywhere else, the guard is simply absent, and nothing in the session says so.
+
+To have it in every cloud session, install it from the environment's **Setup script** field (at
+[claude.ai/code](https://claude.ai/code), in the environment's settings):
+
+```bash
+#!/bin/bash
+npm i -g tokenbrake@0.2.7 || true
+tokenbrake init || true
+tokenbrake status || true
+```
+
+The script runs as root before Claude Code launches, and the container's filesystem is snapshotted afterwards, so
+later sessions start with the install already in place. Three things that are not decoration: `|| true`, because a
+setup script that exits non-zero fails the session; `status` last, because its output lands in the startup
+checklist, which is where you learn the install did not take; and a **pinned version**, so a number the ledger
+records is attributable to a build. Only a *new* session runs the script — resuming never re-runs it.
+
+What this does not give you is the record. A cloud session's ledger and transcript live inside the container and
+go when it does, so `report` on your own machine never sees that work. The guard trims there; it just does not
+keep receipts.
 
 ## What it does
 
