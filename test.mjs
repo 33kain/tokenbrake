@@ -1764,6 +1764,66 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     own.hooks.PostToolUseFailure[0].matcher === 'Bash|PowerShell' && hook('PostToolUseFailure').args[1] === 'post');
 }
 
+/* ---- Wave 1: preset, outputs/show, doctor --------------------------------
+   cli.js-only features, no guard-behaviour change. A fresh config dir and a temp cwd so the dual-scope
+   check sees no project install (this repo's own .claude would otherwise trip it). */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-w1-'));
+  const proj = join(cfg, 'proj'); mkdirSync(proj, { recursive: true });
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const cli2 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e, cwd: proj });
+  const cfgFile = join(cfg, 'tokenbrake.json');
+
+  // preset (feature 7)
+  let r = cli2(['preset', 'aggressive']);
+  t('preset aggressive writes tokenbrake.json', r.status === 0 && existsSync(cfgFile));
+  let saved = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  t('preset aggressive lowers maxChars and turns shapeFilters on, tagged with the preset name',
+    saved.maxChars === 3000 && saved.shapeFilters === true && saved.preset === 'aggressive');
+  cli2(['preset', 'off']);
+  saved = JSON.parse(readFileSync(cfgFile, 'utf8'));
+  t('preset off disables the guard but merges, not replaces (a key it does not set survives)',
+    saved.enabled === false && saved.maxChars === 3000);
+  r = cli2(['preset', 'list']);
+  t('preset list names all four presets', /off/.test(r.stdout) && /minimal/.test(r.stdout) && /balanced/.test(r.stdout) && /aggressive/.test(r.stdout));
+  r = cli2(['preset', 'nope']);
+  t('an unknown preset is rejected non-zero', r.status === 1 && /unknown preset/.test(r.stdout));
+  rmSync(cfgFile, { force: true });   // clean slate for the doctor checks below
+
+  // outputs / show (feature 3)
+  r = cli2(['outputs']);
+  t('outputs on an empty out dir says so, exit 0', r.status === 0 && /No saved outputs/.test(r.stdout));
+  const outDir = join(cfg, 'tokenbrake', 'out'); mkdirSync(outDir, { recursive: true });
+  writeFileSync(join(outDir, 'abc12345-xyz9876543.txt'), 'FULL OUTPUT LINE ONE\nFULL OUTPUT LINE TWO\n');
+  r = cli2(['outputs']);
+  t('outputs lists a saved full output by id', r.status === 0 && /abc12345-xyz9876543/.test(r.stdout));
+  r = cli2(['show', 'abc12345-xyz9876543']);
+  t('show prints the whole saved output by exact id', r.status === 0 && /FULL OUTPUT LINE TWO/.test(r.stdout));
+  r = cli2(['show', 'abc12345']);
+  t('show resolves a prefix', r.status === 0 && /FULL OUTPUT LINE ONE/.test(r.stdout));
+  r = cli2(['show', 'no-such-id']);
+  t('show reports a miss non-zero', r.status === 1 && /No saved output/.test(r.stdout));
+
+  // doctor (feature 4)
+  r = cli2(['doctor']);
+  t('doctor before install flags no hooks, exit non-zero', r.status === 1 && /no tokenbrake hooks installed/.test(r.stdout));
+  cli2(['init']);
+  r = cli2(['doctor']);
+  t('doctor after init passes, exit 0', r.status === 0 && /all checks passed/.test(r.stdout), r.stdout.split('\n').find(l => /passed|ERROR|WARN/.test(l)));
+  const gf = join(cfg, 'hooks', 'tokenbrake', 'guard.js');
+  writeFileSync(gf, readFileSync('./guard.js', 'utf8') + '\n// drift\n');
+  r = cli2(['doctor']);
+  t('doctor detects a stale installed guard, exit non-zero', r.status === 1 && /STALE/.test(r.stdout));
+  r = cli2(['doctor', '--fix']);
+  t('doctor --fix re-copies the guard and then passes, exit 0', r.status === 0 && /FIXED/.test(r.stdout));
+  t('doctor --fix restored the byte-identical guard', readFileSync(gf, 'utf8') === readFileSync('./guard.js', 'utf8'));
+  writeFileSync(cfgFile, '{ not valid json');
+  r = cli2(['doctor']);
+  t('doctor flags invalid tokenbrake.json, exit non-zero', r.status === 1 && /not valid JSON/.test(r.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

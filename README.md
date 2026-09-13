@@ -355,6 +355,40 @@ as a redraw destroyed every field of a CRLF CSV. Each was caught in a probe on t
 filter that misses noise is a nuisance; one that eats rows is a bug. It is off because no A/B has moved it
 yet; see `AB-TASK.md`.
 
+## Presets
+
+Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,
+so a key it does not set survives, and it takes effect on the next tool call (the guard reads config each
+call, no restart):
+
+```
+npx tokenbrake preset aggressive   # maxChars 3000, readMaxBytes 30000, shapeFilters on
+npx tokenbrake preset balanced     # the defaults, spelled out
+npx tokenbrake preset minimal      # high thresholds — trims rarely
+npx tokenbrake preset off          # enabled:false, without uninstalling
+npx tokenbrake preset list         # show them, and the current config
+```
+
+## Health check
+
+```
+npx tokenbrake doctor [--project]   # a prioritized problem list, each with a remedy; non-zero if an ERROR remains
+npx tokenbrake doctor --fix         # re-copies the guard if the installed copy has drifted from this checkout
+```
+
+`doctor` is `status` re-cast for scripting and CI: it exits non-zero when something is actually broken
+(no hooks, a stale guard, a hook that cannot spawn, invalid `tokenbrake.json`) and prints the fix for each.
+
+## Saved outputs
+
+When the guard trims a large result it writes the full text to `~/.claude/tokenbrake/out/<id>.txt` and names
+the path in the trimmed result. To get it back:
+
+```
+npx tokenbrake outputs        # list saved full outputs, newest first
+npx tokenbrake show <id>      # print one whole (id from `outputs`; a prefix works)
+```
+
 ## Uninstall
 
 ```
