@@ -343,6 +343,22 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
 
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
 
+A `tools` map overrides any of these knobs per tool, keyed by tool name (`Bash`, `PowerShell`, `Read`). A
+tool's entry is merged over the base config for that tool only — knobs it omits keep their base value — so you
+can trim one tool hard and leave another loose, or switch the guard off for a single tool with
+`"enabled": false` while it keeps running for the rest:
+
+```json
+{
+  "maxChars": 6000,
+  "tools": {
+    "Bash": { "maxChars": 3000, "shapeFilters": true },
+    "Read": { "readMaxBytes": 120000, "readLimitLines": 500 },
+    "PowerShell": { "enabled": false }
+  }
+}
+```
+
 `shapeFilters` (default `false`) turns on a pre-pass over shell results at least `shapeMinChars` (1,500)
 long: ANSI escapes removed, a carriage-return redraw *inside* a line reduced to its last frame, and runs of
 three or more consecutive lines carrying a run of **bar glyphs** collapsed to the last one plus a count. It

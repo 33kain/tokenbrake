@@ -80,6 +80,15 @@ function loadConfig() {
   try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8')) }; }
   catch { return { ...DEFAULTS }; }
 }
+
+/* Per-tool profiles (feature 2). tokenbrake.json may carry a `tools` map keyed by tool name
+   (Bash, PowerShell, Read, ...); a tool's entry overrides the base knobs for that tool only, so you can
+   trim Bash hard and leave Read loose, or set "tools": { "Bash": { "enabled": false } } to skip one tool
+   while the guard still runs for the rest. Shallow merge: any knob the entry omits keeps its base value. */
+function toolConfig(cfg, tool) {
+  const per = tool && cfg.tools && typeof cfg.tools === 'object' ? cfg.tools[tool] : null;
+  return per && typeof per === 'object' ? { ...cfg, ...per } : cfg;
+}
 function readStdin() {
   try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return null; }
 }
@@ -238,6 +247,7 @@ function handlePost(input, cfg) {
   const ti = input.tool_input || {};
   const resp = input.tool_response;
   const isShell = tool === 'Bash' || tool === 'PowerShell';
+  cfg = toolConfig(cfg, tool);
   /* PostToolUseFailure: for Bash, the command exited non-zero. The output arrives in `error` as one string
      ("Exit code 1", then stdout and stderr), with no tool_response on the Claude Code line this was written
      against (2.1.261) and, per the docs, possibly both. Take whichever carries the text. An interrupted
@@ -259,6 +269,10 @@ function handlePost(input, cfg) {
     transcript: input.transcript_path || undefined,
     failed: failed || undefined
   };
+
+  /* A per-tool profile can switch the guard off for one tool while it runs for the rest: still measure the
+     result in the ledger, but pass it through untrimmed. */
+  if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
 
   /* Shaping runs before the size test, so a log that collapses below maxChars is delivered clean and never
      trimmed at all. That is the point: the trim's head/tail/flagged shape is right for a log and the wrong
@@ -330,6 +344,8 @@ function countLines(fp, size) {
 }
 
 function handleReadPre(input, cfg) {
+  cfg = toolConfig(cfg, input.tool_name || 'Read');
+  if (!cfg.enabled) return;
   const ti = input.tool_input || {};
   const fp = ti.file_path;
   if (!fp || ti.limit != null || ti.offset != null) return;          // already bounded

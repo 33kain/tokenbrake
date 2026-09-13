@@ -1824,6 +1824,41 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 1: per-tool trim profiles (feature 2) --------------------------
+   guard.js resolves a `tools` map (keyed by tool name) over the base config, per tool. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-tools-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (mode, input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), mode], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const hOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return null; } };
+  const big = Array.from({ length: 400 }, (_, i) => 'line ' + (i + 1) + ' filler filler filler').join('\n');
+  const post = () => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: 'echo hi' }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ maxChars: 100000, tools: { Bash: { maxChars: 200 } } });
+  let u = uOf(g('post', post()));
+  t('per-tool maxChars trims a tool the base maxChars would have left whole', !!u && /\[tokenbrake\]/.test(u.stdout));
+
+  setCfg({ maxChars: 200, tools: { Bash: { enabled: false } } });
+  t('tools.Bash.enabled=false passes Bash through untrimmed (no rewrite emitted)', g('post', post()).stdout.trim() === '');
+
+  setCfg({ maxChars: 200, tools: { PowerShell: { maxChars: 100000 } } });
+  u = uOf(g('post', post()));
+  t('a tools entry for another tool does not spare Bash: base maxChars still trims it', !!u && /\[tokenbrake\]/.test(u.stdout));
+
+  const bigFile = join(cfg, 'big.txt');
+  writeFileSync(bigFile, Array.from({ length: 2000 }, (_, i) => 'line ' + (i + 1)).join('\n'));
+  const readPre = () => ({ session_id: 's', tool_name: 'Read', tool_input: { file_path: bigFile } });
+  setCfg({ readMaxBytes: 10000000, tools: { Read: { readMaxBytes: 1000, readLimitLines: 50 } } });
+  const h = hOf(g('read-pre', readPre()));
+  t('a per-tool Read profile caps a read the base readMaxBytes would have left whole, at its own limit', !!h && h.updatedInput && h.updatedInput.limit === 50);
+  setCfg({ readMaxBytes: 100, tools: { Read: { enabled: false } } });
+  t('tools.Read.enabled=false leaves the read uncapped (no output)', g('read-pre', readPre()).stdout.trim() === '');
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);
