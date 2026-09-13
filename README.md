@@ -398,6 +398,15 @@ as a redraw destroyed every field of a CRLF CSV. Each was caught in a probe on t
 filter that misses noise is a nuisance; one that eats rows is a bug. It is off because no A/B has moved it
 yet; see `AB-TASK.md`.
 
+`jsonShape` (default `false`) changes how a **JSON** result over `maxChars` is trimmed. A char slice through a
+100-record dump leaves two broken half-objects and a shapeless gap; the head/tail line trim is no better on
+minified JSON that is one line. With it on, when the result parses as JSON tokenbrake keeps the first
+`jsonSampleItems` (5) of the big array — a top-level array, or the largest array property of a top-level
+object — and appends a one-line count, so the model gets the shape, a real sample, and the total. It runs
+only in the trim path, so the full output is already saved to `out/` and named in the note; anything that is
+not one of those two shapes falls back to the ordinary trim. Off until an A/B moves it, same as the shape
+filters.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,

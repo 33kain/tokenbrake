@@ -1892,6 +1892,39 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 2: JSON-aware trim (feature 5) ---------------------------------
+   OFF by default; when on, a JSON result over maxChars keeps a sample of the big array plus a count,
+   instead of a char slice. The full output is saved (this runs only in the trim path), so nothing is lost. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-json-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const arr = JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ id: i, name: 'item-' + i })));
+  const post = (stdout) => ({ session_id: 's', tool_use_id: 't1', tool_name: 'Bash', tool_input: { command: 'curl api' }, tool_response: { stdout, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ maxChars: 200, jsonShape: true, jsonSampleItems: 3 });
+  let u = uOf(g(post(arr)));
+  t('jsonShape keeps a sample of a big top-level array and states the count', !!u && /showing the first 3 of 100 array items/.test(u.stdout));
+  t('jsonShape keeps the kept sample as valid JSON', !!u && (() => { try { JSON.parse(u.stdout.split('\n[tokenbrake]')[0]); return true; } catch { return false; } })());
+
+  setCfg({ maxChars: 200 });   // default: jsonShape off
+  u = uOf(g(post(arr)));
+  t('with jsonShape off the same JSON gets the ordinary trim, not the item-count note', !!u && !/array items/.test(u.stdout) && /omitted here/.test(u.stdout));
+
+  const obj = JSON.stringify({ total: 100, items: Array.from({ length: 100 }, (_, i) => ({ id: i })) });
+  setCfg({ maxChars: 200, jsonShape: true, jsonSampleItems: 2 });
+  u = uOf(g(post(obj)));
+  t('jsonShape cuts the dominant array property of an object and names it', !!u && /the "items" array was cut to its first 2 of 100/.test(u.stdout));
+
+  setCfg({ maxChars: 200, jsonShape: true });
+  u = uOf(g(post('x'.repeat(9000))));   // not JSON
+  t('jsonShape falls back to the ordinary trim on non-JSON output', !!u && /omitted here/.test(u.stdout) && !/array items/.test(u.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 /* ---- Wave 1: report --cost (feature 8) -----------------------------------
    One priced request, 1,000,000 tokens of each type on Opus 5 -> a total that is exact by construction:
    5 + 25 + 0.5 + 10 = $40.50. Sonnet 5 reprices the same tokens to 2 + 10 + 0.2 + 4 = $16.20. */

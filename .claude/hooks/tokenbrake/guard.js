@@ -30,6 +30,8 @@ const DEFAULTS = {
   persistedLimitLines: 80, // a saved tool output (Claude Code's tool-results/, tokenbrake's out/) read whole is capped at this
   shapeFilters: false,   // OFF by default: collapse progress redraws and repeated lines before anything else
   shapeMinChars: 1500,   // and only on results at least this long
+  jsonShape: false,      // OFF by default: when trimming JSON, keep a sample of the big array + a count, not a char slice
+  jsonSampleItems: 5,    // how many array items the JSON-aware trim keeps
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -189,12 +191,42 @@ function shapeFilter(text) {
   return out.join('\n');
 }
 
+/* JSON-aware trim (feature 5), OFF by default and A/B'd before any default moves. A char slice through a
+   100-record JSON dump leaves two broken half-objects and a middle that is gone with no shape and no count;
+   the head/tail line trim is no better on minified JSON that is one line. When the result parses as JSON,
+   keep the first N items of the big array and say how many there were, so the model sees the shape, a real
+   sample, and the total -- and the full output is on disk (this runs only in the trim path, after the save)
+   so nothing is lost. Only two shapes are handled -- a top-level array, and an object with one dominant
+   array property; anything else returns null and the ordinary trim takes over. Conservative on purpose: an
+   array too short to be worth cutting is left to the normal trim, same caution as the shape filters. */
+function jsonTrim(text, cfg, note) {
+  const t = text.trim();
+  if (t[0] !== '[' && t[0] !== '{') return null;
+  let data;
+  try { data = JSON.parse(t); } catch { return null; }
+  const K = Math.max(1, Number(cfg.jsonSampleItems) || 5);
+  if (Array.isArray(data)) {
+    if (data.length <= K + 1) return null;
+    return `${JSON.stringify(data.slice(0, K), null, 2)}\n[tokenbrake] showing the first ${K} of ${data.length.toLocaleString()} array items (${text.length.toLocaleString()} chars).${note}`;
+  }
+  if (data && typeof data === 'object') {
+    let key = null, len = -1;
+    for (const k of Object.keys(data)) if (Array.isArray(data[k]) && data[k].length > len) { key = k; len = data[k].length; }
+    if (key == null || len <= K + 1) return null;
+    return `${JSON.stringify({ ...data, [key]: data[key].slice(0, K) }, null, 2)}\n[tokenbrake] the "${key}" array was cut to its first ${K} of ${len.toLocaleString()} items (${text.length.toLocaleString()} chars total).${note}`;
+  }
+  return null;
+}
+
 function trimText(text, cfg, savedPath) {
   const lines = text.split('\n');
   const note = savedPath ? ` Full output saved to ${savedPath} — Read or Grep it if you need more.` : '';
   let out;
 
-  if (lines.length > cfg.headLines + cfg.tailLines + 5) {
+  const shaped = cfg.jsonShape ? jsonTrim(text, cfg, note) : null;
+  if (shaped != null && shaped.length < text.length) {
+    out = shaped;
+  } else if (lines.length > cfg.headLines + cfg.tailLines + 5) {
     /* Flagged lines from the middle, each with the lines that follow it up to a blank line or
        errorContextLines, whichever comes first. A FAIL line alone names the test; the assertion, the
        expected/actual pair and the first stack frame are the lines after it, and a model that gets only

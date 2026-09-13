@@ -73,6 +73,16 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
   - Resequenced: the `trim.js` extraction is moved to sit **immediately before MCP trimming (1) and JSON/CSV
     shaping (5)**, which actually build on the trim engine — rather than up front, where it would carry the
     single-file-install risk with no Wave-2 payoff yet. allow/deny needed no extraction and shipped first.
-  - Remaining: `trim.js` extraction → MCP trimming (1) → JSON/CSV shaping (5) → dedup (6). Each of these
-    changes what enters context, so each ships opt-in/off-by-default and is A/B'd per `AB-TASK.md` before any
-    default moves (the shapeFilters precedent).
+  - JSON-aware trim (5) — DONE. `jsonShape` (default false) makes `trimText` keep a sample of the big array
+    plus a count for a JSON result, instead of a char slice. Runs only in the trim path, so the full output
+    is always saved. Ships off; A/B gates turning it on. Guard copy re-synced; 5 new checks.
+  - Remaining: MCP trimming (1) and dedup (6), then the `trim.js` extraction (deferred to Wave 3, right
+    before simulation — it is the only consumer that truly needs a shared pure trim module; MCP and shaping
+    did not).
+    - **MCP trimming (1) is blocked on evidence, not code.** The guard only rewrites a result in the tool's
+      own *observed* response shape (the Bash `{stdout}` lesson, pinned by `status` + `test.mjs`); for
+      `mcp__*` tools the `tool_response` / accepted `updatedToolOutput` shape has not been captured from a
+      live session (AB-TASK.md only notes an untrimmed 6,309-char `mcp__github__actions_list`). Capture that
+      shape first, then implement — otherwise the rewrite silently no-ops (fails open, but delivers nothing).
+    - dedup (6) needs cross-call state (the guard is one stateless process per call), so it adds a small
+      per-session state file — heavier plumbing; do it after MCP.
