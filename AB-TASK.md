@@ -2644,3 +2644,66 @@ The day-2 replication is **withdrawn as designed**. Fourteen more sessions of a 
 demonstrated it lacks the power would buy a second inconclusive result at twice the price. A round 2, if
 there is one, changes the design first: a lower-variance endpoint, a task that constrains reading, or a
 model whose pricing puts more weight on what the hook actually moves.
+
+## MCP tool-output trimming (feature 1) — 2026-09-14, Opus, two single pairs
+
+Feature 1 added `mcpTrim` (default false): route an oversized `mcp__*` result through the same trim as shell
+output. This is the A/B that gates flipping that default. Arms differ in **`mcpTrim` only** — `jsonShape` and
+`shapeFilters` were left at their default `false` in both — so this measures `mcpTrim` alone, not the combo.
+Model Opus, on `main`, both arms per pair run as separate Cowork sessions. Numbers are read from the **session
+record** (`get_session`: `cost_usd`, cache tokens, `context_usage.used_tokens`), not the guard's own ledger, so
+recovery reads are counted in — the net, as the methodology requires.
+
+Two workloads, chosen as opposite extremes rather than a representative mix:
+
+- **content-heavy** — every question needs the *full* MCP result (how many of 40 commits are `claude`, how many
+  `t(` lines in `test.mjs`, how many `arm B` in `AB-TASK.md`). When the trim cuts the result, the model must go
+  back for it: recovery reads.
+- **glance** — every question is about the *top/first* item only (most-recent commit, first PR, first heading),
+  so the trimmed head/sample is enough and no recovery is needed.
+
+### Measured (one pair per regime, n=1 each)
+
+| regime | metric | A `mcpTrim:off` | B `mcpTrim:on` | Δ (B vs A) |
+|---|---|---|---|---|
+| content-heavy | cost_usd | $1.155 | $1.691 | **+46%** |
+| | cache_read | 1,169,006 | 1,390,745 | +19% |
+| | context now | 82,042 | 84,107 | +2.5% |
+| glance | cost_usd | $1.127 | $0.842 | **−25%** |
+| | cache_write | 73,530 | 46,118 | −37% |
+| | context now | 102,601 | 83,665 | **−18.5%** |
+
+### Reading — held against this repo's own noise
+
+ab10 (above) established that two **identical** OFF arms of a natural task differ by up to **30.3% in cost** and
+**42.6% in tokens entered**. Against that band: the content-heavy +46% cost sits just outside it; the glance
+−25% cost sits **inside** it. So — by this repo's own standard — **no cost figure here is quoted as an effect.**
+The glance `context now` −18.5% is the cleaner-looking number but is still within the token noise ab10 measured.
+
+What survives noise is the **direction and its consistency with the mechanism**, not any magnitude: trimming a
+result the model *needs* forces recovery and lengthens the session (content-heavy went up); trimming one it only
+*glances* at removes carry it never used (glance went down). Same split ab10's thesis predicts — "the guard
+saves what the model would otherwise let in."
+
+### Measured vs reasoned (kept separate on purpose)
+
+- **Measured:** the directional split above — ON worse on content-heavy, ON better on glance — from two single
+  pairs, both noise-limited. The content-heavy **harm is a real backfire**, not a null.
+- **Reasoned, NOT A/B-confirmed:** that `mcpTrim` is a net win as a per-tool opt-in for glance-heavy MCP tools;
+  and that `jsonShape` improves the trimmed sample (it was **off** in both arms, so its added value here is
+  mechanism, not measurement). Answer **correctness was not captured** this round (no channel to the arms'
+  final messages); for glance it is design-guaranteed by the head questions, for content-heavy the recovery
+  reads are the price paid to stay correct.
+
+### Conclusion
+
+**Default stays OFF** for `mcpTrim` (and `jsonShape`, `shapeFilters`). The burden of proof is on the **flip**,
+not on staying off: a thin, noise-limited A/B does not meet it, and the one thing it did show cleanly enough to
+matter is that flipping can *cost* +46% on a content-hungry workload. `mcpTrim` ships as an **opt-in**, best set
+**per-tool** (`"tools": { "mcp__…": { "mcpTrim": true } }`) for MCP tools whose results you reliably only
+sample; pair with `jsonShape` for a clean JSON sample.
+
+Deliberately **not done:** more pairs. ab10 already showed that on a design where noise and effect are the same
+size, extra pairs mostly measure the agent's mood. Quantifying `mcpTrim` would need a lower-variance design
+(Experiment-A style: measure the trim on a fixed result directly), which the mechanism tests in `test.mjs`
+already do for the rewrite itself.
