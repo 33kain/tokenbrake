@@ -2962,3 +2962,41 @@ off the whole diff (including the lockfile hunk) enters and is carried.
 
 **Decision rule, fixed before the run.** Flip the default to `gitView: true` only if the gitview backfire rate
 is low **and** arm B carries meaningfully fewer read token-reads than arm A. Burden of proof on the flip.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned session): INCONCLUSIVE — a second guard co-fired
+
+The ON-arm run exposed a **methodology bug in the cloud A/B environment**, not a gitview result. The
+environment carries a **stale global tokenbrake install** at `/root/.claude/hooks/tokenbrake/guard.js`,
+registered on PostToolUse at **user scope** — a much older version (it has none of the `gitView`/`blobElide`/
+`reReadElide`/`readAfterEdit`/`dedup`/`mcpTrim` knobs). Claude Code merges user-scope and project-scope hooks,
+so **every tool result fired the guard twice**: the project-scope feature guard AND the old global guard, ~10–34
+ms apart with the same `tool_use_id`.
+
+For the `git diff` (15,124 chars) the ledger shows the pair:
+
+```
+{... "gitview":true, "kept":563,  "chars":15124 ...}   # project guard: narrowing-4 collapse (+121/-121, correct)
+{...                 "kept":2113, "chars":15124 ...}   # old global guard: generic middle-trim (delivered last)
+```
+
+The gitview collapse **fired and is correct** (confirmed in the ledger and by the session reproducing it
+offline: `[tokenbrake] +121/-121 lines, diff collapsed (generated/lockfile path)`, `src/app.js` kept verbatim),
+but the old guard's generic middle-trim won the delivered output, so gitview **never reached the model's
+context**. `report --backfire` therefore recorded `2 trim` (0% backfire, ~130k token-reads saved) — the *old
+guard's* trim, not gitview. The model answered both step-5 questions (the `src/app.js` change and lodash
+`4.17.21`) from the fresh diff without any pull-back, but that reflects the generic trim, not the collapse.
+
+**This retroactively taints the earlier cloud A/Bs too** (Read-After-Edit, re-read, blob): the same two guards
+were racing. The blob run happened to show `2 blob` (the project guard won that race), but the measurement was
+never clean. **Fix for any future cloud A/B:** neutralize the user-scope guard first (remove or disable
+`/root/.claude/settings.json`'s PostToolUse tokenbrake hook, or delete `/root/.claude/hooks/tokenbrake/guard.js`)
+so only the checkout's project guard fires — then re-run.
+
+**Real-world corollary (worth a product safeguard):** a machine with BOTH a global and a project tokenbrake
+install double-fires, and an older global guard can silently override a newer project narrowing. The two guards
+each receive the *original* tool output (not chained), so the existing `[tokenbrake]` marker does not protect
+against it. Candidate fixes: the installer detecting/warning on a co-registered guard, or a documented
+"one scope only" rule.
+
+**Status:** gitView is **logic-verified** (519 checks + the offline reproduction) but its organic backfire is
+**unmeasured**; it stays OFF/opt-in like the others until a clean single-guard A/B runs.
