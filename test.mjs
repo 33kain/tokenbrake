@@ -2030,6 +2030,112 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 2: dedup of repeated results (feature 6) ------------------------
+   The same result twice in a session is paid for twice; when it repeats, the guard hands back a pointer to
+   the first copy. Off by default; A/B gates it. Bash/PowerShell + MCP, over dedupMinChars, honoring noTrim. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-dedup-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const cli2 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { if (!r.stdout.trim()) return null; try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const big = 'x'.repeat(2000);
+  const bash = (id, out, sess = 's1') => ({ session_id: sess, tool_use_id: id, tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: out, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ dedup: true });
+  t('dedup: first occurrence is not rewritten (recorded, passed through)', g(bash('toolu_A', big)).stdout.trim() === '');
+  const u = uOf(g(bash('toolu_B', big)));
+  t('dedup: an identical second result becomes a pointer to the first', !!u && /identical to an earlier result this session \(2,000 chars\)/.test(u.stdout) && /show s1-toolu_A/.test(u.stdout));
+  const show = cli2(['show', 's1-toolu_A']);
+  t('dedup: the pointer id is retrievable via tokenbrake show', show.status === 0 && show.stdout.startsWith('x'.repeat(50)));
+  const led = readFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const drow = led.find(x => x.id === 'toolu_B');
+  t('dedup: ledger row carries dedup:true, sameAs, chars(full) and kept(pointer)', !!drow && drow.dedup === true && drow.sameAs === 's1-toolu_A' && drow.chars === 2000 && drow.kept < 200);
+  t('dedup: a different result is not pointed', g(bash('toolu_C', 'z'.repeat(2000))).stdout.trim() === '');
+
+  setCfg({ dedup: true, dedupMinChars: 1000 });
+  const small = 'y'.repeat(500);
+  g(bash('toolu_D', small, 's2'));
+  t('dedup: a repeat under dedupMinChars is left alone', g(bash('toolu_E', small, 's2')).stdout.trim() === '');
+
+  setCfg({ dedup: true, noTrim: ['git diff'] });
+  const gd = (id) => ({ session_id: 's3', tool_use_id: id, tool_name: 'Bash', tool_input: { command: 'git diff' }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+  g(gd('toolu_G1'));
+  t('dedup: a noTrim command is never deduped', g(gd('toolu_G2')).stdout.trim() === '');
+
+  setCfg({});
+  g(bash('toolu_H1', big, 's5'));
+  t('dedup off by default: an identical repeat is not pointed', g(bash('toolu_H2', big, 's5')).stdout.trim() === '');
+
+  setCfg({ dedup: true });
+  const mcp = (id) => ({ session_id: 's4', tool_use_id: id, tool_name: 'mcp__x__y', tool_input: {}, tool_response: [{ type: 'text', text: big }] });
+  g(mcp('toolu_MC1'));
+  const um = uOf(g(mcp('toolu_MC2')));
+  t('dedup: an identical MCP result becomes a content-block array pointer', Array.isArray(um) && /identical to an earlier result/.test(um[0].text));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- code-review fixes (findings 1-6) ------------------------------------ */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-crfix-'));
+  const proj = mkdtempSync(join(tmpdir(), 'tokenbrake-crproj-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (mode, input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), mode], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const cli2 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { if (!r.stdout.trim()) return null; try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const hOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return null; } };
+  const tail = () => { try { return readFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).pop(); } catch { return null; } };
+  const mcp = (text) => ({ session_id: 's', tool_use_id: 't1', tool_name: 'mcp__github__list_commits', tool_input: {}, tool_response: [{ type: 'text', text }] });
+  const big = 'x'.repeat(3000);
+
+  // #1 noTrim shares a list across domains: a command entry must not disable an MCP tool by substring
+  setCfg({ mcpTrim: true, maxChars: 200, noTrim: ['git'] });
+  t('#1 noTrim:["git"] does NOT spare an mcp__github tool (still trims)', /\[tokenbrake\]/.test(((uOf(g('post', mcp(big))) || [{}])[0] || {}).text || ''));
+  setCfg({ mcpTrim: true, maxChars: 200, noTrim: ['mcp__github'] });
+  t('#1 an mcp__-shaped noTrim entry does spare the MCP tool', g('post', mcp(big)).stdout.trim() === '');
+
+  // #3 jsonTrim picks the dominant array by bytes, not item count
+  setCfg({ maxChars: 200, jsonShape: true, jsonSampleItems: 2 });
+  const obj = JSON.stringify({ heavy: Array.from({ length: 5 }, (_, i) => ({ id: i, blob: 'z'.repeat(500) })), small: Array.from({ length: 50 }, (_, i) => i) });
+  const u3 = uOf(g('post', { session_id: 's', tool_use_id: 't3', tool_name: 'Bash', tool_input: { command: 'curl' }, tool_response: { stdout: obj, stderr: '', interrupted: false, isImage: false } }));
+  t('#3 jsonTrim cuts the byte-heavy array, not the higher item-count one', !!u3 && /the "heavy" array was cut/.test(u3.stdout));
+
+  // #4 a per-tool-disabled MCP tool logs inner-text chars, not the JSON-wrapper length
+  setCfg({ tools: { 'mcp__github__list_commits': { enabled: false } } });
+  rmSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), { force: true });
+  g('post', mcp('y'.repeat(5000)));
+  t('#4 a disabled MCP tool logs inner-text chars (5000), not the wrapper length', (tail() || {}).chars === 5000);
+
+  // #5 a per-tool-disabled Read still records evidence, symmetric with handlePost
+  setCfg({ tools: { Read: { enabled: false } } });
+  rmSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), { force: true });
+  const bf = join(proj, 'big.txt'); writeFileSync(bf, 'x'.repeat(80000));
+  g('read-pre', { session_id: 's', tool_name: 'Read', tool_input: { file_path: bf } });
+  t('#5 a disabled Read still records a ledger row', (tail() || {}).ev === 'read-disabled');
+
+  // #6 PERSISTED must also be anchored under the config dir
+  setCfg({ maxChars: 200, readMaxBytes: 10000000 });
+  mkdirSync(join(proj, 'build', 'tool-results'), { recursive: true });
+  const outside = join(proj, 'build', 'tool-results', 'manifest.json'); writeFileSync(outside, Array.from({ length: 200 }, (_, i) => `"k${i}":${i}`).join('\n'));
+  t('#6 a tool-results/.json OUTSIDE the config dir is not force-capped', g('read-pre', { session_id: 's', tool_name: 'Read', tool_input: { file_path: outside } }).stdout.trim() === '');
+  mkdirSync(join(cfg, 'projects', 'x', 'tool-results'), { recursive: true });
+  const inside = join(cfg, 'projects', 'x', 'tool-results', 'id.json'); writeFileSync(inside, readFileSync(outside, 'utf8'));
+  t('#6 a real persisted .json under the config dir is still capped', !!(hOf(g('read-pre', { session_id: 's', tool_name: 'Read', tool_input: { file_path: inside } })) || {}).updatedInput);
+
+  // #2 doctor: honest wording + a warn on the contradictory global-off/per-tool-on config
+  cli2(['init']);
+  setCfg({ enabled: false, tools: { Bash: { enabled: true } } });
+  const doc = cli2(['doctor']);
+  t('#2 doctor says a disabled guard records nothing and warns on the impossible per-tool re-enable',
+    /records nothing/.test(doc.stdout) && /cannot re-enable a globally disabled guard/.test(doc.stdout));
+
+  rmSync(cfg, { recursive: true, force: true });
+  rmSync(proj, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

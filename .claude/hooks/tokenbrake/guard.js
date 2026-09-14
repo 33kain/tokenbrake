@@ -34,6 +34,8 @@ const DEFAULTS = {
   jsonShape: false,      // OFF by default: when trimming JSON, keep a sample of the big array + a count, not a char slice
   jsonSampleItems: 5,    // how many array items the JSON-aware trim keeps
   mcpTrim: false,        // OFF by default: also trim oversized mcp__* results (a content-block array); A/B before flipping. Pairs with jsonShape, since MCP bodies are usually JSON.
+  dedup: false,          // OFF by default: replace an identical repeated result in a session with a pointer to the first; A/B before flipping
+  dedupMinChars: 1000,   // don't dedup results shorter than this -- a small repeat is not worth a pointer
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -110,6 +112,15 @@ function matchesAny(patterns, str) {
   for (const p of patterns) if (p && str.includes(String(p))) return true;
   return false;
 }
+
+/* noTrim is one substring list shared across domains, but a command entry like "git" must not silently match
+   the MCP tool NAME "mcp__github__…" (a real footgun: it would disable MCP trimming). So for an MCP result only
+   mcp__-shaped entries apply -- name the tool ("mcp__github") to protect it; for shell/read the whole list
+   applies to the command/path. */
+function noTrimmed(cfg, subject, isMcp) {
+  const list = isMcp ? (cfg.noTrim || []).filter(p => String(p).startsWith('mcp__')) : cfg.noTrim;
+  return matchesAny(list, subject);
+}
 function readStdin() {
   try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return null; }
 }
@@ -137,6 +148,33 @@ function saveOut(input, text) {
     fs.writeFileSync(saved, text);
     return saved;
   } catch { return null; }
+}
+
+/* Dedup state (feature 6). One append-only JSONL per session under dedup/<session>.jsonl, a line
+   { h, id, chars } for the first time each result was seen -- append, not rewrite, so two tool calls landing
+   at once cannot lose each other's entry. Lookup scans for the hash (files are per-session and small). Every
+   step is best-effort: a missing or corrupt file just means no dedup, never an error. */
+function hashOf(text) {
+  try { return require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32); } catch { return null; }
+}
+function dedupPath(session) {
+  return path.join(TB_DIR, 'dedup', String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl');
+}
+function dedupLookup(session, h) {
+  try {
+    for (const line of fs.readFileSync(dedupPath(session), 'utf8').split('\n')) {
+      if (!line) continue;
+      try { const o = JSON.parse(line); if (o.h === h) return o; } catch { /* skip a bad line */ }
+    }
+  } catch { /* no state yet */ }
+  return null;
+}
+function dedupRecord(session, rec) {
+  try {
+    const p = dedupPath(session);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify(rec) + '\n');
+  } catch { /* best-effort */ }
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -230,10 +268,10 @@ function jsonTrim(text, cfg, note) {
     return `${JSON.stringify(data.slice(0, K), null, 2)}\n[tokenbrake] showing the first ${K} of ${data.length.toLocaleString()} array items (${text.length.toLocaleString()} chars).${note}`;
   }
   if (data && typeof data === 'object') {
-    let key = null, len = -1;
-    for (const k of Object.keys(data)) if (Array.isArray(data[k]) && data[k].length > len) { key = k; len = data[k].length; }
-    if (key == null || len <= K + 1) return null;
-    return `${JSON.stringify({ ...data, [key]: data[key].slice(0, K) }, null, 2)}\n[tokenbrake] the "${key}" array was cut to its first ${K} of ${len.toLocaleString()} items (${text.length.toLocaleString()} chars total).${note}`;
+    let key = null, bytes = -1;
+    for (const k of Object.keys(data)) if (Array.isArray(data[k])) { const b = JSON.stringify(data[k]).length; if (b > bytes) { key = k; bytes = b; } }
+    if (key == null || data[key].length <= K + 1) return null;
+    return `${JSON.stringify({ ...data, [key]: data[key].slice(0, K) }, null, 2)}\n[tokenbrake] the "${key}" array was cut to its first ${K} of ${data[key].length.toLocaleString()} items (${text.length.toLocaleString()} chars total).${note}`;
   }
   return null;
 }
@@ -364,9 +402,40 @@ function handlePost(input, cfg) {
     failed: failed || undefined
   };
 
+  /* Resolve the MCP body once (features 1/6): its inner text is the size basis -- rec.chars was the
+     JSON.stringify of the whole block array -- and the dedup and MCP branches below both reuse it. Set here,
+     BEFORE the disabled-log, so a per-tool-disabled MCP tool records inner-text chars, not the wrapper length. */
+  const mcp = isMcp ? mcpBody(resp) : null;
+  if (mcp) rec.chars = mcp.text.length;
+
   /* A per-tool profile can switch the guard off for one tool while it runs for the rest: still measure the
      result in the ledger, but pass it through untrimmed. */
   if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
+
+  /* Dedup (feature 6): the same result twice in one session is paid for twice -- it re-enters context and is
+     carried from then on. When it repeats, hand back a short pointer to the first copy instead of the whole
+     thing. Hash the ORIGINAL bytes (the inner text: stdout for shell, the joined text blocks for MCP), before
+     any shaping. Bash/PowerShell + MCP only; a Read is already covered by the read cap. The first occurrence is
+     saved to out/ even if it is never trimmed, so the pointer is retrievable via `tokenbrake show`. Off by
+     default (dedup); A/B gates it. Honors noTrim, and fails open on every step. The pointer carries the marker,
+     so `report` credits chars - kept the same way it credits a trim. */
+  const dsubject = isShell ? String(ti.command || '') : tool;
+  if (cfg.dedup && !failed && (isShell || isMcp) && input.session_id && !noTrimmed(cfg, dsubject, isMcp)) {
+    const dtext = isMcp ? (mcp && mcp.text) : text;
+    if (dtext && dtext.length >= cfg.dedupMinChars) {
+      const h = hashOf(dtext);
+      const prior = h ? dedupLookup(input.session_id, h) : null;
+      if (prior) {
+        const pointer = `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
+        const updated = isMcp ? mcp.rebuild(pointer)
+          : (resp && typeof resp === 'object' ? { ...resp, stdout: pointer, stderr: '' } : pointer);
+        log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
+        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updated } });
+        return;
+      }
+      if (h) { const saved = saveOut(input, dtext); if (saved) dedupRecord(input.session_id, { h, id: path.basename(saved).replace(/\.txt$/, ''), chars: dtext.length }); }
+    }
+  }
 
   /* MCP tool-output trimming (feature 1). An mcp__* result is a content-block array the guard sees in full,
      before Claude Code's own "too large → saved to file + preview" step (which otherwise persists the whole
@@ -376,11 +445,8 @@ function handlePost(input, cfg) {
      PostToolUseFailure matcher never routes MCP here, but guard defensively. `chars` on the trim row is the
      inner text length, so it shares a basis with `kept` the way the shell rows do. */
   if (isMcp) {
-    const body = mcpBody(resp);
-    /* The inner text is the size that matters (rec.chars was JSON.stringify of the block array); log it the
-       same whether or not the row is trimmed, so untrimmed and trimmed MCP rows share a basis. */
-    if (body) rec.chars = body.text.length;
-    if (cfg.mcpTrim && !failed && body && !matchesAny(cfg.noTrim, tool) && body.text.length > cfg.maxChars) {
+    const body = mcp;   // resolved once above; rec.chars is already the inner-text length
+    if (cfg.mcpTrim && !failed && body && !noTrimmed(cfg, tool, true) && body.text.length > cfg.maxChars) {
       const saved = saveOut(input, body.text);
       const trimmed = trimText(body.text, cfg, saved);
       log({ ...rec, mcp: true, kept: trimmed.length, saved });
@@ -457,7 +523,9 @@ function countLines(fp, size) {
 
 function handleReadPre(input, cfg) {
   cfg = toolConfig(cfg, input.tool_name || 'Read');
-  if (!cfg.enabled) return;
+  /* Per-tool disabled: record the read still happened (symmetric with handlePost, which logs its result even
+     when disabled) so `report` does not silently lose the evidence -- then leave the read uncapped. */
+  if (!cfg.enabled) { if (cfg.logAllTools && input.tool_input && input.tool_input.file_path) log({ ev: 'read-disabled', session: input.session_id, tool: input.tool_name || 'Read', what: input.tool_input.file_path }); return; }
   const ti = input.tool_input || {};
   const fp = ti.file_path;
   if (!fp || ti.limit != null || ti.offset != null) return;          // already bounded
@@ -467,7 +535,11 @@ function handleReadPre(input, cfg) {
   let st;
   try { st = fs.statSync(fp); } catch { return; }
   if (!st.isFile()) return;
-  const persisted = PERSISTED.test(fp) && st.size > cfg.maxChars;
+  /* A persisted output lives UNDER the Claude Code config dir (its projects/.../tool-results/, or tokenbrake's
+     own out/). Requiring that anchor stops a user's own build/tool-results/*.json from being force-capped as if
+     it were a saved tool output -- the PERSISTED regex matches the filename shape, this checks the location. */
+  let underConfig = false; try { underConfig = path.resolve(String(fp)).startsWith(path.resolve(CFG_DIR) + path.sep); } catch {}
+  const persisted = PERSISTED.test(fp) && underConfig && st.size > cfg.maxChars;
   /* A whole-file read the cap did NOT act on is still worth recording, and until now nothing recorded it.
      Without it, `report --reads` had to infer every file's size from the delivered text -- which Claude Code
      line-numbers, so every file came out 5-6% large and the long ones worse -- and `report --where` could

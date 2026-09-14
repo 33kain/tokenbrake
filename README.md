@@ -375,7 +375,9 @@ empty by default, so neither changes anything until you set it:
 
 - `noTrim` — an allowlist. A shell command or a read path matching any of these is left **whole**: the
   `git diff` you always want in full, a schema or a fixture a trimmed view would ruin. For an `mcp__*` result
-  it matches the tool name, so `"mcp__github__get_file_contents"` spares one MCP tool from `mcpTrim`.
+  only an **`mcp__`-shaped** entry applies — `"mcp__github__get_file_contents"` (or a prefix like
+  `"mcp__github"`) spares that MCP tool from `mcpTrim`, while a command entry like `"git"` stays scoped to
+  shell and never bleeds into a tool name such as `mcp__github__…`.
 - `alwaysCap` — the other direction. A read (or a `cat`/`sed` excerpt) whose path matches is capped at
   `readLimitLines` **even when it is under `readMaxBytes`**: a lockfile, a `*.min.js`, a generated bundle you
   never want whole.
@@ -417,6 +419,16 @@ re-read whole. The reply is rebuilt in the exact shape the result arrived in, si
 against the tool's own schema and drops a wrong shape silently. Target one server with a per-tool profile
 (`"tools": { "mcp__github__list_commits": { … } }`) or protect one by name with `noTrim`. Off until an A/B
 moves it; pairs with `jsonShape`, since MCP bodies are usually JSON.
+
+`dedup` (default `false`) catches the same result arriving **twice in one session**. A result is re-sent as
+context on every later request, so a 30k-char output produced twice is carried twice; when a Bash/PowerShell or
+`mcp__*` result over `dedupMinChars` (1,000) is byte-for-byte identical to one seen earlier this session, the
+guard hands back a one-line pointer — `[tokenbrake] identical to an earlier result this session (N chars). Full:
+tokenbrake show <id>` — in the tool's own shape, instead of the whole thing again. The first copy is saved to
+`out/` (even when it is never trimmed) so the pointer is retrievable; state is a per-session append-only file
+under `dedup/`, and every step fails open. It honors `noTrim`. Like a trim, the pointer can send the model back
+for the full copy (a recovery read), so it is off until an A/B moves it — best per-tool for a tool you call
+repeatedly with identical results.
 
 ## Presets
 
