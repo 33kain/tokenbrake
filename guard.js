@@ -599,21 +599,26 @@ function handleReadPre(input, cfg) {
   /* Read-After-Edit Delta (narrowing 1): the model edited this file this session and is now reading it whole
      -- almost always to verify the edit, which the harness's own guidance calls unnecessary. Narrow the read
      to the changed region plus context; the file is still on disk, so a wider read is one offset away. Off by
-     default (readAfterEdit). Takes precedence over the size cap below (it shows the actual edit, not the first
-     N lines, which on a large file may not even contain the edit). Logged as its own ev:'read-delta' with the
-     window it injected, so the Backfire Auditor can tell a delta from a size cap and measure whether it sent
-     the model back for a wider read. The note states only what the guard knows -- that these lines were edited
-     -- not that the model already holds the rest, which it cannot know (a blind edit, a format-on-save, or
-     another tool may have changed the file).
+     default (readAfterEdit). Logged as its own ev:'read-delta' with the window it injected, so the Backfire
+     Auditor can tell a delta from a size cap and measure whether it sent the model back for a wider read. The
+     note states only what the guard knows -- that these lines were edited -- not that the model already holds
+     the rest, which it cannot know (a blind edit, a format-on-save, or another tool may have changed the file).
+
+     Applies only to files AT OR UNDER readMaxBytes -- the ones the model reads whole. A larger file is left to
+     the size cap below instead: the 2026-09-14 A/B (AB-TASK.md) showed narrowing a big file's verify-read to
+     the edit region BACKFIRED (the model asked for the whole file anyway, 2 of 5 firings, both on files over
+     readMaxBytes), while on the smaller file it helped. readMaxBytes is exactly the line the data drew -- the
+     helped file sat under it, the backfired ones over -- so the delta reuses that threshold rather than a new
+     knob, and stays on the small files where it fires cleanly.
 
      Uses the MOST RECENT edit record for this file, not the union of the whole session: the latest edit is the
      one this read most likely verifies, its lines are in the current numbering, and it bounds the spread.
      Three guards keep the injected window sound: the edit must fall within the file (editFrom <= nLines + 1 --
      else a truncation or an odd structuredPatch newStart would push offset past EOF and limit negative); the
-     window must not exceed the size cap it overrides (limit <= readLimitLines -- else scattered edits could
-     deliver more than the cap would); and it must hide something (limit < nLines). `to` is left unclamped so a
-     last-line edit on a file with no trailing newline (where nLines counts one short) still shows. */
-  if (cfg.readAfterEdit && nLines != null) {
+     window must not exceed readLimitLines (else scattered edits could deliver more than the size cap would);
+     and it must hide something (limit < nLines). `to` is left unclamped so a last-line edit on a file with no
+     trailing newline (where nLines counts one short) still shows. */
+  if (cfg.readAfterEdit && nLines != null && st.size <= cfg.readMaxBytes) {
     const recs = editLookup(input.session_id, path.resolve(fp));
     const latest = recs.reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
     const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);

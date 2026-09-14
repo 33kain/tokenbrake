@@ -1746,6 +1746,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     nlUi && nlUi.offset === 30 && (nlUi.offset + nlUi.limit - 1) >= 50, JSON.stringify(nlUi));
   rmSync(dirNl, { recursive: true, force: true });
 
+  /* Over readMaxBytes the delta stands aside and the size cap governs -- the 2026-09-14 A/B showed narrowing a
+     large file's verify-read backfired, so big files are left to the cap (readMaxBytes is the boundary the
+     data drew: the helped file was under it, the backfired ones over). */
+  const dirBig = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-big-'));
+  const fileBig = join(dirBig, 'big.js');
+  writeFileSync(fileBig, Array.from({ length: 2000 }, (_, i) => 'const filler' + i + ' = "' + 'x'.repeat(30) + '";').join('\n') + '\n');   // ~100 KB, over readMaxBytes
+  writeFileSync(join(dirBig, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirBig, 'post', { session_id: sess, tool_use_id: 'toolu_b1', tool_name: 'Edit', tool_input: { file_path: fileBig, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 545, newLines: 1 }] } });
+  const bigUi = ((parse(spawnIn(dirBig, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileBig } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('a file over readMaxBytes is left to the size cap, not narrowed by the delta (edit recorded, delta stands aside)',
+    bigUi && bigUi.offset == null && bigUi.limit === 300, JSON.stringify(bigUi));
+  rmSync(dirBig, { recursive: true, force: true });
+
   /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
