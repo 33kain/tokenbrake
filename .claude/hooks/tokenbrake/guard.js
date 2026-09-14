@@ -36,6 +36,8 @@ const DEFAULTS = {
   mcpTrim: false,        // OFF by default: also trim oversized mcp__* results (a content-block array); A/B before flipping. Pairs with jsonShape, since MCP bodies are usually JSON.
   dedup: false,          // OFF by default: replace an identical repeated result in a session with a pointer to the first; A/B before flipping
   dedupMinChars: 1000,   // don't dedup results shorter than this -- a small repeat is not worth a pointer
+  readAfterEdit: false,  // OFF by default: after an Edit, narrow an unbounded Read of the same file to the changed region; A/B before flipping
+  editContextLines: 20,  // lines of context kept on each side of the changed region by the delta
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -157,9 +159,14 @@ function saveOut(input, text) {
 function hashOf(text) {
   try { return require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32); } catch { return null; }
 }
-function dedupPath(session) {
-  return path.join(TB_DIR, 'dedup', String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl');
+/* One per-session append-only JSONL of small state, under <kind>/<session>.jsonl -- append, not rewrite, so
+   two tool calls landing at once cannot lose each other's line. Dedup (feature 6) and Read-After-Edit
+   (narrowing 1) both use it; the append body was identical in both, so it lives once here. */
+function sessionStatePath(kind, session) { return path.join(TB_DIR, kind, String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl'); }
+function appendSessionState(p, rec) {
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, JSON.stringify(rec) + '\n'); } catch { /* best-effort */ }
 }
+function dedupPath(session) { return sessionStatePath('dedup', session); }
 function dedupLookup(session, h) {
   try {
     for (const line of fs.readFileSync(dedupPath(session), 'utf8').split('\n')) {
@@ -169,12 +176,59 @@ function dedupLookup(session, h) {
   } catch { /* no state yet */ }
   return null;
 }
-function dedupRecord(session, rec) {
+function dedupRecord(session, rec) { appendSessionState(dedupPath(session), rec); }
+
+/* Read-After-Edit state (narrowing 1). One line { file, ranges:[[from,to],...], t } per Edit/MultiEdit under
+   edits/<session>.jsonl, consulted by handleReadPre to narrow a later unbounded Read of the same file to the
+   changed region. Best-effort throughout: a missing or corrupt file just means no narrowing. */
+function editsPath(session) { return sessionStatePath('edits', session); }
+function editRecord(session, rec) { appendSessionState(editsPath(session), rec); }
+function editLookup(session, file) {
+  const out = [];
   try {
-    const p = dedupPath(session);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.appendFileSync(p, JSON.stringify(rec) + '\n');
+    for (const line of fs.readFileSync(editsPath(session), 'utf8').split('\n')) {
+      if (!line) continue;
+      try { const o = JSON.parse(line); if (o && o.file === file && Array.isArray(o.ranges)) out.push(o); } catch { /* skip a bad line */ }
+    }
+  } catch { /* no state yet */ }
+  return out;
+}
+/* Record the changed 1-based line ranges of an Edit/MultiEdit so a later read can be narrowed to them.
+   Prefer Claude Code's own structuredPatch (its per-hunk newStart/newLines are the authoritative post-edit
+   diff, so it covers replace_all and edits whose new_string repeats -- both of which locating new_string by a
+   unique match silently drops -- and needs no file read). The shape is validated, not assumed (the 0.1.0
+   lesson): a hunk counts only when newStart/newLines are finite. Fall back to a unique indexOf of new_string
+   in the post-edit file when no usable patch is present. Fails open. */
+function recordEdits(input, ti, tool) {
+  try {
+    const fp = ti && ti.file_path; if (!fp) return;
+    const ranges = patchRanges(input.tool_response);
+    const found = ranges.length ? ranges : locateEdits(fp, ti, tool);
+    if (found.length) editRecord(input.session_id, { file: path.resolve(fp), ranges: found, t: Date.now() });
   } catch { /* best-effort */ }
+}
+function patchRanges(resp) {
+  const patch = resp && typeof resp === 'object' ? resp.structuredPatch : null;
+  const ranges = [];
+  if (Array.isArray(patch)) for (const h of patch) {
+    const start = Number(h && h.newStart), len = Number(h && h.newLines);
+    if (Number.isFinite(start) && start >= 1 && Number.isFinite(len)) ranges.push([start, start + Math.max(1, len) - 1]);
+  }
+  return ranges;
+}
+function locateEdits(fp, ti, tool) {
+  let content; try { content = fs.readFileSync(fp, 'utf8'); } catch { return []; }
+  const edits = tool === 'MultiEdit' ? (Array.isArray(ti.edits) ? ti.edits : []) : [{ new_string: ti.new_string }];
+  const ranges = [];
+  for (const e of edits) {
+    const ns = e && typeof e.new_string === 'string' ? e.new_string : '';
+    if (!ns) continue;
+    const at = content.indexOf(ns);
+    if (at < 0 || content.indexOf(ns, at + 1) >= 0) continue;   // absent, or not unique -> skip
+    const from = content.slice(0, at).split('\n').length;
+    ranges.push([from, from + ns.split('\n').length - 1]);
+  }
+  return ranges;
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -412,6 +466,11 @@ function handlePost(input, cfg) {
      result in the ledger, but pass it through untrimmed. */
   if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
 
+  /* Read-After-Edit Delta (record side): remember which lines this Edit changed, so a later unbounded Read of
+     the same file can be narrowed to the changed region (handleReadPre). Off by default, so recording is
+     skipped entirely when off. Recording, then falling through to the normal per-tool logging below. */
+  if (cfg.readAfterEdit && !failed && (tool === 'Edit' || tool === 'MultiEdit')) recordEdits(input, ti, tool);
+
   /* Dedup (feature 6): the same result twice in one session is paid for twice -- it re-enters context and is
      carried from then on. When it repeats, hand back a short pointer to the first copy instead of the whole
      thing. Hash the ORIGINAL bytes (the inner text: stdout for shell, the joined text blocks for MCP), before
@@ -535,11 +594,56 @@ function handleReadPre(input, cfg) {
   let st;
   try { st = fs.statSync(fp); } catch { return; }
   if (!st.isFile()) return;
+  const nLines = countLines(fp, st.size);   // computed once; the delta and the size cap below both read it
   /* A persisted output lives UNDER the Claude Code config dir (its projects/.../tool-results/, or tokenbrake's
      own out/). Requiring that anchor stops a user's own build/tool-results/*.json from being force-capped as if
-     it were a saved tool output -- the PERSISTED regex matches the filename shape, this checks the location. */
+     it were a saved tool output -- the PERSISTED regex matches the filename shape, this checks the location.
+     Computed here, above the delta, so the delta can leave a persisted output to its 80-line cap as the read
+     paths do rather than narrow it to the edit region. */
   let underConfig = false; try { underConfig = path.resolve(String(fp)).startsWith(path.resolve(CFG_DIR) + path.sep); } catch {}
   const persisted = PERSISTED.test(fp) && underConfig && st.size > cfg.maxChars;
+
+  /* Read-After-Edit Delta (narrowing 1): the model edited this file this session and is now reading it whole
+     -- almost always to verify the edit, which the harness's own guidance calls unnecessary. Narrow the read
+     to the changed region plus context; the file is still on disk, so a wider read is one offset away. Off by
+     default (readAfterEdit). Logged as its own ev:'read-delta' with the window it injected, so the Backfire
+     Auditor can tell a delta from a size cap and measure whether it sent the model back for a wider read. The
+     note states only what the guard knows -- that these lines were edited -- not that the model already holds
+     the rest, which it cannot know (a blind edit, a format-on-save, or another tool may have changed the file).
+
+     Applies only to the files the read-whole path below would take -- at or under readMaxBytes, not a
+     persisted output, not on the alwaysCap denylist -- so the delta never overrides a cap the sibling read
+     path honors. A larger (or capped) file is left to the size cap instead: the 2026-09-14 A/B (AB-TASK.md)
+     showed narrowing a big file's verify-read to the edit region BACKFIRED (the model asked for the whole file
+     anyway, 2 of 5 firings, both on files over readMaxBytes), while on the smaller file it helped. readMaxBytes
+     is exactly the line the data drew -- the helped file sat under it, the backfired ones over -- so the delta
+     reuses that threshold rather than a new knob, and stays on the small files where it fires cleanly.
+
+     Uses the MOST RECENT edit record for this file, not the union of the whole session: the latest edit is the
+     one this read most likely verifies, its lines are in the current numbering, and it bounds the spread.
+     Three guards keep the injected window sound: the edit must fall within the file (editFrom <= nLines + 1 --
+     else a truncation or an odd structuredPatch newStart would push offset past EOF and limit negative); the
+     window must not exceed readLimitLines (else scattered edits could deliver more than the size cap would);
+     and it must hide something (limit < nLines). `to` is left unclamped so a last-line edit on a file with no
+     trailing newline (where nLines counts one short) still shows. */
+  if (cfg.readAfterEdit && nLines != null && !persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
+    const recs = editLookup(input.session_id, path.resolve(fp));
+    const latest = recs.reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
+    const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);
+    if (ranges.length) {
+      const ctx = cfg.editContextLines;
+      const editFrom = Math.min(...ranges.map(r => r[0])), editTo = Math.max(...ranges.map(r => r[1]));
+      const from = Math.max(1, editFrom - ctx);
+      const to = editTo + ctx;
+      const limit = to - from + 1;
+      if (editFrom <= nLines + 1 && limit <= cfg.readLimitLines && limit < nLines) {
+        log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, offset: from, limit });
+        emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, offset: from, limit },
+          additionalContext: `${path.basename(fp)}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${Math.min(to, nLines)} of ${nLines}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.` } });
+        return;
+      }
+    }
+  }
   /* A whole-file read the cap did NOT act on is still worth recording, and until now nothing recorded it.
      Without it, `report --reads` had to infer every file's size from the delivered text -- which Claude Code
      line-numbers, so every file came out 5-6% large and the long ones worse -- and `report --where` could
@@ -550,11 +654,11 @@ function handleReadPre(input, cfg) {
      as before. Its value is that the trigger's own evidence stops being an inference. */
   if (!persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
-      bytes: st.size, lines: countLines(fp, st.size) });
+      bytes: st.size, lines: nLines });
     return;
   }
   const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;
-  const lineCount = countLines(fp, st.size);
+  const lineCount = nLines;
 
   log({ ev: 'read-cap', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, limit, persisted });
 

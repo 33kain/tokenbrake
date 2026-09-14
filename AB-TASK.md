@@ -30,6 +30,13 @@ result (`ab6`).
 
 ## The task (paste verbatim)
 
+> **Pre-split protocol — CONTEXA paths.** This audit task and the debugging rounds below were run when
+> tokenbrake lived inside `33kain/contexa`, so they read `extension/`, `worker/`, `build.mjs`, `scripts/ab/`
+> and `publishing/` — CONTEXA's files, which do not exist in this standalone repo (see HANDOFF.md's split
+> note). They stand as the record of those runs; do not paste them into a session on *this* repo unchanged.
+> The self-contained tokenbrake A/B is **"Read-After-Edit Delta (narrowing 1)"** at the end of this file; a
+> read-only tokenbrake-native task would target `guard.js`, `cli.js`, `transcript.js`, `test.mjs` instead.
+
 ```
 Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write eleven lines, one per step, then paste the report from step 11 verbatim.
 
@@ -2707,3 +2714,126 @@ Deliberately **not done:** more pairs. ab10 already showed that on a design wher
 size, extra pairs mostly measure the agent's mood. Quantifying `mcpTrim` would need a lower-variance design
 (Experiment-A style: measure the trim on a fixed result directly), which the mechanism tests in `test.mjs`
 already do for the rewrite itself.
+
+## Read-After-Edit Delta (narrowing 1) — the A/B protocol
+
+`readAfterEdit` narrows an **unbounded Read of a file the model just edited** to the changed region + context.
+It ships **OFF**; this A/B is the gate for the default, and it is read straight off `tokenbrake report
+--backfire` (the delta line — token-reads, no dollars), so unlike the arms above it does not depend on the
+usage page.
+
+**What the delta needs to fire, and where the code must live.** The guard a session runs is the committed
+copy of the checkout it started on, so the delta only exists in a session whose checkout carries this feature
+(this branch, or `main` once merged) — a config flip alone cannot add the knob to an older guard. Both arms
+differ **only** by a step-0 config write, exactly as the Opus round does.
+
+**Two questions, kept apart.**
+1. *Per-firing net* — when the verify re-read happens, does narrowing it help or send the model back? The task
+   below forces the re-read so this is measured cleanly and repeatably.
+2. *Firing rate* — how often the pattern happens on its own. The Claude Code harness tells the model not to
+   re-read a file it just edited, so on Opus the organic rate may be low; a run of ordinary edit work with the
+   delta on, reading only the `deltas fired` count, answers this. A low rate is a real finding, not a failure:
+   it bounds how much the delta can ever save on that model.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It edits **scratch copies**, so it
+is fully reversible and repeatable:
+
+```
+Edit-heavy task. Do every step with tools, in order. At the end write the final answer in step 6.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"readAfterEdit": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"readAfterEdit": true}'  > ~/.claude/tokenbrake.json
+1. Copy the repo's guard.js, cli.js and transcript.js into /tmp/abwork/ (as guard.js, cli.js, transcript.js). Work only on those copies; do not touch the repo's own files.
+2. Make each of these edits with the Edit tool, and AFTER each edit Read the whole file you just edited to confirm the change before the next step:
+   a. /tmp/abwork/guard.js: change the DEFAULTS value maxChars from 6000 to 7000.
+   b. /tmp/abwork/guard.js: change headLines from 40 to 48.
+   c. /tmp/abwork/guard.js: change tailLines from 40 to 48.
+   d. /tmp/abwork/cli.js: in the help text, change the word "trims" to "trim" in the first line.
+   e. /tmp/abwork/cli.js: change the clean default of 7 days to 14 in the help text.
+   f. /tmp/abwork/transcript.js: change CHARS_PER_TOKEN from 4 to 4 (a no-op edit is fine; still Read to verify).
+   g. /tmp/abwork/transcript.js: change the TRIM_CHARS constant from 6000 to 7000.
+3. Run `node /tmp/abwork/cli.js --help` (it will fail harmlessly; that is fine) and move on.
+4. Run `git status --short` in the repo and confirm it reports no changes to tracked files.
+5. Run `cat ~/.claude/tokenbrake.json`.
+6. Run `node cli.js report --backfire` in the repo and paste its full output verbatim, then the outputs of steps 4 and 5.
+
+Final answer: the number of edits you made, whether any re-read was narrowed (you will see a tokenbrake note in the read result), and the pasted outputs of steps 5 and 6.
+```
+
+**What the comparison reads.** From step 6, arm B's `report --backfire` line: `Read-After-Edit deltas: N
+fired; M sent the model back`. The read the delta narrowed on each verify is the *fired* count; a `sent the
+model back` is a backfire (the verify needed more than the region, or a later read of the file landed outside
+it). Arm A is the baseline: with the delta off, `deltas fired` is 0 and the same reads enter whole. Compare
+the two arms' `report` — context processed, tool results entered/carried — for the net; the delta pays off
+when arm B carries fewer read token-reads with `M` small against `N`. A human-run pair can also read the
+five-hour window per arm as the other rounds do; it is secondary here because the delta line is exact.
+
+**Decision rule, fixed before the run.** Flip the default to `readAfterEdit: true` only if, across the run,
+`M/N` (backfire rate) is low **and** arm B's carried read token-reads are meaningfully below arm A's. A high
+`M`, or no measurable carry difference, keeps it OFF and opt-in. As with `mcpTrim`, the burden of proof is on
+the flip.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned cloud session on this branch)
+
+One ON-arm session ran the task above (`readAfterEdit: true`) autonomously on a checkout of this branch.
+`report --backfire`:
+
+```
+Read caps fired: 2
+Read-After-Edit deltas: 5 fired; 2 sent the model back for a wider read of the file
+```
+
+**5 fired, 2 backfired — a 40% backfire rate.** All five verify-reads were narrowed to the edited region; the
+split was by **file size**: the three reads of the small file (`guard.js`) were satisfied by the narrowed
+region (the edit sat in it) and did not send the model back, while the two reads of the large files
+(`cli.js`, `transcript.js`, near/over `readMaxBytes`) backfired — the model asked for the whole file again
+despite the edit being shown in the narrowed slice. A small slice of a large file leaves the model wanting
+the rest; a slice that is most of a small file does not.
+
+**Decision: default stays OFF.** The pre-registered rule flips only on a low backfire rate; 40% is not low.
+This is the gate working as intended — it caught a real backfire and stopped the flip. The delta ships opt-in.
+
+**Verified, not taken on trust.** The run's own prose claimed the size cap "delivered the first 300 lines
+instead of the narrowed window" on large files (i.e. the edit was not visible). That is wrong, and was
+reproduced against the guard directly: an unbounded read of a 2,000-line (~90 KB, over `readMaxBytes`) file
+edited at line 545 is narrowed to lines 525–565 — the delta returns before the size cap, whatever the file
+size, so the edit is shown. The backfires are genuine model behaviour on large files, not a cap-replacement
+bug.
+
+**Caveats.** n = 1 session, one model (Opus), and the verify-read was forced by the task — this measures the
+delta's effect *when the pattern occurs*, not its base rate, and this repo's A/Bs are noise-limited (ab10).
+Read the direction (small files help, large files backfire), not the 40%.
+
+**Change made (2026-09-14): the delta now applies only to files at or under `readMaxBytes`.** The A/B split by
+size exactly on that line — the helped file (`guard.js`, 42 KB) sat under `readMaxBytes` (60,000 bytes ≈ 59
+KB), the two that backfired (`cli.js` 89 KB, `transcript.js` 95 KB) over it — so the delta reuses that
+threshold rather than a new knob, and gates on the same conditions the read-whole path does (also skipping a
+persisted output or an `alwaysCap` file, which have their own caps). A larger or capped file is left to the
+size cap (`guard.js` handleReadPre). This removes the backfiring
+class by construction: re-run the ON arm and the two large-file firings should be gone, leaving the three
+small-file firings that helped. **Default is still OFF** — flip it only after that re-run measures the backfire
+rate low with the gate in place; the change narrows *where* the delta fires, it does not itself move the
+default.
+
+### Re-run — ON arm with the gate, 2026-09-14 (Opus, spawned session)
+
+Same ON arm with the gate in place; the task edited four small files (under `readMaxBytes`) plus one 96 KB
+file (over it), each verify-read whole. `report --backfire`:
+
+```
+Read caps fired: 2
+Read-After-Edit deltas: 4 fired; 0 sent the model back for a wider read of the file
+```
+
+**4 fired, 0 backfired (0%), and the 96 KB file was CAPPED, not narrowed.** The size gate excluded the large
+file in a real session, not just in the unit tests; each small-file window (lines 77–123) contained the edit,
+so the verify was satisfied without a wider re-read. Combined with run 1 (small files 0 of 3 backfired; the 2
+backfires there were the large files now gated out), small-file verify-reads have backfired **0 of 7** across
+both runs.
+
+**Default still OFF / opt-in.** The gated delta is validated *when it fires* — on the files it now touches it
+does not backfire, and the risky large files are excluded. But the flip's burden is not met: the pattern was
+**forced** by the task, on one model, and neither the organic firing RATE (Opus is told not to re-read after
+an edit, so it may rarely fire on its own) nor the real carried-token SAVINGS against an OFF arm was measured.
+So it ships as a **recommended opt-in** (`readAfterEdit: true`), not a moved default. Flipping would need an
+organic session (no forced re-reads) showing the delta fires and nets a saving on its own.

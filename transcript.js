@@ -710,6 +710,160 @@ function recoveryReads(parsed) {
   return out;
 }
 
+/* Step 0 of the narrowing roadmap: the gate that decides whether a withhold saved tokens or backfired.
+   recoveryReads above is the raw signal -- every time the model came back to a file it had read -- and it
+   can only say "some of these" were the guard's doing. This attributes the cost to the guard exactly. A
+   WITHHOLD is a result the model saw carrying the guard's marker AND matching a ledger row (a trim, an MCP
+   trim, or a dedup pointer): the ledger gives the original and kept sizes, so its saving is exact. It
+   BACKFIRES only when the model pulls the withheld bytes back the two ways the guard itself created --
+   reading the out/ file the guard saved (the trim/MCP marker names that path), or `tokenbrake show <id>`
+   (the dedup pointer names that id). Nothing else lives in out/ and no other `show` exists, so a hit is the
+   guard's own cost by construction, not an ordinary re-read.
+
+   Attribution is EXACT, not a substring guess: the guard names each save `<session_id[0..8]>-<tool_use_id
+   last 10, cleaned>.txt` (guard.js saveOut), so this rebuilds that stem for each withhold from its own id
+   and the session id and compares the read's stem to it whole. A dedup row's saving is its FIRST copy, saved
+   under that copy's stem, which the row carries verbatim as `sameAs` and the pointer names as the `show`
+   argument -- so a dedup withhold matches on `sameAs`. A read whose stem this session cannot rebuild (an
+   earlier session's file, a different session id) matches nothing here, which is the point of doing it whole
+   rather than by containment.
+
+   The NET is the gross saving (the same removed-tokens x carried basis trimSavings and --cost rest on) minus
+   what those pull-backs carried, measured on the SAME footprint (size x (its own later requests + 1), so
+   entry and every re-read count on both sides). The verdict reads the net, not the count: ab10 established
+   that the number of trims does not predict the bill, so a measured net loss is called a backfire at any
+   sample size, and only the "did it help" labels wait for MIN_WITHHOLDS results before a rate is asserted.
+   Money is deliberately absent -- this is a token gate. Only a MATCHED pull-back nets against the saving: a
+   read of a save this audit did not count as a withhold (an earlier session's out/ file, or a capped or
+   over-ceiling output that carries no marker) is a real cost but not THIS saving coming back, so netting it
+   would let the rate say "nothing backfired" while the net was silently docked -- it is reported apart
+   instead. Read caps are reported apart too, as a softer signal: a bounded re-read after a cap is partly the
+   behaviour the cap asks for, and trimSavings never counted a saving for them to net against. */
+const OUT_FILE = /(?:^|[\\/])tokenbrake[\\/]out[\\/]([^\\/]+?)\.txt$/;
+const SHOW_CMD = /(?:tokenbrake|cli\.js)\s+show\s+(\S+)/;
+const MIN_WITHHOLDS = 3;   // a chosen confidence floor: below it a "rate" is not asserted, only a measured loss
+function backfireVerdict(n, net, backfired, min) {
+  if (!n) return 'nothing';
+  if (net < 0) return 'backfired';                 // a measured net loss is real at any sample size
+  if (n < (min == null ? MIN_WITHHOLDS : min)) return 'too few';   // an explicit floor of 0 must not coerce to the default
+  if (!backfired) return 'clean';
+  return net === 0 ? 'break-even' : 'net positive';   // break-even: the pull-backs cost exactly what was saved
+}
+function backfireAudit(parsed, ledgerRecs, opts) {
+  carry(parsed);
+  const ledger = ledgerRecs || [];
+  const idx = ledgerIndex(ledger, parsed.sessionId);
+  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+
+  /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND a
+     ledger row that saved the withheld bytes to out/ (the original and kept sizes). kind is read from the row
+     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, everything else is a plain trim. An EXCERPT
+     row (a `cat` of a large file capped like a Read: guard.js logs ev:'post', excerpt:true, saved:null) is
+     NOT netted here: it saves nothing to out/, so it could only ever read as "clean" and would pad the saving
+     side of the gate. It is a Read-cap-family event and belongs to the caps line / `report --caps`. `stem` is
+     the exact out/ filename (minus .txt) the guard would have written: for a dedup, the first copy's stem in
+     `sameAs`; otherwise rebuilt the way saveOut names it (guard.js saveOut -- pinned by the integration test
+     in test.mjs, since the guard installs as a single file and cannot share this helper). No stem => no match. */
+  const sid8 = String(parsed.sessionId || '').slice(0, 8);
+  const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
+  const withholds = [];
+  for (const r of parsed.results) {
+    if (!r.marker) continue;
+    const l = offeredOf(r);
+    if (!l || l.excerpt) continue;
+    const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
+    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
+    withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
+      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
+  }
+
+  /* A pull-back: a later result that read a saved output back into context. Two shapes, both the guard's own
+     doing -- the out/ file it wrote (ref = its stem), or `tokenbrake show <arg>` (ref = the argument, which
+     may be a stem, a prefix, or a full path, exactly as `show` itself accepts). `foot` is the token-read
+     footprint on the same basis as savedCarried: what re-entered (tokens) plus what it was then carried
+     through. This is a LOWER bound on pull-backs: a Grep TOOL call on the saved file names the path in the
+     tool's `path` input, which parseTranscript does not surface as `file`, so that one door is not counted
+     -- which biases the net optimistic, the direction a gate should be cautious about, so treat a clean
+     result as "none seen", not "none happened". */
+  const recoveries = [];
+  for (const r of parsed.results) {
+    let ref = null, kind = null;
+    const mf = r.file && OUT_FILE.exec(String(r.file));
+    if (mf) { ref = mf[1]; kind = 'out-file'; }
+    else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]); kind = 'show'; } }
+    if (!kind) continue;
+    recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false });
+  }
+
+  /* Match a pull-back to the withhold whose saved output it read, setting both flags in one pass. An out/
+     file read must EQUAL the stem the guard would have written -- exact, so a shared sid8 prefix cannot
+     cross-attribute. A `show` argument is looser by design: `show` resolves a full path, an exact stem, or a
+     unique prefix, and refuses an ambiguous one (cli.js showOutput), so mirror that -- reduce a path to its
+     stem, then take an exact stem, else a prefix that resolves to exactly one withhold; an ambiguous prefix
+     stays unattributed (counted as a pull-back, not netted). */
+  const stemFromShow = (arg) => { const m = OUT_FILE.exec(String(arg)); return m ? m[1] : String(arg).replace(/\.txt$/, ''); };
+  const attribute = (rec) => {
+    const ref = rec.kind === 'show' ? stemFromShow(rec.ref) : rec.ref;
+    if (!ref) return null;
+    const exact = withholds.filter((w) => w.stem && w.stem === ref);
+    if (exact.length) return exact[0];
+    if (rec.kind === 'show') { const pre = withholds.filter((w) => w.stem && w.stem.startsWith(ref)); if (pre.length === 1) return pre[0]; }
+    return null;
+  };
+  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; } }
+
+  const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
+  const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
+  const matched = recoveries.filter((x) => x.matched);
+  const recoveredTokens = matched.reduce((s, x) => s + x.tokens, 0);
+  const recoveredCarried = matched.reduce((s, x) => s + x.foot, 0);
+  const unmatched = recoveries.filter((x) => !x.matched);
+  const unmatchedCarried = unmatched.reduce((s, x) => s + x.foot, 0);
+  const backfired = withholds.filter((w) => w.recovered).length;
+  const net = savedCarried - recoveredCarried;
+  const verdict = backfireVerdict(withholds.length, net, backfired, opts && opts.min);
+
+  const byKind = {};
+  for (const w of withholds) byKind[w.kind] = (byKind[w.kind] || 0) + 1;
+  const caps = readCaps(ledger, parsed.sessionId);
+  const cls = classifyRangedReads(parsed, ledger, { sessionId: parsed.sessionId });
+  const deltas = readDeltas(ledger, parsed);
+
+  return { withholds, byKind, saved, savedCarried, recoveredEvents: matched.length,
+    recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
+    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas };
+}
+
+/* Read-After-Edit deltas (narrowing 1) and whether each sent the model back for more. A delta narrows an
+   unbounded Read of a just-edited file to the changed region; the guard logs it as ev:'read-delta' with the
+   window (offset, limit) it injected. It BACKFIRED when the model then read the SAME file again at a line
+   OUTSIDE that window -- the delta hid what it actually wanted. The narrowed read itself starts inside the
+   window, which is why the window is recorded: it lets a real "went back for more" read be told apart from the
+   delta's own read (the reason this is not folded into the read-cap/induced machinery, where the delta read
+   would count as its own backfire). A distinct ev also keeps read-delta rows out of the readMaxBytes evidence
+   in --caps/--reads/--where, which is about the size cap, not this. */
+function readDeltas(ledgerRecs, parsed) {
+  const cwd = parsed && parsed.cwd;
+  let fired = 0, backfired = 0;
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'read-delta') continue;
+    if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
+    fired++;
+    const key = normReadPath(r.what, cwd), t = Number(r.t) || null;
+    const from = Number(r.offset) || 1, to = from + (Number(r.limit) || 0) - 1;
+    const hit = (parsed.results || []).some((res) => {
+      if (!res.file || normReadPath(res.file, cwd) !== key) return false;
+      const when = res.askedAt != null ? res.askedAt : res.at;
+      if (t != null && when != null && when <= t) return false;   // must come after the delta fired; excludes the
+      if (res.whole) return true;                                 //   delta's own narrowed read, so a whole-file
+      if (res.readFrom == null) return false;                     //   re-read (cat / unbounded Read) counts, but a
+      return res.readFrom < from || res.readFrom > to;            //   ranged read outside the shown region does too
+    });
+    if (hit) backfired++;
+  }
+  return { fired, backfired };
+}
+
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
    cache reads + cache writes), so summing those is the total the session has actually processed, and the
    LAST request's figure is roughly what the context holds right now. cacheRead over the total is how much
@@ -1351,7 +1505,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
+module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,

@@ -10,7 +10,7 @@
    that; this file pins the shape so it cannot regress unnoticed. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1533,6 +1533,266 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('coming back to a file already read counts once, and only for the return',
     rec.n === 1 && rec.tokens === 50 && rec.carried === 100, JSON.stringify(rec));
   t('a result naming no file is never a recovery read', rec.files.length === 1 && rec.files[0] === '/a/settle.js', JSON.stringify(rec.files));
+}
+
+/* The Backfire Auditor (Step 0 gate): a withhold (marker + ledger row) backfires only when the model pulls
+   the withheld bytes back the two ways the guard makes possible -- reading its saved out/ file, or
+   `tokenbrake show <stem>`. Attribution is EXACT: the audit rebuilds the guard's own filename
+   (<sid[0..8]>-<tool_use_id last 10, cleaned>) and compares the read's stem to it whole, so this fixture
+   builds the out/ names the SAME way saveOut does -- a matcher that compared the full id would fail here. */
+{
+  console.log('\n-- backfire audit (Step 0 gate)');
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const sid = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789';                                 // realistic: > 8 chars
+  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it
+  const outPath = (id) => '/cfg/tokenbrake/out/' + stem(id) + '.txt';
+  const reqs = (n) => Array.from({ length: n }, () => ({ model: 'claude-opus-5' }));
+  const A = 'toolu_01AAAAAAAAAAAAAAAAA1', B = 'toolu_01BBBBBBBBBBBBBBBBB2', C = 'toolu_01CCCCCCCCCCCCCCCCC3';
+  /* 6 requests; three marked + ledgered trims (A, B, C). A Read of B's saved out/ file pulls B back. */
+  const base = {
+    sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
+    results: [
+      { id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 500, afterReq: 1 },
+      { id: C, name: 'Bash', file: null, what: 'grep x src', marker: true, tokens: 500, afterReq: 2 },
+      { id: 'toolu_R', name: 'Read', file: outPath(B), what: outPath(B), marker: false, tokens: 3000, afterReq: 3 },
+    ],
+  };
+  const trimRow = (id) => ({ ev: 'post', session: sid, id, tool: 'Bash', chars: 20000, kept: 2000 });
+  const ledger = [trimRow(A), trimRow(B), trimRow(C)];
+  const a = T.backfireAudit(JSON.parse(JSON.stringify(base)), ledger);
+  t('marker + ledger row makes a withhold, one per marked result', a.withholds.length === 3, String(a.withholds.length));
+  t('a read of the guard-named out/ file attributes to that withhold (exact stem, not the full id)',
+    a.backfired === 1 && a.withholds.find(w => w.id === B).recovered && !a.withholds.find(w => w.id === A).recovered,
+    JSON.stringify(a.withholds.map(w => [w.id.slice(-4), w.recovered])));
+  t('a saved-output read is one recovery event with a positive footprint', a.recoveredEvents === 1 && a.recoveredCarried > 0, JSON.stringify({ e: a.recoveredEvents, c: a.recoveredCarried }));
+  t('net is gross saved-carried minus what was pulled back', a.net === a.savedCarried - a.recoveredCarried, JSON.stringify({ net: a.net, s: a.savedCarried, r: a.recoveredCarried }));
+  t('a pull-back with a positive net verdicts net positive', a.verdict === 'net positive', a.verdict + ' net=' + a.net);
+
+  /* An out/ read whose stem differs by even one char attributes to nothing -- exact equality, no containment. */
+  const near = JSON.parse(JSON.stringify(base));
+  near.results[3] = { id: 'toolu_R', name: 'Read', file: '/cfg/tokenbrake/out/' + stem(B).slice(0, -1) + 'Z.txt', what: '', marker: false, tokens: 3000, afterReq: 3 };
+  const an = T.backfireAudit(near, ledger);
+  t('a near-miss stem is not cross-attributed, but is counted apart', an.backfired === 0 && an.unmatchedEvents === 1, JSON.stringify({ b: an.backfired, u: an.unmatchedEvents }));
+
+  /* Dedup: the ledger row carries the FIRST copy's stem as `sameAs`, which the pointer names as the `show`
+     argument -- so a dedup withhold attributes on sameAs, not on its own id. */
+  const priorStem = sid.slice(0, 8) + '-priorcopyX';
+  const dedupTx = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [
+      { id: 'toolu_DEDUP1', name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_SHOW', name: 'Bash', file: null, what: 'npx tokenbrake show ' + priorStem, marker: false, tokens: 3000, afterReq: 1 },
+    ] };
+  const ad = T.backfireAudit(dedupTx, [{ ev: 'post', session: sid, id: 'toolu_DEDUP1', tool: 'Bash', chars: 20000, kept: 60, dedup: true, sameAs: priorStem }], { min: 1 });
+  t('a dedup withhold is pulled back by `show <sameAs>`, not by its own id',
+    ad.backfired === 1 && ad.withholds[0].kind === 'dedup' && ad.withholds[0].recovered, JSON.stringify(ad.withholds.map(w => [w.kind, w.recovered])));
+
+  const none = T.backfireAudit({ sessionId: 'z', cwd: '/w', requests: reqs(2), compactions: [],
+    results: [{ id: 'x', name: 'Bash', file: null, what: 'ls', marker: false, tokens: 10, afterReq: 0 }] }, []);
+  t('a session with no withholds audits to the nothing verdict', none.verdict === 'nothing' && none.withholds.length === 0, none.verdict);
+
+  /* A measured net loss is a backfire at any sample size -- one withhold, a pull-back that dwarfs it. */
+  const heavy = { sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
+    results: [
+      { id: A, name: 'Bash', file: null, what: 'cat log', marker: true, tokens: 100, afterReq: 0 },
+      { id: 'toolu_P', name: 'Read', file: outPath(A), what: outPath(A), marker: false, tokens: 9000, afterReq: 1 },
+    ] };
+  const a3 = T.backfireAudit(heavy, [{ ev: 'post', session: sid, id: A, tool: 'Bash', chars: 5000, kept: 4000 }]);
+  t('a measured net loss verdicts backfired even below the sample floor', a3.net < 0 && a3.verdict === 'backfired', JSON.stringify({ net: a3.net, v: a3.verdict }));
+
+  /* Below the floor with no loss is too little to assert a rate -- 2 clean withholds do not get a verdict. */
+  const twoTx = JSON.parse(JSON.stringify(base));
+  twoTx.results = twoTx.results.slice(0, 2);   // A, B; no recovery
+  const a2few = T.backfireAudit(twoTx, ledger);
+  t('two clean withholds are too few to call a rate', a2few.verdict === 'too few' && a2few.backfired === 0, a2few.verdict);
+
+  const cleanBase = JSON.parse(JSON.stringify(base));
+  cleanBase.results = cleanBase.results.slice(0, 3);   // A, B, C; drop the recovery read
+  const a4 = T.backfireAudit(cleanBase, ledger);
+  t('three withholds and no pull-back verdicts clean', a4.verdict === 'clean' && a4.backfired === 0, a4.verdict);
+
+  /* An excerpt cap (a `cat` of a large file, capped like a Read: ev:'post', excerpt:true, saved:null) carries
+     a marker and kept but saves nothing to out/, so it is a Read-cap event, not a net-able trim -- it must
+     NOT be counted as a withhold, or it would pad the saving side and could only ever read "clean". */
+  const excerptTx = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [{ id: 'toolu_CAT', name: 'Bash', file: null, what: 'cat huge.log', marker: true, tokens: 300, afterReq: 0 }] };
+  const aex = T.backfireAudit(excerptTx, [{ ev: 'post', session: sid, id: 'toolu_CAT', tool: 'Bash', chars: 90000, kept: 8000, excerpt: true, saved: null }]);
+  t('an excerpt cap is not counted as a withhold (it saves nothing to out/)', aex.withholds.length === 0 && aex.verdict === 'nothing', JSON.stringify({ w: aex.withholds.length, v: aex.verdict }));
+
+  /* `show` resolves a full path, an exact stem, or a UNIQUE prefix, exactly as the CLI does; mirror that. */
+  const showRef = (what) => T.backfireAudit({ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: 'toolu_S', name: 'Bash', file: null, what, marker: false, tokens: 2000, afterReq: 1 }] }, [trimRow(A)], { min: 1 });
+  t('`show <unique prefix>` attributes to the one withhold it resolves', showRef('tokenbrake show ' + stem(A).slice(0, 12)).backfired === 1, 'prefix');
+  t('`show <full out/ path>` attributes to its withhold', showRef('npx tokenbrake show ' + outPath(A)).backfired === 1, 'path');
+  const amb = T.backfireAudit({ sessionId: sid, cwd: '/w', requests: reqs(5), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'a', marker: true, tokens: 100, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'b', marker: true, tokens: 100, afterReq: 1 },
+      { id: 'toolu_S', name: 'Bash', file: null, what: 'tokenbrake show ' + sid.slice(0, 8), marker: false, tokens: 2000, afterReq: 2 }] },
+    [trimRow(A), trimRow(B)]);
+  t('an ambiguous `show <sid8>` prefix is counted but not cross-attributed', amb.backfired === 0 && amb.unmatchedEvents === 1, JSON.stringify({ b: amb.backfired, u: amb.unmatchedEvents }));
+
+  /* A net of exactly zero with a backfire is break-even, not a win. savedCarried == recoveredCarried by
+     construction: A at afterReq0 of 3 requests carries 2 turns, savedTokens*(2+1) = 2000*3 = 6000; the
+     recovery at afterReq1 carries 1 turn, foot = 3000 + 3000 = 6000. */
+  const evenTx = { sessionId: sid, cwd: '/w', requests: reqs(3), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'x', marker: true, tokens: 100, afterReq: 0 },
+      { id: 'toolu_P', name: 'Read', file: outPath(A), what: outPath(A), marker: false, tokens: 3000, afterReq: 1 }] };
+  const aeven = T.backfireAudit(evenTx, [{ ev: 'post', session: sid, id: A, tool: 'Bash', chars: 10000, kept: 2000 }], { min: 1 });
+  t('a net of exactly zero with a backfire verdicts break-even, not net positive', aeven.net === 0 && aeven.verdict === 'break-even', JSON.stringify({ net: aeven.net, v: aeven.verdict }));
+
+  /* Integration pin: backfireAudit rebuilds guard.js saveOut's out/ filename, and the two cannot share code
+     (the guard installs as a single file). So pin them end to end -- a REAL guard trim, its real out/ file,
+     attributed by the audit. A change to saveOut's naming breaks this test, not silently the gate. */
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-bf-int-'));
+  const isid = 'inteGRATION-sess-0001', itid = 'toolu_01INTEGRATION9999';
+  const bigOut = Array.from({ length: 400 }, (_, i) => 'line ' + i + ' ' + 'x'.repeat(40)).join('\n');   // > maxChars, not a cat
+  spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: isid, tool_use_id: itid, tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: bashResp(bigOut) }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+  const outDir = join(dir, 'tokenbrake', 'out');
+  const outFiles = existsSync(outDir) ? readdirSync(outDir).filter(f => f.endsWith('.txt')) : [];
+  const intLedger = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const realPath = join(outDir, outFiles[0] || 'none.txt');
+  const intTx = { sessionId: isid, cwd: '/w', requests: reqs(3), compactions: [],
+    results: [{ id: itid, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: 'toolu_READ', name: 'Read', file: realPath, what: realPath, marker: false, tokens: 3000, afterReq: 1 }] };
+  const ai = T.backfireAudit(intTx, intLedger, { min: 1 });
+  t('the audit attributes a read of a REAL guard-written out/ file (pins stemOf to saveOut)',
+    outFiles.length === 1 && ai.withholds.length === 1 && ai.backfired === 1, JSON.stringify({ files: outFiles, w: ai.withholds.length, b: ai.backfired }));
+  rmSync(dir, { recursive: true, force: true });
+}
+
+/* Read-After-Edit Delta (narrowing 1, off by default): after an Edit, an unbounded Read of the same file is
+   narrowed to the changed region + context; the rest is unchanged from what the model already has. The file
+   stays on disk, so a wrong guess costs one wider read, which report --backfire measures as a delta backfire. */
+{
+  console.log('\n-- read-after-edit delta (narrowing 1, off by default)');
+  const lines = Array.from({ length: 200 }, (_, i) => i === 99 ? 'const UNIQUE_EDIT_MARKER = 1;' : ('const x' + i + ' = ' + i + ';'));
+  const sess = 'rae-1';
+  const editInput = (file) => ({ session_id: sess, tool_use_id: 'toolu_e1', tool_name: 'Edit',
+    tool_input: { file_path: file, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: file } });
+
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-'));
+  const file = join(dir, 'big.js');
+  writeFileSync(file, lines.join('\n') + '\n');
+  writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  const spawnIn = (d, mode, input) => spawnSync(process.execPath, ['./guard.js', mode],
+    { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: d } });
+
+  spawnIn(dir, 'post', editInput(file));
+  const editsFile = join(dir, 'tokenbrake', 'edits', sess + '.jsonl');
+  t('an Edit records the changed line range when readAfterEdit is on',
+    existsSync(editsFile) && /"ranges":\[\[100,100\]\]/.test(readFileSync(editsFile, 'utf8')), existsSync(editsFile) ? readFileSync(editsFile, 'utf8').trim() : 'no edits file');
+  const on = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file } }).stdout);
+  const ui = on && on.hookSpecificOutput && on.hookSpecificOutput.updatedInput;
+  t('an unbounded read of the edited file is narrowed to the changed region + context', ui && ui.offset === 80 && ui.limit === 41, JSON.stringify(ui));
+  t('the narrowing explains itself factually and points to a wider read',
+    /region you edited \(lines 80-120 of 200\)/.test(((on || {}).hookSpecificOutput || {}).additionalContext || '')
+    && /offset\/limit for the rest/.test(((on || {}).hookSpecificOutput || {}).additionalContext || ''),
+    ((on || {}).hookSpecificOutput || {}).additionalContext || '');
+  const led = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8');
+  t('the delta is logged as its own ev:read-delta with the window', /"ev":"read-delta"/.test(led) && /"offset":80/.test(led) && /"limit":41/.test(led), led.split('\n').filter(Boolean).pop());
+  const bounded = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file, offset: 5, limit: 10 } }).stdout);
+  t('a bounded read of an edited file is left alone', bounded === null || !bounded.hookSpecificOutput, JSON.stringify(bounded));
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-off-'));
+  const file2 = join(dir2, 'big.js'); writeFileSync(file2, lines.join('\n') + '\n');
+  spawnIn(dir2, 'post', editInput(file2));   // no config -> readAfterEdit defaults off
+  t('no edit is recorded when readAfterEdit is off (default)', !existsSync(join(dir2, 'tokenbrake', 'edits', sess + '.jsonl')), 'off');
+  const off = parse(spawnIn(dir2, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file2 } }).stdout);
+  t('an unbounded read is not narrowed when readAfterEdit is off', off === null || !(off.hookSpecificOutput && off.hookSpecificOutput.updatedInput && off.hookSpecificOutput.updatedInput.offset), JSON.stringify(off));
+
+  // structuredPatch is preferred and works where locating new_string cannot -- replace_all, repeated, or (here) absent text.
+  const dir3 = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-patch-'));
+  const file3 = join(dir3, 'big.js'); writeFileSync(file3, lines.join('\n') + '\n');
+  writeFileSync(join(dir3, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dir3, 'post', { session_id: sess, tool_use_id: 'toolu_e2', tool_name: 'Edit',
+    tool_input: { file_path: file3, old_string: 'whatever', new_string: 'NOT_IN_THE_FILE_AT_ALL' },
+    tool_response: { structuredPatch: [{ oldStart: 50, oldLines: 3, newStart: 50, newLines: 4 }] } });
+  const patchEdits = readFileSync(join(dir3, 'tokenbrake', 'edits', sess + '.jsonl'), 'utf8');
+  t('structuredPatch drives the range where locating new_string cannot (replace_all / repeated / absent text)', /"ranges":\[\[50,53\]\]/.test(patchEdits), patchEdits.trim());
+  rmSync(dir, { recursive: true, force: true }); rmSync(dir2, { recursive: true, force: true }); rmSync(dir3, { recursive: true, force: true });
+
+  /* A window wider than readLimitLines is NOT injected -- the delta must never deliver more than the size cap
+     it overrides (a scattered/large edit span would). */
+  const dirCap = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-cap-'));
+  const fileCap = join(dirCap, 'big.js'); writeFileSync(fileCap, lines.join('\n') + '\n');
+  writeFileSync(join(dirCap, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true, readLimitLines: 10 }));
+  spawnIn(dirCap, 'post', { session_id: sess, tool_use_id: 'toolu_c1', tool_name: 'Edit', tool_input: { file_path: fileCap, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: fileCap } });
+  const capUi = (parse(spawnIn(dirCap, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileCap } }).stdout) || {}).hookSpecificOutput;
+  t('a delta window wider than readLimitLines is not injected (never delivers more than the cap)', !(capUi && capUi.updatedInput && capUi.updatedInput.offset), JSON.stringify(capUi));
+  rmSync(dirCap, { recursive: true, force: true });
+
+  /* An edit recorded past EOF (a truncation, or an odd structuredPatch newStart from untrusted tool output)
+     must not inject a negative limit or a past-EOF offset -- it declines instead. */
+  const dirEof = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-eof-'));
+  const fileEof = join(dirEof, 'big.js'); writeFileSync(fileEof, lines.join('\n') + '\n');   // 200 lines
+  writeFileSync(join(dirEof, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirEof, 'post', { session_id: sess, tool_use_id: 'toolu_x1', tool_name: 'Edit', tool_input: { file_path: fileEof, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 9999, newLines: 1 }] } });
+  const eofUi = (parse(spawnIn(dirEof, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileEof } }).stdout) || {}).hookSpecificOutput;
+  t('an edit recorded past EOF never injects a negative limit / past-EOF offset', !(eofUi && eofUi.updatedInput && eofUi.updatedInput.offset), JSON.stringify(eofUi));
+  rmSync(dirEof, { recursive: true, force: true });
+
+  /* A last-line edit on a file with NO trailing newline (where countLines is one short) is still shown --
+     `to` is left unclamped so the edited line stays inside the injected window. */
+  const dirNl = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-nl-'));
+  const fileNl = join(dirNl, 'big.js'); writeFileSync(fileNl, lines.slice(0, 50).join('\n'));   // 50 lines, no trailing newline
+  writeFileSync(join(dirNl, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirNl, 'post', { session_id: sess, tool_use_id: 'toolu_n1', tool_name: 'Edit', tool_input: { file_path: fileNl, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 50, newLines: 1 }] } });
+  const nlUi = ((parse(spawnIn(dirNl, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileNl } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('a last-line edit on a no-trailing-newline file is still inside the injected window',
+    nlUi && nlUi.offset === 30 && (nlUi.offset + nlUi.limit - 1) >= 50, JSON.stringify(nlUi));
+  rmSync(dirNl, { recursive: true, force: true });
+
+  /* Over readMaxBytes the delta stands aside and the size cap governs -- the 2026-09-14 A/B showed narrowing a
+     large file's verify-read backfired, so big files are left to the cap (readMaxBytes is the boundary the
+     data drew: the helped file was under it, the backfired ones over). */
+  const dirBig = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-big-'));
+  const fileBig = join(dirBig, 'big.js');
+  writeFileSync(fileBig, Array.from({ length: 2000 }, (_, i) => 'const filler' + i + ' = "' + 'x'.repeat(30) + '";').join('\n') + '\n');   // ~100 KB, over readMaxBytes
+  writeFileSync(join(dirBig, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirBig, 'post', { session_id: sess, tool_use_id: 'toolu_b1', tool_name: 'Edit', tool_input: { file_path: fileBig, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 545, newLines: 1 }] } });
+  const bigUi = ((parse(spawnIn(dirBig, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileBig } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('a file over readMaxBytes is left to the size cap, not narrowed by the delta (edit recorded, delta stands aside)',
+    bigUi && bigUi.offset == null && bigUi.limit === 300, JSON.stringify(bigUi));
+  rmSync(dirBig, { recursive: true, force: true });
+
+  /* The delta honors the same cap conditions the sibling read-whole path does: an edited file on the
+     alwaysCap denylist is left to the cap, not narrowed. */
+  const dirAc = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-acap-'));
+  const fileAc = join(dirAc, 'bundle.min.js'); writeFileSync(fileAc, lines.join('\n') + '\n');
+  writeFileSync(join(dirAc, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true, alwaysCap: ['.min.js'] }));
+  spawnIn(dirAc, 'post', { session_id: sess, tool_use_id: 'toolu_ac', tool_name: 'Edit', tool_input: { file_path: fileAc, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: fileAc } });
+  const acUi = ((parse(spawnIn(dirAc, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileAc } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('an edited alwaysCap file is left to the cap, not narrowed by the delta', acUi && acUi.offset == null && acUi.limit === 300, JSON.stringify(acUi));
+  rmSync(dirAc, { recursive: true, force: true });
+
+  /* An edited persisted output (under the config dir, over maxChars) keeps its 80-line persistedLimitLines cap,
+     not the delta -- a saved tool output is not the "file the model already has" the delta is for. */
+  const dirP = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-persist-'));
+  const outDir = join(dirP, 'tokenbrake', 'out'); mkdirSync(outDir, { recursive: true });
+  const fileP = join(outDir, 'saved.txt'); writeFileSync(fileP, Array.from({ length: 400 }, () => 'x'.repeat(30)).join('\n') + '\n');   // ~12 KB, over maxChars
+  writeFileSync(join(dirP, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirP, 'post', { session_id: sess, tool_use_id: 'toolu_p1', tool_name: 'Edit', tool_input: { file_path: fileP, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 100, newLines: 1 }] } });
+  const pUi = ((parse(spawnIn(dirP, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileP } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('an edited persisted output keeps its persistedLimitLines cap, not the delta', pUi && pUi.offset == null && pUi.limit === 80, JSON.stringify(pUi));
+  rmSync(dirP, { recursive: true, force: true });
+
+  /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const deltaLedger = [{ ev: 'read-delta', session: 'ds', what: '/w/big.js', offset: 80, limit: 41, t: 1000 }];
+  const mk = (readFrom, at) => ({ sessionId: 'ds', cwd: '/w', requests: [{}, {}], compactions: [],
+    results: [{ id: 'r', name: 'Read', file: '/w/big.js', readFrom, at, tokens: 100, afterReq: 0 }] });
+  t('a later read outside the delta window is a delta backfire', T.backfireAudit(mk(150, 2000), deltaLedger).deltas.backfired === 1, 'outside');
+  t('a later read inside the delta window is not a backfire', T.backfireAudit(mk(90, 2000), deltaLedger).deltas.backfired === 0, 'inside');
+  t('a read before the delta fired is not a backfire', T.backfireAudit(mk(150, 500), deltaLedger).deltas.backfired === 0, 'before');
+  const whole = (at) => ({ sessionId: 'ds', cwd: '/w', requests: [{}, {}], compactions: [],
+    results: [{ id: 'r', name: 'Bash', file: '/w/big.js', readFrom: null, whole: true, at, tokens: 100, afterReq: 0 }] });
+  t('a whole-file re-read after the delta (cat / unbounded Read) is a delta backfire', T.backfireAudit(whole(2000), deltaLedger).deltas.backfired === 1, 'whole-after');
+  t('a whole-file read at/before the delta (its own narrowed read) is not counted', T.backfireAudit(whole(900), deltaLedger).deltas.backfired === 0, 'whole-own');
 }
 
 /* ---- shape filters, off by default ---------------------------------------
