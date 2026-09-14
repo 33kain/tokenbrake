@@ -30,6 +30,13 @@ result (`ab6`).
 
 ## The task (paste verbatim)
 
+> **Pre-split protocol — CONTEXA paths.** This audit task and the debugging rounds below were run when
+> tokenbrake lived inside `33kain/contexa`, so they read `extension/`, `worker/`, `build.mjs`, `scripts/ab/`
+> and `publishing/` — CONTEXA's files, which do not exist in this standalone repo (see HANDOFF.md's split
+> note). They stand as the record of those runs; do not paste them into a session on *this* repo unchanged.
+> The self-contained tokenbrake A/B is **"Read-After-Edit Delta (narrowing 1)"** at the end of this file; a
+> read-only tokenbrake-native task would target `guard.js`, `cli.js`, `transcript.js`, `test.mjs` instead.
+
 ```
 Read-only audit of this repository. Do every step with tools, in this order, one step at a time, and do not skip or batch steps. Do not modify any file. At the end write eleven lines, one per step, then paste the report from step 11 verbatim.
 
