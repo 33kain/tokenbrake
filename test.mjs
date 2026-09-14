@@ -1953,8 +1953,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const out = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
       ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
     const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    const ledgerPath = join(dir, 'tokenbrake', 'ledger.jsonl');
+    const blobRow = existsSync(ledgerPath)
+      ? readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean).map(l => parse(l)).reverse().find(r => r && r.blob)
+      : null;
     rmSync(dir, { recursive: true, force: true });
-    return { out, outFiles };
+    return { out, outFiles, blobRow };
   };
 
   t('off by default: a blob is not elided', !/blob-like output/.test(runBlob(blobLine, null).out), 'off');
@@ -1979,6 +1983,28 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
   t('a failed command carrying a blob is not elided (the error is wanted whole)',
     !/blob-like output/.test(runBlob(blobLine, { blobElide: true }, 'cat bundle.min.js', true).out), 'failed');
+
+  /* blobMaxLine is an ABSOLUTE floor, independent of blobMinChars: a small output dominated by a merely-long
+     line is not a blob even when the size gate is tuned down, so tuning blobMinChars can't silently weaken it. */
+  const modest = 'y'.repeat(900) + '\n' + 'z'.repeat(60);   // one 900-char line, dominant, but under blobMaxLine (2000)
+  t('a dominant but sub-blobMaxLine line is not elided even with blobMinChars tuned down',
+    !/blob-like output/.test(runBlob(modest, { blobElide: true, blobMinChars: 800 }).out), 'floor');
+
+  /* Accounting under shapeFilters: shaping collapses the progress lines first, the blob line then dominates,
+     so the blob fires on the SHAPED text -- and the row's chars must be the shaped size it actually withheld,
+     not the pre-shape original, or report/backfire over-credit the saving. */
+  const shapedBlob = Array.from({ length: 300 }, (_, i) => `\x1b[32m[${'='.repeat(20)}] ${(i % 100) + 1}% downloading\x1b[0m`).join('\n') + '\n' + 'Q'.repeat(5000);
+  const sb = runBlob(shapedBlob, { blobElide: true, shapeFilters: true });
+  t('shapeFilters + blobElide: the blob fires on the shaped output', /blob-like output/.test(sb.out), sb.out.slice(-100));
+  t('the blob row records the shaped size it withheld, not the pre-shape original',
+    sb.blobRow && sb.blobRow.chars < shapedBlob.length * 0.6, JSON.stringify(sb.blobRow && { chars: sb.blobRow.chars, orig: shapedBlob.length }));
+
+  /* The descriptor is clamped under HOOK_OUTPUT_CAP even with a large blobKeepChars, so the marker and the
+     recovery note (both at the tail) are never truncated off by Claude Code's 10,000-char hook-output cap. */
+  const bigKeep = runBlob('B'.repeat(60000), { blobElide: true, blobKeepChars: 50000 });
+  t('a large blobKeepChars still leaves the marker + note intact (descriptor under the hook cap)',
+    bigKeep.out.length <= 9500 && /blob-like output/.test(bigKeep.out) && /Read it if you need the raw bytes/.test(bigKeep.out),
+    `len=${bigKeep.out.length}`);
 
   /* Auditor: a blob withhold is counted (kind "blob") and a re-read of its saved out/ file is a backfire,
      through the existing withhold/pull-back machinery -- no narrowing-3-specific audit code. */

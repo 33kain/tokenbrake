@@ -189,9 +189,10 @@ grandfathered, to be cleaned up later, not extended).
   (a base64 dump, a minified bundle, a one-line JSON) is unreadable to the model as bytes yet re-enters context
   every request until compaction. `handlePost` (after shaping, before the size cap and the excerpt handling)
   replaces it with the first `blobKeepChars` (160) + a descriptor + a saved `out/` copy. The trigger is content,
-  not size: `text.length >= blobMinChars` (4,000) AND the **single longest line** is `>= blobLineShare` (0.5) of
-  the whole — one dominance ratio, which also makes that line necessarily long (>= `blobMinChars * blobLineShare`
-  = 2,000). So it fires on a blob whether over or under `maxChars`, catching an excerpt under `readMaxBytes`
+  not size: `text.length >= blobMinChars` (4,000) AND the **single longest line** is both `>= blobMaxLine`
+  (2,000, an absolute floor kept independent of `blobMinChars` so tuning the size gate down can't weaken it) AND
+  `>= blobLineShare` (0.5) of the whole (the dominance test). So it fires on a blob whether over or under
+  `maxChars`, catching an excerpt under `readMaxBytes`
   (passed whole today) and cutting an over-`maxChars` blob to a descriptor instead of the `maxChars`-of-garbage
   the char-slice keeps. The longest-line-share test discriminates a single encoded/minified run from
   wide-but-structured data (CSV, tables — many wide lines, none dominant) and from prose/logs/pretty JSON (short
@@ -209,7 +210,11 @@ grandfathered, to be cleaned up later, not extended).
     `mcpBody`/`rebuild`, its own change. (3) When either lands, the shared `saveOut → descriptor → shaped
     `updatedToolOutput` → emit` scaffold (now in the dedup/excerpt/trim/blob branches) is worth one helper, and
     the guard writing an explicit `kind` on the ledger row would retire the auditor's flag-chain kind ternary.
-    All waited on rather than bundled here.
+    All waited on rather than bundled here. (4) With `dedup` AND `blobElide` both on, a first-seen blob is saved
+    to `out/` twice (dedup's first-copy save, then the blob save to the same tool_use_id path) — a redundant
+    write, and if `shapeFilters` also shaped the text between them the dedup record's `chars` no longer matches
+    the overwritten file. All three OFF by default; a multi-feature-ON interaction, not the blob path's own bug,
+    left for whenever these defaults start being combined.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,

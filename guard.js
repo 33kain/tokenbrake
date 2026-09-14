@@ -43,7 +43,8 @@ const DEFAULTS = {
   reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
   blobElide: false,      // OFF by default: replace blob-like shell output (a base64 dump, a minified bundle, a one-line JSON) with a short descriptor + a saved copy; A/B before flipping
   blobMinChars: 4000,    // don't treat output smaller than this as a blob worth eliding
-  blobLineShare: 0.5,    // the longest line must be at least this fraction of the output -- a single encoded/minified run, not wide multi-line data (CSV, tables). Sets the effective longest-line floor too: blobMinChars * blobLineShare (2000 at defaults)
+  blobMaxLine: 2000,     // absolute floor: the longest line must be at least this many chars (prose, logs and pretty-printed JSON are far shorter) -- independent of blobMinChars so tuning the size gate down can't weaken it
+  blobLineShare: 0.5,    // dominance: that longest line must also be at least this fraction of the output -- a single encoded/minified run, not wide multi-line data (CSV, tables)
   blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
@@ -573,21 +574,24 @@ function handlePost(input, cfg) {
      model can see what it was and Read the file back if it truly needs the bytes. Fires whether or not the
      output is over maxChars: an excerpt under readMaxBytes and a below-threshold blob both pass whole otherwise,
      and even an over-maxChars blob keeps maxChars of garbage under the char-slice above -- the descriptor keeps
-     a few. Off by default (blobElide); noTrim already returned above. The tell is that one line is most of the
-     output (blobLineShare): a big output (>= blobMinChars) whose longest line is at least that fraction of it is
-     a single encoded/minified run, so the line is necessarily long (>= blobMinChars * blobLineShare), while
-     wide-but-structured data (CSV, tables) has many wide lines, none dominant, and is left alone. Not on a
-     failed command -- an error is wanted whole and rarely a blob. Logged as ev:'post' with blob:true; a plain
+     a few. Off by default (blobElide); noTrim already returned above. The tell is one very long line that is
+     most of the output: blobMaxLine is the absolute floor (an encoded/minified line runs to thousands of chars;
+     prose, logs and pretty JSON stay short) and blobLineShare the dominance test (that longest line is at least
+     that fraction of the whole). Two independent floors on purpose -- share alone, coupled to blobMinChars,
+     would let a tuned-down size gate elide a merely-long line; wide-but-structured data (CSV, tables) has many
+     wide lines, none dominant, and is left alone by the share test. Not on a failed command -- an error is
+     wanted whole and rarely a blob. Logged as ev:'post' with blob:true; a plain
      trim to the backfire audit (marker + saved out/), so report --backfire counts it and a re-read of the saved
      file as a pull-back with no new machinery. */
   if (isShell && !failed && cfg.blobElide && text.length >= cfg.blobMinChars) {
     const ml = maxLineLen(text);
-    if (ml >= text.length * cfg.blobLineShare) {
+    if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
       const saved = saveOut(input, text);
-      const head = text.slice(0, cfg.blobKeepChars);
+      const keep = Math.min(cfg.blobKeepChars, HOOK_OUTPUT_CAP - 500);   // leave room for the descriptor/path so the marker+note can't be truncated off
+      const head = text.slice(0, keep);
       const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
-      const descriptor = `${head}${text.length > cfg.blobKeepChars ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
-      log({ ...rec, blob: true, kept: descriptor.length, saved });
+      const descriptor = `${head}${text.length > keep ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
+      log({ ...rec, chars: text.length, blob: true, kept: descriptor.length, saved });   // chars = the (possibly shaped) text we actually withheld, not the pre-shape rec.chars
       const updatedBlob = (resp && typeof resp === 'object') ? { ...resp, stdout: descriptor, stderr: '' } : descriptor;
       emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedBlob } });
       return;
