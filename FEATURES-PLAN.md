@@ -149,9 +149,25 @@ grandfathered, to be cleaned up later, not extended).
   later reads the file outside that window — a distinct ev on purpose, so the delta's own narrowed read is not
   mistaken for its own backfire and so read-delta rows stay out of the readMaxBytes evidence. Guard copy
   re-synced; 8 new checks incl. an end-to-end guard spawn. A/B via `report --backfire` gates the default.
+  `ev:'read-delta'` with the injected window, and `backfireAudit` counts a **delta backfire** when the model
+  later reads the file outside that window. **Gated to files at or under `readMaxBytes`** (the 2026-09-14 A/B:
+  small files helped 0/7 backfire; large files backfired → excluded). **Merged to `main` in PR #62** with the
+  Backfire Auditor and the recipe; ships as a recommended **opt-in**, default OFF (a flip would need an
+  organic session showing it fires and saves — the forced-pattern A/Bs don't clear that bar).
+- **Narrowing 2 — Read-After-Read elision. DONE (ships OFF).** A re-read of a file already read WHOLE this
+  session, unchanged (same size + mtime) and recent (fewer than `reReadRecency` whole-reads since), is narrowed
+  to the first `reReadKeepLines` + a pointer — the model very likely still has it. `reReadElide` (default
+  false): the read-whole branch records each whole delivery to `reads/<session>.jsonl`; `handleReadPre` elides
+  after the read-after-edit branch (an edit changes mtime → the delta handles it) and before the size cap
+  (only files read whole get a record; a capped first read means the model lacks the whole file). Its honest
+  limit is a **compaction** the guard can't see (the model may have lost the content) — bounded by
+  `reReadRecency`, default-OFF, and measured: `transcript.readReReads` counts an elision that backfired (the
+  model read the file again past what the elision showed), surfaced by `report --backfire`. Distinct
+  `ev:'read-reread'`, so the elision's own read isn't miscounted and its rows stay out of the `readMaxBytes`
+  evidence. 13 new checks. On-strategy request narrowing; A/B gates the default.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,
-  API/JSON Field Projection; plus Instruction Diet Compiler, In-Window Overlap Trimmer, Personalized
-  Auto-Tuner (the report engine already holds most of it), Deterministic Replay Simulator (rides the
-  `trim.js` extraction), Binary-Blob Elider.
+  API/JSON Field Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine
+  already holds most of it), Deterministic Replay Simulator (rides the `trim.js` extraction), Binary-Blob
+  Elider.
