@@ -135,10 +135,13 @@ grandfathered, to be cleaned up later, not extended).
   the same detector already catches — which is why this is Step 0.
 - **Narrowing 1 — Read-After-Edit Delta. DONE (ships OFF).** Chosen first because it is the lowest-backfire
   bet on the board: it withholds a *re-send of content the model already has* (it just edited the file), and
-  the harness's own system prompt calls the verify re-read unnecessary — so the withheld bytes' need is
-  predictably low. `readAfterEdit` (default false): `handlePost` records each `Edit`/`MultiEdit`'s changed
-  line range to a per-session `edits/<session>.jsonl` (mirroring the dedup state pattern; `new_string` located
-  uniquely in the post-edit file); `handleReadPre` narrows a later **unbounded** Read of that file to the
+  the Claude Code harness's own guidance — "Do NOT re-read a file you just edited to verify … the harness
+  tracks file state for you" (in this session's system prompt) — calls the verify re-read unnecessary, so the
+  withheld bytes' need is predictably low. `readAfterEdit` (default false): `handlePost` records each
+  `Edit`/`MultiEdit`'s changed line range to a per-session `edits/<session>.jsonl` (mirroring the dedup state
+  pattern) — from Claude Code's own `structuredPatch` when present (so `replace_all` and repeated-text edits
+  are covered), else by locating `new_string` uniquely in the post-edit file; `handleReadPre` narrows a later
+  **unbounded** Read of that file to the
   changed region + `editContextLines` (20) via `updatedInput` offset/limit — the same proven mechanism the
   Read cap uses, not a PostToolUse rewrite of the Read result (unknown schema, silent-rejection risk). Takes
   precedence over the size cap (shows the actual edit, not the first N lines). Logged as its own

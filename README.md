@@ -445,10 +445,12 @@ for the full copy (a recovery read), so it is off until an A/B moves it — best
 repeatedly with identical results.
 
 `readAfterEdit` (default `false`) narrows the request instead of the response. Right after you `Edit` a file,
-the model often re-`Read`s the whole thing to check the change landed — a re-read the harness itself calls
-unnecessary, and one that re-sends a file you already have. With this on, the guard remembers which lines each
-`Edit`/`MultiEdit` changed (a per-session append-only file under `edits/`), and when an **unbounded** `Read`
-of that file follows, it injects an `offset`/`limit` so the read returns only the changed region plus
+the model often re-`Read`s the whole thing to check the change landed — a re-read the Claude Code harness
+itself calls unnecessary ("Do NOT re-read a file you just edited to verify"). With this on, the guard remembers
+which lines each `Edit`/`MultiEdit` changed — from the edit's own `structuredPatch` when Claude Code provides
+it (which covers `replace_all` and repeated text), else by locating the new text uniquely — in a per-session
+append-only file under `edits/`, and when an **unbounded** `Read` of that file follows, it injects an
+`offset`/`limit` so the read returns only the changed region plus
 `editContextLines` (20) of context — with a note saying so and how to read wider. The file is still on disk, so
 a wrong guess costs one ranged re-read, not lost data; that re-read is a **delta backfire**, which
 `report --backfire` counts (`Read-After-Edit deltas: N fired; M sent the model back`). Off until an A/B moves

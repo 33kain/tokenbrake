@@ -159,9 +159,14 @@ function saveOut(input, text) {
 function hashOf(text) {
   try { return require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32); } catch { return null; }
 }
-function dedupPath(session) {
-  return path.join(TB_DIR, 'dedup', String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl');
+/* One per-session append-only JSONL of small state, under <kind>/<session>.jsonl -- append, not rewrite, so
+   two tool calls landing at once cannot lose each other's line. Dedup (feature 6) and Read-After-Edit
+   (narrowing 1) both use it; the append body was identical in both, so it lives once here. */
+function sessionStatePath(kind, session) { return path.join(TB_DIR, kind, String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl'); }
+function appendSessionState(p, rec) {
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, JSON.stringify(rec) + '\n'); } catch { /* best-effort */ }
 }
+function dedupPath(session) { return sessionStatePath('dedup', session); }
 function dedupLookup(session, h) {
   try {
     for (const line of fs.readFileSync(dedupPath(session), 'utf8').split('\n')) {
@@ -171,22 +176,13 @@ function dedupLookup(session, h) {
   } catch { /* no state yet */ }
   return null;
 }
-function dedupRecord(session, rec) {
-  try {
-    const p = dedupPath(session);
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.appendFileSync(p, JSON.stringify(rec) + '\n');
-  } catch { /* best-effort */ }
-}
+function dedupRecord(session, rec) { appendSessionState(dedupPath(session), rec); }
 
-/* Read-After-Edit state (narrowing 1). One append-only JSONL per session under edits/<session>.jsonl, a line
-   { file, ranges:[[from,to],...], t } per Edit/MultiEdit -- append, not rewrite, so concurrent edits cannot
-   lose each other. Consulted by handleReadPre to narrow a later unbounded Read of the same file to the changed
-   region. Best-effort throughout: a missing or corrupt file just means no narrowing. */
-function editsPath(session) { return path.join(TB_DIR, 'edits', String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl'); }
-function editRecord(session, rec) {
-  try { const p = editsPath(session); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, JSON.stringify(rec) + '\n'); } catch { /* best-effort */ }
-}
+/* Read-After-Edit state (narrowing 1). One line { file, ranges:[[from,to],...], t } per Edit/MultiEdit under
+   edits/<session>.jsonl, consulted by handleReadPre to narrow a later unbounded Read of the same file to the
+   changed region. Best-effort throughout: a missing or corrupt file just means no narrowing. */
+function editsPath(session) { return sessionStatePath('edits', session); }
+function editRecord(session, rec) { appendSessionState(editsPath(session), rec); }
 function editLookup(session, file) {
   const out = [];
   try {
@@ -197,26 +193,42 @@ function editLookup(session, file) {
   } catch { /* no state yet */ }
   return out;
 }
-/* Locate each edit's new_string in the post-edit file and record its 1-based line range, so a later read can
-   be narrowed to it. Unique matches only -- a new_string that is absent (the file changed under us) or occurs
-   more than once is skipped rather than guessed at, and an empty new_string (a deletion) has nothing to
-   locate. Fails open: any trouble records nothing and the read is left alone. */
+/* Record the changed 1-based line ranges of an Edit/MultiEdit so a later read can be narrowed to them.
+   Prefer Claude Code's own structuredPatch (its per-hunk newStart/newLines are the authoritative post-edit
+   diff, so it covers replace_all and edits whose new_string repeats -- both of which locating new_string by a
+   unique match silently drops -- and needs no file read). The shape is validated, not assumed (the 0.1.0
+   lesson): a hunk counts only when newStart/newLines are finite. Fall back to a unique indexOf of new_string
+   in the post-edit file when no usable patch is present. Fails open. */
 function recordEdits(input, ti, tool) {
   try {
     const fp = ti && ti.file_path; if (!fp) return;
-    let content; try { content = fs.readFileSync(fp, 'utf8'); } catch { return; }
-    const edits = tool === 'MultiEdit' ? (Array.isArray(ti.edits) ? ti.edits : []) : [{ new_string: ti.new_string }];
-    const ranges = [];
-    for (const e of edits) {
-      const ns = e && typeof e.new_string === 'string' ? e.new_string : '';
-      if (!ns) continue;
-      const at = content.indexOf(ns);
-      if (at < 0 || content.indexOf(ns, at + 1) >= 0) continue;   // absent, or not unique -> skip
-      const from = content.slice(0, at).split('\n').length;
-      ranges.push([from, from + ns.split('\n').length - 1]);
-    }
-    if (ranges.length) editRecord(input.session_id, { file: path.resolve(fp), ranges, t: Date.now() });
+    const ranges = patchRanges(input.tool_response);
+    const found = ranges.length ? ranges : locateEdits(fp, ti, tool);
+    if (found.length) editRecord(input.session_id, { file: path.resolve(fp), ranges: found, t: Date.now() });
   } catch { /* best-effort */ }
+}
+function patchRanges(resp) {
+  const patch = resp && typeof resp === 'object' ? resp.structuredPatch : null;
+  const ranges = [];
+  if (Array.isArray(patch)) for (const h of patch) {
+    const start = Number(h && h.newStart), len = Number(h && h.newLines);
+    if (Number.isFinite(start) && start >= 1 && Number.isFinite(len)) ranges.push([start, start + Math.max(1, len) - 1]);
+  }
+  return ranges;
+}
+function locateEdits(fp, ti, tool) {
+  let content; try { content = fs.readFileSync(fp, 'utf8'); } catch { return []; }
+  const edits = tool === 'MultiEdit' ? (Array.isArray(ti.edits) ? ti.edits : []) : [{ new_string: ti.new_string }];
+  const ranges = [];
+  for (const e of edits) {
+    const ns = e && typeof e.new_string === 'string' ? e.new_string : '';
+    if (!ns) continue;
+    const at = content.indexOf(ns);
+    if (at < 0 || content.indexOf(ns, at + 1) >= 0) continue;   // absent, or not unique -> skip
+    const from = content.slice(0, at).split('\n').length;
+    ranges.push([from, from + ns.split('\n').length - 1]);
+  }
+  return ranges;
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -584,24 +596,26 @@ function handleReadPre(input, cfg) {
   if (!st.isFile()) return;
 
   /* Read-After-Edit Delta (narrowing 1): the model edited this file this session and is now reading it whole
-     -- almost always to verify the edit, which the harness itself calls unnecessary. Show only the changed
-     region plus context; the rest is unchanged from what the model already has, and the file is still on disk
-     for a wider read. Off by default (readAfterEdit). Takes precedence over the size cap below (it shows the
-     actual edit, not the first N lines, which on a large file may not even contain the edit). Logged as its
-     own ev:'read-delta' with the window it injected, so the Backfire Auditor can tell a delta from a size cap
-     and measure whether it sent the model back for a wider read. */
+     -- almost always to verify the edit, which the harness's own guidance calls unnecessary. Narrow the read
+     to the changed region plus context; the file is still on disk, so a wider read is one offset away. Off by
+     default (readAfterEdit). Takes precedence over the size cap below (it shows the actual edit, not the first
+     N lines, which on a large file may not even contain the edit). Logged as its own ev:'read-delta' with the
+     window it injected, so the Backfire Auditor can tell a delta from a size cap and measure whether it sent
+     the model back for a wider read. The note states only what the guard knows -- that these lines were edited
+     -- not that the model already holds the rest, which it cannot know (a blind edit, a format-on-save, or
+     another tool may have changed the file). */
   if (cfg.readAfterEdit) {
-    const ranges = editLookup(input.session_id, path.resolve(String(fp))).flatMap(e => e.ranges).filter(r => Array.isArray(r) && r.length === 2);
-    if (ranges.length) {
-      const lineCount = countLines(fp, st.size);
+    const ranges = editLookup(input.session_id, path.resolve(fp)).flatMap(e => e.ranges).filter(r => Array.isArray(r) && r.length === 2);
+    const lineCount = ranges.length ? countLines(fp, st.size) : null;
+    if (lineCount != null) {
       const ctx = cfg.editContextLines;
       const from = Math.max(1, Math.min(...ranges.map(r => r[0])) - ctx);
-      const to = lineCount != null ? Math.min(lineCount, Math.max(...ranges.map(r => r[1])) + ctx) : Math.max(...ranges.map(r => r[1])) + ctx;
+      const to = Math.min(lineCount, Math.max(...ranges.map(r => r[1])) + ctx);
       const limit = to - from + 1;
-      if (lineCount != null && limit < lineCount) {   // only narrow if it actually hides something
+      if (limit < lineCount) {   // only narrow if it actually hides something
         log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, offset: from, limit });
         emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, offset: from, limit },
-          additionalContext: `${path.basename(fp)}: you edited this file earlier this session, so tokenbrake is showing only the changed region (lines ${from}-${to} of ${lineCount}) -- the rest is unchanged from what you already have. Read with an explicit offset/limit if you need more.` } });
+          additionalContext: `${path.basename(fp)}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${to} of ${lineCount}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.` } });
         return;
       }
     }

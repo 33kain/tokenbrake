@@ -844,24 +844,22 @@ function backfireAudit(parsed, ledgerRecs, opts) {
    in --caps/--reads/--where, which is about the size cap, not this. */
 function readDeltas(ledgerRecs, parsed) {
   const cwd = parsed && parsed.cwd;
-  const rows = [];
+  let fired = 0, backfired = 0;
   for (const r of ledgerRecs || []) {
     if (!r || r.ev !== 'read-delta') continue;
     if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
-    const from = Number(r.offset) || 1;
-    rows.push({ key: normReadPath(r.what, cwd), t: Number(r.t) || null, from, to: from + (Number(r.limit) || 0) - 1 });
-  }
-  let backfired = 0;
-  for (const d of rows) {
+    fired++;
+    const key = normReadPath(r.what, cwd), t = Number(r.t) || null;
+    const from = Number(r.offset) || 1, to = from + (Number(r.limit) || 0) - 1;
     const hit = (parsed.results || []).some((res) => {
-      if (res.readFrom == null || !res.file || normReadPath(res.file, cwd) !== d.key) return false;
+      if (res.readFrom == null || !res.file || normReadPath(res.file, cwd) !== key) return false;
       const when = res.askedAt != null ? res.askedAt : res.at;
-      if (d.t != null && when != null && when <= d.t) return false;   // must come after the delta fired
-      return res.readFrom < d.from || res.readFrom > d.to;            // a read outside the region the delta showed
+      if (t != null && when != null && when <= t) return false;   // must come after the delta fired
+      return res.readFrom < from || res.readFrom > to;            // a read outside the region the delta showed
     });
     if (hit) backfired++;
   }
-  return { fired: rows.length, backfired };
+  return { fired, backfired };
 }
 
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +

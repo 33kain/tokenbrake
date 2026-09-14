@@ -1688,7 +1688,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const on = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file } }).stdout);
   const ui = on && on.hookSpecificOutput && on.hookSpecificOutput.updatedInput;
   t('an unbounded read of the edited file is narrowed to the changed region + context', ui && ui.offset === 80 && ui.limit === 41, JSON.stringify(ui));
-  t('the narrowing explains itself and points to a wider read', /changed region \(lines 80-120 of 200\)/.test((on.hookSpecificOutput || {}).additionalContext || ''), ((on || {}).hookSpecificOutput || {}).additionalContext || '');
+  t('the narrowing explains itself factually and points to a wider read',
+    /region you edited \(lines 80-120 of 200\)/.test(((on || {}).hookSpecificOutput || {}).additionalContext || '')
+    && /offset\/limit for the rest/.test(((on || {}).hookSpecificOutput || {}).additionalContext || ''),
+    ((on || {}).hookSpecificOutput || {}).additionalContext || '');
   const led = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8');
   t('the delta is logged as its own ev:read-delta with the window', /"ev":"read-delta"/.test(led) && /"offset":80/.test(led) && /"limit":41/.test(led), led.split('\n').filter(Boolean).pop());
   const bounded = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file, offset: 5, limit: 10 } }).stdout);
@@ -1700,7 +1703,18 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('no edit is recorded when readAfterEdit is off (default)', !existsSync(join(dir2, 'tokenbrake', 'edits', sess + '.jsonl')), 'off');
   const off = parse(spawnIn(dir2, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file2 } }).stdout);
   t('an unbounded read is not narrowed when readAfterEdit is off', off === null || !(off.hookSpecificOutput && off.hookSpecificOutput.updatedInput && off.hookSpecificOutput.updatedInput.offset), JSON.stringify(off));
-  rmSync(dir, { recursive: true, force: true }); rmSync(dir2, { recursive: true, force: true });
+
+  // structuredPatch is preferred and works where locating new_string cannot -- replace_all, repeated, or (here) absent text.
+  const dir3 = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-patch-'));
+  const file3 = join(dir3, 'big.js'); writeFileSync(file3, lines.join('\n') + '\n');
+  writeFileSync(join(dir3, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dir3, 'post', { session_id: sess, tool_use_id: 'toolu_e2', tool_name: 'Edit',
+    tool_input: { file_path: file3, old_string: 'whatever', new_string: 'NOT_IN_THE_FILE_AT_ALL' },
+    tool_response: { structuredPatch: [{ oldStart: 50, oldLines: 3, newStart: 50, newLines: 4 }] } });
+  const patchEdits = readFileSync(join(dir3, 'tokenbrake', 'edits', sess + '.jsonl'), 'utf8');
+  t('structuredPatch drives the range where locating new_string cannot (replace_all / repeated / absent text)', /"ranges":\[\[50,53\]\]/.test(patchEdits), patchEdits.trim());
+
+  rmSync(dir, { recursive: true, force: true }); rmSync(dir2, { recursive: true, force: true }); rmSync(dir3, { recursive: true, force: true });
 
   /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
   const tr = await import('./transcript.js');
