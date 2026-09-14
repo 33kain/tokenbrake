@@ -3012,3 +3012,18 @@ a whole re-read), the organic number is low-value for an OFF feature. **gitView 
 + offline verification — the same standing as narrowings 1–3**, none of which cleared the flip bar either. The
 double-guard finding above is the more useful takeaway and is the thing to fix before any narrowing's default
 can be trusted to move.
+
+**Third attempt (2026-09-14): the wall is structural, confirmed.** A follow-up tried to neutralize the old
+guard with NO `/root/.claude` write and NO `rm` -- just `maxChars: 999999` in the run config, so the old guard
+(which trims only above `maxChars`) passes the diff through while the project guard's gitview fires before the
+size check. But writing `~/.claude/tokenbrake.json` was itself denied by the auto-mode classifier as
+**[Self-Modification]** (it changes a registered hook's runtime behavior), and the session correctly declined
+to route around the denial -- so the config never landed, the old guard trimmed the diff, and `report
+--backfire` again read `2 trim`, 0 backfires. **An autonomous auto-mode session cannot cleanly neutralize the
+co-firing global guard**: every method (empty the guard file, or change `maxChars`) is a hook-behavior change
+the permission system blocks, and dodging it by reframing would be gaming a safety guardrail. A clean organic
+gitview A/B therefore needs one of: (a) the stale global tokenbrake install removed from environment
+`env_01Hscqvejiu7QKDj3pTeRTYB` -- a claude.ai environment-settings change that ALSO fixes the double-guard bug
+for good; (b) a human-supervised session that approves the `~/.claude` write; or (c) pre-session provisioning of
+`tokenbrake.json`. Until one of those, **gitView stays OFF / opt-in** on its tests + offline verification. On
+all evidence the organic number is ~0% backfire, same as blob.
