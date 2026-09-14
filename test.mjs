@@ -1603,6 +1603,32 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     results: [{ id: 'x', name: 'Bash', file: null, what: 'ls', marker: false, tokens: 10, afterReq: 0 }] }, []);
   t('a session with no withholds audits to the nothing verdict', none.verdict === 'nothing' && none.withholds.length === 0, none.verdict);
 
+  /* A session_id with a path character: guard sanitizes sid into the out/ filename, and the audit's stemOf
+     must sanitize IDENTICALLY, or the pull-back won't attribute (the point of the sid hardening). */
+  const dsid = 'ab/cd-99-2222-3333-444455556666';
+  const dstem = (id) => dsid.slice(0, 8).replace(/[^\w-]/g, '_') + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it (sid sanitized)
+  const dirtyTx = { sessionId: dsid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [
+      { id: A, name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_DR', name: 'Read', file: '/cfg/tokenbrake/out/' + dstem(A) + '.txt', what: '/cfg/tokenbrake/out/' + dstem(A) + '.txt', marker: false, tokens: 3000, afterReq: 1 },
+    ] };
+  const adirty = T.backfireAudit(dirtyTx, [{ ev: 'post', session: dsid, id: A, tool: 'Bash', chars: 20000, kept: 200 }], { min: 1 });
+  t('a path-char session_id: the audit stem is sanitized like guard, so the pull-back still attributes',
+    adirty.backfired === 1 && adirty.withholds[0].recovered, JSON.stringify({ b: adirty.backfired, stem: adirty.withholds[0].stem }));
+
+  /* No sessionId in the parse: stemOf must recover the real session from parsed.file (as the rest of
+     transcript.js does), matching the guard's own session_id, or no pull-back attributes. */
+  const fbSess = 'realsess-1111';
+  const fbStem = (id) => fbSess.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const fbTx = { sessionId: null, file: '/x/' + fbSess + '.jsonl', cwd: '/w', requests: reqs(4), compactions: [],
+    results: [
+      { id: A, name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_FR', name: 'Read', file: '/cfg/tokenbrake/out/' + fbStem(A) + '.txt', what: '/cfg/tokenbrake/out/' + fbStem(A) + '.txt', marker: false, tokens: 3000, afterReq: 1 },
+    ] };
+  const afb = T.backfireAudit(fbTx, [{ ev: 'post', session: fbSess, id: A, tool: 'Bash', chars: 20000, kept: 200 }], { min: 1 });
+  t('a missing sessionId is recovered from parsed.file so the pull-back still attributes',
+    afb.backfired === 1 && afb.withholds[0].recovered, JSON.stringify({ b: afb.backfired, stem: afb.withholds[0].stem }));
+
   /* A measured net loss is a backfire at any sample size -- one withhold, a pull-back that dwarfs it. */
   const heavy = { sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
     results: [
