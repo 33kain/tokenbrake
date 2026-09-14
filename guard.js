@@ -41,6 +41,11 @@ const DEFAULTS = {
   reReadElide: false,    // OFF by default: a re-read of a file already read WHOLE this session, unchanged and recent, is narrowed to its first few lines plus a note; A/B before flipping
   reReadRecency: 8,      // only elide if fewer than this many whole-file reads happened since; a frequency limiter -- the guard does not consult compaction, so this just keeps elision to still-fresh reads
   reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
+  blobElide: false,      // OFF by default: replace blob-like shell output (a base64 dump, a minified bundle, a one-line JSON) with a short descriptor + a saved copy; A/B before flipping
+  blobMinChars: 4000,    // don't treat output smaller than this as a blob worth eliding
+  blobMaxLine: 2000,     // the longest line must be at least this many chars (prose, logs and pretty-printed JSON are far shorter)
+  blobLineShare: 0.5,    // and that longest line must be at least this fraction of the output -- a single encoded/minified run, so wide multi-line data (CSV, tables) is left alone
+  blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -451,6 +456,17 @@ function trimText(text, cfg, savedPath) {
   return out;
 }
 
+/* Length of the longest line, without allocating a split. Blob detection (narrowing 3) uses it as the tell
+   that separates an encoded/minified run -- a base64 dump, a bundled/minified file, a one-line JSON -- from
+   prose, logs and pretty-printed JSON, whose lines stay short however large the whole gets. */
+function maxLineLen(text) {
+  let max = 0, cur = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) { if (cur > max) max = cur; cur = 0; } else cur++;
+  }
+  return cur > max ? cur : max;
+}
+
 function handlePost(input, cfg) {
   const tool = input.tool_name || '';
   const ti = input.tool_input || {};
@@ -550,6 +566,31 @@ function handlePost(input, cfg) {
   if (isShell && cfg.shapeFilters && text.length >= cfg.shapeMinChars) {
     const s2 = shapeFilter(text);
     if (s2.length < text.length) { rec.shapedFrom = text.length; rec.shapedTo = s2.length; text = s2; shaped = true; }
+  }
+
+  /* Binary-Blob Elider (narrowing 3): shell output that is an encoded or minified run -- a base64 dump, a
+     minified bundle, a giant one-line JSON -- is unreadable to the model as bytes, yet it re-enters context on
+     every request until compaction. Replace it with a short head plus a descriptor and a saved copy, so the
+     model can see what it was and Read the file back if it truly needs the bytes. Fires whether or not the
+     output is over maxChars: an excerpt under readMaxBytes and a below-threshold blob both pass whole otherwise,
+     and even an over-maxChars blob keeps maxChars of garbage under the char-slice above -- the descriptor keeps
+     a few. Off by default (blobElide); noTrim already returned above. The tell is one very long line that is
+     most of the output (blobMaxLine + blobLineShare): wide-but-structured data (CSV, tables) has many wide
+     lines, none dominant, and is left alone. Not on a failed command -- an error is wanted whole and rarely a
+     blob. Logged as ev:'post' with blob:true; a plain trim to the backfire audit (marker + saved out/), so
+     report --backfire counts it and a re-read of the saved file as a pull-back with no new machinery. */
+  if (isShell && !failed && cfg.blobElide && text.length >= cfg.blobMinChars) {
+    const ml = maxLineLen(text);
+    if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
+      const saved = saveOut(input, text);
+      const head = text.slice(0, cfg.blobKeepChars);
+      const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
+      const descriptor = `${head}${text.length > cfg.blobKeepChars ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
+      log({ ...rec, blob: true, kept: descriptor.length, saved });
+      const updatedBlob = (resp && typeof resp === 'object') ? { ...resp, stdout: descriptor, stderr: '' } : descriptor;
+      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedBlob } });
+      return;
+    }
   }
 
   if (!isShell || text.length <= cfg.maxChars) {

@@ -1932,6 +1932,73 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
 }
 
+/* Binary-Blob Elider (narrowing 3, off by default): shell output that is one long encoded/minified run --
+   base64, a minified bundle, a one-line JSON -- is unreadable as bytes yet re-enters context every request.
+   Replace it with a head + a descriptor + a saved copy (a plain trim to the backfire audit). Wide structured
+   data (many wide lines, none dominant), a single long line inside normal output, short output, a failed
+   command and the default-off path are all left alone. */
+{
+  console.log('\n-- binary-blob elider (narrowing 3, off by default)');
+  const blobLine = 'const DATA="' + 'A1b2C3d4'.repeat(700) + '";';   // one ~5.6k-char line, no newlines
+  const runBlob = (text, cfgExtra, command = 'cat bundle.min.js', failed = false) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-blob-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const input = { session_id: 'blob', tool_use_id: 'toolu_blob_' + Math.random().toString(36).slice(2, 8),
+      tool_name: 'Bash', tool_input: { command } };
+    if (failed) { input.hook_event_name = 'PostToolUseFailure'; input.error = 'Exit code 1\n' + text; }
+    else input.tool_response = bashResp(text);
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    const o = parse(r.stdout);
+    const out = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+    const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    rmSync(dir, { recursive: true, force: true });
+    return { out, outFiles };
+  };
+
+  t('off by default: a blob is not elided', !/blob-like output/.test(runBlob(blobLine, null).out), 'off');
+
+  const on = runBlob(blobLine, { blobElide: true });
+  t('on: a one-line blob is elided to a descriptor', /\[tokenbrake\] withheld ~\d+ KB of blob-like output/.test(on.out), on.out.slice(-140));
+  t('on: the descriptor is far smaller than the blob', on.out.length < blobLine.length * 0.2, `${on.out.length} vs ${blobLine.length}`);
+  t('on: the full output is saved to out/ for retrieval', on.outFiles.length === 1, JSON.stringify(on.outFiles));
+  t('on: a head is kept so the model can see what it was', on.out.startsWith('const DATA="A1b2'), on.out.slice(0, 24));
+
+  /* Wide but structured: many wide lines, none dominant -- the share guard leaves it whole. */
+  const wide = Array.from({ length: 20 }, (_, i) => 'row' + i + ',' + 'x,'.repeat(1200)).join('\n');
+  t('a wide multi-line table is left alone (longest line is not most of the output)',
+    !/blob-like output/.test(runBlob(wide, { blobElide: true }).out), 'wide');
+
+  /* One long line inside otherwise normal output is not the whole output -- the share guard again. */
+  const embedded = Array.from({ length: 200 }, (_, i) => 'log line number ' + i + ' with ordinary content').join('\n') + '\n' + 'z'.repeat(2500);
+  t('a single long line inside a normal log does not elide the log',
+    !/blob-like output/.test(runBlob(embedded, { blobElide: true }).out), 'embedded');
+
+  t('under blobMinChars nothing is elided', !/blob-like output/.test(runBlob('x'.repeat(2500), { blobElide: true }).out), 'small');
+
+  t('a failed command carrying a blob is not elided (the error is wanted whole)',
+    !/blob-like output/.test(runBlob(blobLine, { blobElide: true }, 'cat bundle.min.js', true).out), 'failed');
+
+  /* Auditor: a blob withhold is counted (kind "blob") and a re-read of its saved out/ file is a backfire,
+     through the existing withhold/pull-back machinery -- no narrowing-3-specific audit code. */
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const sid = 'b10bf00d-1111-2222-3333-444455556666';
+  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const BID = 'toolu_01BLOBBBBBBBBBBBBB1';
+  const outFile = '/cfg/tokenbrake/out/' + stem(BID) + '.txt';
+  const blobTx = { sessionId: sid, cwd: '/w', requests: Array.from({ length: 4 }, () => ({ model: 'claude-opus-5' })), compactions: [],
+    results: [
+      { id: BID, name: 'Bash', file: null, what: 'cat bundle.min.js', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_RB', name: 'Read', file: outFile, what: outFile, marker: false, tokens: 6000, afterReq: 1 },
+    ] };
+  const ab = T.backfireAudit(blobTx, [{ ev: 'post', session: sid, id: BID, tool: 'Bash', chars: 30000, kept: 200, blob: true, saved: outFile }], { min: 1 });
+  t('a blob withhold is counted with kind "blob"', ab.withholds.length === 1 && ab.withholds[0].kind === 'blob', JSON.stringify(ab.withholds.map(w => w.kind)));
+  t('a re-read of the blob\'s saved out/ file is a backfire', ab.backfired === 1 && ab.withholds[0].recovered, JSON.stringify({ b: ab.backfired }));
+  t('report byKind labels the blob withhold "blob"', ab.byKind.blob === 1, JSON.stringify(ab.byKind));
+}
+
 /* ---- what the trim keeps and what it breaks -------------------------------
    From a review of an outside test plan (AB-TASK.md, "An outside test plan").
    Two of its four claims about this guard were checkable and they came out

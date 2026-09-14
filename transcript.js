@@ -772,7 +772,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     const l = offeredOf(r);
     if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
-    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
+    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : 'trim'));
     withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
       stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
   }
