@@ -3027,3 +3027,36 @@ gitview A/B therefore needs one of: (a) the stale global tokenbrake install remo
 for good; (b) a human-supervised session that approves the `~/.claude` write; or (c) pre-session provisioning of
 `tokenbrake.json`. Until one of those, **gitView stays OFF / opt-in** on its tests + offline verification. On
 all evidence the organic number is ~0% backfire, same as blob.
+
+### Result — ON arm, 2026-09-14, CLEAN (env fixed): 1 gitview, 0 backfired (0%)
+
+The environment's stale global install was removed at its source (a
+`tokenbrake init || true` line in the env setup script, deleted by the owner), so a
+fresh session now runs the **project guard only** — the double-fire is gone for
+good. `node cli.js status` in the run confirmed it: *"installed at project scope
+instead ... the guard runs once, from there."* With that, a plain ON-arm run
+(just `{"gitView": true}`, no neutralize) delivered the **gitview collapse** to
+the model — `[tokenbrake] +121/-121 lines, diff collapsed (generated/lockfile
+path)`, `src/app.js` kept verbatim. `report --backfire`:
+
+```
+Withholds: 1 (1 gitview) -- ~ 3,640 tokens kept out, ~ 10,920 token-reads not carried
+Pulled back: none of the 1 withholds was read back -- backfire rate 0%
+Net: ~ 10,920 token-reads saved after backfires   (10,920 saved - 0 pulled back)
+Verdict: too few withholds to call it (need a few)
+```
+
+**1 fired, 0 backfired (0%), ~10.9k token-reads saved.** The per-firing net is
+clean and telling: to get the collapsed lockfile's `lodash` version the model ran
+a **targeted `git diff -- package-lock.json | grep lodash`** (and grepped the
+working tree) — a fresh re-derivation from source, NOT a Read of the saved `out/`
+file and NOT `tokenbrake show`. That is exactly the cheap path the collapse leaves
+open, and the reason a collapsed generated diff does not send the model back for
+the whole thing.
+
+**Decision: default stays OFF / opt-in.** As with narrowings 1-3 the backfire is
+low (0%) and the saving real (~10.9k token-reads), but the verdict is *too few to
+call it* at n = 1 and the diff was forced by the task, so the organic firing RATE
+is unmeasured. It ships a **recommended opt-in** (`gitView: true`). The lasting
+win of this run is the environment fix: **the double-guard bug is resolved**, so
+every future A/B here reads clean.
