@@ -3000,3 +3000,15 @@ against it. Candidate fixes: the installer detecting/warning on a co-registered 
 
 **Status:** gitView is **logic-verified** (519 checks + the offline reproduction) but its organic backfire is
 **unmeasured**; it stays OFF/opt-in like the others until a clean single-guard A/B runs.
+
+**Clean re-run attempt (2026-09-14): blocked by the environment, not run.** A second spawned session added a
+step 0 that empties the stale global guard's script so only the project guard delivers. It stalled on a
+permission prompt: an autonomous session in `auto` mode won't self-approve writing under `/root/.claude` plus
+an `rm -rf`, and a parent cannot approve a child's prompt or grant a child a more permissive mode. So a clean
+single-guard organic A/B needs a **human-supervised** session (to approve those prompts) or a pre-cleaned
+environment (no user-scope tokenbrake install). Given the collapse is deterministic and already verified, and
+the backfire is highly likely ~0% (the blob run showed models fetch a specific value with a targeted grep, not
+a whole re-read), the organic number is low-value for an OFF feature. **gitView ships OFF / opt-in on its tests
++ offline verification — the same standing as narrowings 1–3**, none of which cleared the flip bar either. The
+double-guard finding above is the more useful takeaway and is the thing to fix before any narrowing's default
+can be trusted to move.
