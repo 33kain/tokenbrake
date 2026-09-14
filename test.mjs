@@ -69,6 +69,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const ledger = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
   const rec = ledger[ledger.length - 1];
   t('ledger row records chars, kept and saved', rec.ev === 'post' && rec.tool === 'Bash' && rec.chars === noisy.length && rec.kept === u.stdout.length && rec.saved === saved);
+
+  /* A crafted session_id must not put path characters in the out/ filename: the first 8 chars are sanitized
+     like the tool_use_id, so `../../..` can never escape out/ (before the fix, path.join would climb out). */
+  const evil = guard('post', { session_id: '../../../etc/pwn', tool_use_id: 'toolu_01EVILEVILEVIL', tool_name: 'Bash',
+    tool_input: { command: 'x' }, tool_response: bashResp(noisy) });
+  const eu = parse(evil.stdout);
+  const esaved = eu && eu.hookSpecificOutput && eu.hookSpecificOutput.updatedToolOutput
+    && (String(eu.hookSpecificOutput.updatedToolOutput.stdout || '').match(/Full output saved to (\S+\.txt)/) || [])[1];
+  const outDir = join(CFG, 'tokenbrake', 'out');
+  t('a crafted session_id is sanitized in the saved path (cannot escape out/)',
+    !!esaved && esaved.startsWith(outDir + '/') && /^[\w-]+\.txt$/.test(esaved.slice(outDir.length + 1)), esaved || 'no saved path');
 }
 
 {
@@ -1545,7 +1556,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
   const sid = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789';                                 // realistic: > 8 chars
-  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it
+  const stem = (id) => sid.slice(0, 8).replace(/[^\w-]/g, '_') + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it (sid sanitized too)
   const outPath = (id) => '/cfg/tokenbrake/out/' + stem(id) + '.txt';
   const reqs = (n) => Array.from({ length: n }, () => ({ model: 'claude-opus-5' }));
   const A = 'toolu_01AAAAAAAAAAAAAAAAA1', B = 'toolu_01BBBBBBBBBBBBBBBBB2', C = 'toolu_01CCCCCCCCCCCCCCCCC3';

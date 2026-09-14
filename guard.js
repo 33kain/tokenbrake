@@ -156,7 +156,7 @@ function saveOut(input, text) {
   try {
     const outDir = path.join(TB_DIR, 'out');
     fs.mkdirSync(outDir, { recursive: true });
-    const sid = String(input.session_id || 'session').slice(0, 8);
+    const sid = String(input.session_id || 'session').slice(0, 8).replace(/[^\w-]/g, '_');   // sanitize like tid: a crafted session_id must not put `/` or `..` in the out/ filename
     const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
     const saved = path.join(outDir, `${sid}-${tid}.txt`);
     fs.writeFileSync(saved, text);

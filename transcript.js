@@ -765,7 +765,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
      the exact out/ filename (minus .txt) the guard would have written: for a dedup, the first copy's stem in
      `sameAs`; otherwise rebuilt the way saveOut names it (guard.js saveOut -- pinned by the integration test
      in test.mjs, since the guard installs as a single file and cannot share this helper). No stem => no match. */
-  const sid8 = String(parsed.sessionId || '').slice(0, 8);
+  const sid8 = String(parsed.sessionId || '').slice(0, 8).replace(/[^\w-]/g, '_');   // must match guard.js saveOut's sid sanitization exactly, or a pull-back won't match its withhold
   const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
   const withholds = [];
   for (const r of parsed.results) {
