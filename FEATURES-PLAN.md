@@ -156,7 +156,7 @@ grandfathered, to be cleaned up later, not extended).
   organic session showing it fires and saves — the forced-pattern A/Bs don't clear that bar).
 - **Narrowing 2 — Read-After-Read elision. DONE (ships OFF).** A re-read of a file already read WHOLE this
   session, unchanged (same size + mtime) and recent (fewer than `reReadRecency` whole-reads since), is narrowed
-  to the first `reReadKeepLines` + a pointer — the model very likely still has it. `reReadElide` (default
+  to the first `reReadKeepLines` + a one-line note (no saved artifact) — the model very likely still has it. `reReadElide` (default
   false): the read-whole branch records each whole delivery to `reads/<session>.jsonl`; `handleReadPre` elides
   after the read-after-edit branch (any edit or external write changes size/mtime → fails the equality check,
   so only genuine unchanged re-reads reach it) and before the size cap (only files read whole get a record; a
@@ -175,6 +175,16 @@ grandfathered, to be cleaned up later, not extended).
     so this waits on a live check that PreToolUse actually delivers `transcript_path`. (2) A `forEachSessionLine`
     helper to fold the near-identical JSONL scan loops in `priorRead`/state readers — modest, pre-existing, not
     worth coupling to this change.
+  - **Backfire-audit precision (from /code-review, all in the *conservative* or *deferred* direction):**
+    (a) `wentPast` sees a later read's START line only, so it under-counts a bounded re-read that starts within
+    the shown head but runs past it (`offset:1 limit:200`), and limit-only re-reads. This is the *unsafe*
+    direction (too few backfires), so it is the one worth a real fix — but a precise test needs the read's END
+    line added to the parsed results (`readStartLine` returns offset only), a shape addition no other report view
+    needs, so it is deferred with the compaction check rather than expanded here. (b) A later whole re-read that
+    was *itself* elided can be counted as an earlier elision's backfire when the transcript records original
+    (not rewritten) input (`shapeVerdict`) — this OVER-counts, the *safe* direction for a gate, left as-is.
+    (c) `priorRead` full-scans the per-session `reads/` JSONL on every unbounded Read while `reReadElide` is on
+    (O(n²) over a read-heavy session); pre-existing scan pattern, OFF by default, folds into (2) above.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,

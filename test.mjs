@@ -1827,6 +1827,15 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a re-read past reReadRecency is not elided', !((uiOf(rp(dirR, fA)) || {}).limit === 5), 'recency');
   rmSync(dirR, { recursive: true, force: true });
 
+  /* reReadKeepLines:0 (or negative) must not fire: injecting limit:0 would make Read read the whole file
+     (a silent no-op) while the note claims "the first 0 lines". The floor keeps a bad knob from firing. */
+  const dirZ = mkdtempSync(join(tmpdir(), 'tokenbrake-rr-zero-'));
+  const fZ = join(dirZ, 'src.js'); writeFileSync(fZ, body);
+  writeFileSync(join(dirZ, 'tokenbrake.json'), JSON.stringify({ reReadElide: true, reReadKeepLines: 0 }));
+  rp(dirZ, fZ); const z2 = uiOf(rp(dirZ, fZ));
+  t('reReadKeepLines:0 does not elide (no limit:0 injected)', !(z2 && z2.limit === 0), JSON.stringify(z2));
+  rmSync(dirZ, { recursive: true, force: true });
+
   /* Default OFF: nothing recorded, nothing elided. */
   const dirOff = mkdtempSync(join(tmpdir(), 'tokenbrake-rr-off-'));
   const fOff = join(dirOff, 'src.js'); writeFileSync(fOff, body);

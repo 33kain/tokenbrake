@@ -845,7 +845,13 @@ function backfireAudit(parsed, ledgerRecs, opts) {
    (its unbounded intent, recorded before the narrowing fired), so a narrowing never counts as its own backfire;
    this is why the window is recorded on each row, and why each narrowing has its own ev rather than folding into
    the read-cap/induced machinery (where its own read would count against it). A distinct ev also keeps these
-   rows out of the readMaxBytes evidence in --caps/--reads/--where, which is about the size cap, not this. */
+   rows out of the readMaxBytes evidence in --caps/--reads/--where, which is about the size cap, not this.
+
+   Known imprecision (deferred, see FEATURES-PLAN): `wentPast` sees a later read's START line only (readStartLine
+   returns offset, not offset+limit), so it UNDER-counts a bounded re-read that starts at/before the shown head
+   but runs past it (e.g. offset:1 limit:200 after a 5-line elision) and a limit-only read (readFrom null). This
+   errs toward too-few backfires -- the unsafe direction for a default flip -- but a precise test needs the
+   read's END line added to the parsed results, which no other view needs; recorded, not built. */
 function auditNarrowing(ledgerRecs, parsed, ev, wentPast) {
   const cwd = parsed && parsed.cwd;
   let fired = 0, backfired = 0;

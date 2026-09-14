@@ -460,7 +460,8 @@ it — the gate is the whole reason to measure before flipping.
 this session. When you `Read` a file **whole**, the guard remembers its size and mtime (a per-session file
 under `reads/`); if you re-`Read` the same file **unbounded** while it is **unchanged** and the re-read is
 **recent** (fewer than `reReadRecency`, default 8, whole-reads since), it hands back only the first
-`reReadKeepLines` (default 5) plus a pointer, instead of re-adding the whole file you likely still have. It
+`reReadKeepLines` (default 5) plus a one-line note, instead of re-adding the whole file you likely still have.
+(It saves no artifact — the file is still on disk, so a wider read is one `offset`/`limit` away.) It
 only fires for files read whole (a capped first read means you don't have all of it), and any edit or external
 write changes the size or mtime so the equality check fails and the read-after-edit delta handles the edit case
 instead. Its one real risk is a **compaction** between the two reads — which the guard does not consult — that
