@@ -595,6 +595,13 @@ function handleReadPre(input, cfg) {
   try { st = fs.statSync(fp); } catch { return; }
   if (!st.isFile()) return;
   const nLines = countLines(fp, st.size);   // computed once; the delta and the size cap below both read it
+  /* A persisted output lives UNDER the Claude Code config dir (its projects/.../tool-results/, or tokenbrake's
+     own out/). Requiring that anchor stops a user's own build/tool-results/*.json from being force-capped as if
+     it were a saved tool output -- the PERSISTED regex matches the filename shape, this checks the location.
+     Computed here, above the delta, so the delta can leave a persisted output to its 80-line cap as the read
+     paths do rather than narrow it to the edit region. */
+  let underConfig = false; try { underConfig = path.resolve(String(fp)).startsWith(path.resolve(CFG_DIR) + path.sep); } catch {}
+  const persisted = PERSISTED.test(fp) && underConfig && st.size > cfg.maxChars;
 
   /* Read-After-Edit Delta (narrowing 1): the model edited this file this session and is now reading it whole
      -- almost always to verify the edit, which the harness's own guidance calls unnecessary. Narrow the read
@@ -604,12 +611,13 @@ function handleReadPre(input, cfg) {
      note states only what the guard knows -- that these lines were edited -- not that the model already holds
      the rest, which it cannot know (a blind edit, a format-on-save, or another tool may have changed the file).
 
-     Applies only to files AT OR UNDER readMaxBytes -- the ones the model reads whole. A larger file is left to
-     the size cap below instead: the 2026-09-14 A/B (AB-TASK.md) showed narrowing a big file's verify-read to
-     the edit region BACKFIRED (the model asked for the whole file anyway, 2 of 5 firings, both on files over
-     readMaxBytes), while on the smaller file it helped. readMaxBytes is exactly the line the data drew -- the
-     helped file sat under it, the backfired ones over -- so the delta reuses that threshold rather than a new
-     knob, and stays on the small files where it fires cleanly.
+     Applies only to the files the read-whole path below would take -- at or under readMaxBytes, not a
+     persisted output, not on the alwaysCap denylist -- so the delta never overrides a cap the sibling read
+     path honors. A larger (or capped) file is left to the size cap instead: the 2026-09-14 A/B (AB-TASK.md)
+     showed narrowing a big file's verify-read to the edit region BACKFIRED (the model asked for the whole file
+     anyway, 2 of 5 firings, both on files over readMaxBytes), while on the smaller file it helped. readMaxBytes
+     is exactly the line the data drew -- the helped file sat under it, the backfired ones over -- so the delta
+     reuses that threshold rather than a new knob, and stays on the small files where it fires cleanly.
 
      Uses the MOST RECENT edit record for this file, not the union of the whole session: the latest edit is the
      one this read most likely verifies, its lines are in the current numbering, and it bounds the spread.
@@ -618,7 +626,7 @@ function handleReadPre(input, cfg) {
      window must not exceed readLimitLines (else scattered edits could deliver more than the size cap would);
      and it must hide something (limit < nLines). `to` is left unclamped so a last-line edit on a file with no
      trailing newline (where nLines counts one short) still shows. */
-  if (cfg.readAfterEdit && nLines != null && st.size <= cfg.readMaxBytes) {
+  if (cfg.readAfterEdit && nLines != null && !persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     const recs = editLookup(input.session_id, path.resolve(fp));
     const latest = recs.reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
     const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);
@@ -636,11 +644,6 @@ function handleReadPre(input, cfg) {
       }
     }
   }
-  /* A persisted output lives UNDER the Claude Code config dir (its projects/.../tool-results/, or tokenbrake's
-     own out/). Requiring that anchor stops a user's own build/tool-results/*.json from being force-capped as if
-     it were a saved tool output -- the PERSISTED regex matches the filename shape, this checks the location. */
-  let underConfig = false; try { underConfig = path.resolve(String(fp)).startsWith(path.resolve(CFG_DIR) + path.sep); } catch {}
-  const persisted = PERSISTED.test(fp) && underConfig && st.size > cfg.maxChars;
   /* A whole-file read the cap did NOT act on is still worth recording, and until now nothing recorded it.
      Without it, `report --reads` had to infer every file's size from the delivered text -- which Claude Code
      line-numbers, so every file came out 5-6% large and the long ones worse -- and `report --where` could

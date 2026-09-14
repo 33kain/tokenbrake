@@ -1759,6 +1759,27 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     bigUi && bigUi.offset == null && bigUi.limit === 300, JSON.stringify(bigUi));
   rmSync(dirBig, { recursive: true, force: true });
 
+  /* The delta honors the same cap conditions the sibling read-whole path does: an edited file on the
+     alwaysCap denylist is left to the cap, not narrowed. */
+  const dirAc = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-acap-'));
+  const fileAc = join(dirAc, 'bundle.min.js'); writeFileSync(fileAc, lines.join('\n') + '\n');
+  writeFileSync(join(dirAc, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true, alwaysCap: ['.min.js'] }));
+  spawnIn(dirAc, 'post', { session_id: sess, tool_use_id: 'toolu_ac', tool_name: 'Edit', tool_input: { file_path: fileAc, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: fileAc } });
+  const acUi = ((parse(spawnIn(dirAc, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileAc } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('an edited alwaysCap file is left to the cap, not narrowed by the delta', acUi && acUi.offset == null && acUi.limit === 300, JSON.stringify(acUi));
+  rmSync(dirAc, { recursive: true, force: true });
+
+  /* An edited persisted output (under the config dir, over maxChars) keeps its 80-line persistedLimitLines cap,
+     not the delta -- a saved tool output is not the "file the model already has" the delta is for. */
+  const dirP = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-persist-'));
+  const outDir = join(dirP, 'tokenbrake', 'out'); mkdirSync(outDir, { recursive: true });
+  const fileP = join(outDir, 'saved.txt'); writeFileSync(fileP, Array.from({ length: 400 }, () => 'x'.repeat(30)).join('\n') + '\n');   // ~12 KB, over maxChars
+  writeFileSync(join(dirP, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirP, 'post', { session_id: sess, tool_use_id: 'toolu_p1', tool_name: 'Edit', tool_input: { file_path: fileP, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 100, newLines: 1 }] } });
+  const pUi = ((parse(spawnIn(dirP, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileP } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('an edited persisted output keeps its persistedLimitLines cap, not the delta', pUi && pUi.offset == null && pUi.limit === 80, JSON.stringify(pUi));
+  rmSync(dirP, { recursive: true, force: true });
+
   /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
   const tr = await import('./transcript.js');
   const T = tr.default || tr;

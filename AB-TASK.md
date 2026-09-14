@@ -2805,9 +2805,11 @@ delta's effect *when the pattern occurs*, not its base rate, and this repo's A/B
 Read the direction (small files help, large files backfire), not the 40%.
 
 **Change made (2026-09-14): the delta now applies only to files at or under `readMaxBytes`.** The A/B split by
-size exactly on that line — the helped file (`guard.js`, 42 KB) sat under `readMaxBytes` (60 KB), the two that
-backfired (`cli.js` 89 KB, `transcript.js` 95 KB) over it — so the delta reuses that threshold rather than a
-new knob, and a larger file is left to the size cap (`guard.js` handleReadPre). This removes the backfiring
+size exactly on that line — the helped file (`guard.js`, 42 KB) sat under `readMaxBytes` (60,000 bytes ≈ 59
+KB), the two that backfired (`cli.js` 89 KB, `transcript.js` 95 KB) over it — so the delta reuses that
+threshold rather than a new knob, and gates on the same conditions the read-whole path does (also skipping a
+persisted output or an `alwaysCap` file, which have their own caps). A larger or capped file is left to the
+size cap (`guard.js` handleReadPre). This removes the backfiring
 class by construction: re-run the ON arm and the two large-file firings should be gone, leaving the three
 small-file firings that helped. **Default is still OFF** — flip it only after that re-run measures the backfire
 rate low with the gate in place; the change narrows *where* the delta fires, it does not itself move the
