@@ -2071,6 +2071,25 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      '@@ -1,20 +1,20 @@', ...Array.from({ length: 20 }, (_, j) => `-old line ${j} of module ${i}\n+new line ${j} of module ${i}`)].join('\n')).join('\n') + '\n';
   t('a diff with no generated files is not collapsed', !/diff collapsed/.test(runGit(bigSrc, { gitView: true }).out), 'no-generated');
 
+  /* Suffix match, not substring: a real-source file whose name merely CONTAINS a pattern (`.map` inside
+     `a.mapper.js`) must not be collapsed -- the "real-source hunks kept verbatim" invariant. */
+  const mapperDiff = ['diff --git a/src/a.mapper.js b/src/a.mapper.js', 'index e1..e2 100644',
+    '--- a/src/a.mapper.js', '+++ b/src/a.mapper.js', '@@ -1,80 +1,80 @@',
+    ...Array.from({ length: 80 }, (_, j) => `-const mapping${j} = old;\n+const mapping${j} = new;`)].join('\n') + '\n';
+  t('a real-source file whose name contains a pattern substring (.map in a.mapper.js) is NOT collapsed',
+    !/diff collapsed/.test(runGit(mapperDiff, { gitView: true }).out), 'suffix');
+
+  /* Never emit MORE than the original: a tiny generated hunk in a big real-source diff shrinks g.text a little,
+     but adding the summary note would make the body larger than the diff -- so it is not emitted (falls through). */
+  const bigReal = ['diff --git a/src/big.js b/src/big.js', 'index c1..c2 100644', '--- a/src/big.js', '+++ b/src/big.js',
+    '@@ -1,60 +1,60 @@', ...Array.from({ length: 60 }, (_, j) => `-old source line ${j} here\n+new source line ${j} here`)].join('\n');
+  const tinyLock = ['diff --git a/package-lock.json b/package-lock.json', 'index d1..d2 100644',
+    '--- a/package-lock.json', '+++ b/package-lock.json', '@@ -1,1 +1,1 @@', '-  "version": "1.0.0"', '+  "version": "1.0.1"'].join('\n');
+  const tinyLockBigSrc = bigReal + '\n' + tinyLock + '\n';
+  const tl = runGit(tinyLockBigSrc, { gitView: true }).out;
+  t('a collapse that would not shrink the delivered body is not emitted (never larger than the original)',
+    !/diff collapsed/.test(tl) && tl.length <= tinyLockBigSrc.length, `len=${tl.length} vs ${tinyLockBigSrc.length}`);
+
   /* Only a git diff/show -- a non-git command carrying diff-like text is not touched. */
   t('a non-git command with diff-like output is left alone', !/diff collapsed/.test(runGit(diff, { gitView: true }, 'cat changes.patch').out), 'non-git');
 

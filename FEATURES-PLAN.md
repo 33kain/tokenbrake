@@ -237,10 +237,15 @@ grandfathered, to be cleaned up later, not extended).
     guard is a copied single file that can't import `transcript.js`, so the switch needs a legacy-boolean
     fallback (more code during transition) and re-touches every prior kind — so it lands as its **own
     separately-reviewed commit**, best before/alongside narrowing 5, not bundled into a default-OFF feature step.
-    (3) Known fail-safe imprecision (matches the `noTrim`/`alwaysCap` substring convention): `gitCollapse`
-    substrings can false-positive (`.map` inside `a.mapper.js`), and `GIT_DIFF` misses `git --no-pager diff` and
-    aliases — worst case is a real-source hunk collapsed but header-kept/`+/-`-summarized/saved (recoverable and
-    audit-visible), or simply no collapse; acceptable for a default-OFF, A/B-gated narrowing.
+    (3) Known fail-safe coverage gaps left after the /code-review fixes (each fails safe — no wrong collapse,
+    at worst no benefit): `GIT_DIFF` misses non-default invocations (`git --no-pager diff`, aliases); the
+    `diff --git a/… b/…` header regex misses non-default prefixes (`diff.mnemonicPrefix`/`diff.noprefix`);
+    combined/merge diffs (`diff --cc` from `git show <merge>`) are not split, so their generated hunks aren't
+    collapsed; and under `shapeFilters`+`gitView` both on, the saved `out/` copy is the shape-collapsed text
+    (shapeFilter essentially never alters a real diff, so this is contrived). All acceptable for a default-OFF,
+    A/B-gated narrowing; a later pass can broaden the matchers if the A/B shows the gaps matter.
+    ( The `gitCollapse` `.map`-in-`a.mapper.js` substring false-positive raised in review was FIXED here — the
+    match is now a path SUFFIX, not a substring. )
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field

@@ -48,7 +48,7 @@ const DEFAULTS = {
   blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
   gitView: false,        // OFF by default: in a `git diff`/`git show`, collapse the hunks of generated/lockfile paths to a one-line +/- summary, keeping real-source hunks; A/B before flipping
   gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
-  gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed (substring match); only consulted when gitView is on
+  gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -119,10 +119,11 @@ function toolConfig(cfg, tool) {
    a schema you always want in full. `alwaysCap` is the other direction: cap a read (or a `cat` excerpt) at
    readLimitLines even when it is under readMaxBytes -- a lockfile, a *.min.js, a generated bundle you never
    want whole. Both default to empty, so neither changes anything until set. */
-function matchesAny(patterns, str) {
+function matchesAny(patterns, str, test) {
   if (!Array.isArray(patterns) || !patterns.length || !str) return false;
   str = String(str);
-  for (const p of patterns) if (p && str.includes(String(p))) return true;
+  test = test || ((s, p) => s.includes(p));   // default: substring (noTrim/alwaysCap); gitCollapse passes a suffix test
+  for (const p of patterns) if (p && test(str, String(p))) return true;
   return false;
 }
 
@@ -486,7 +487,7 @@ function collapseGitDiff(text, patterns) {
     if (!sec.startsWith('diff --git ')) return sec;
     const m = /^diff --git a\/(.+?) b\/(.+)$/m.exec(sec);
     const file = m ? m[2].trim() : null;
-    if (!file || !matchesAny(patterns, file)) return sec;
+    if (!file || !matchesAny(patterns, file, (s, p) => s.endsWith(p))) return sec;   // suffix: `.map` must not match `a.mapper.js`
     let adds = 0, dels = 0;                                    // count +/- line-starts without allocating a split
     for (let i = 0; i < sec.length; ) {
       const c = sec.charCodeAt(i);
@@ -645,17 +646,21 @@ function handlePost(input, cfg) {
      to the normal trim below. Not on a failed command. */
   if (isShell && !failed && cfg.gitView && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''))) {
     const g = collapseGitDiff(text, cfg.gitCollapse);
-    /* Act only when a collapse shrank the diff AND the collapsed body will fit the hook cap -- the margin leaves
-       room for the summary note + saved path, so the emitted body can't be truncated. A still-huge all-real-
-       source diff falls through to the normal trim below. Saving AFTER this gate (not before) is what keeps that
-       fall-through from writing the out/ file twice. */
-    if (g.collapsed && g.text.length < text.length && g.text.length <= HOOK_OUTPUT_CAP - 500) {
+    if (g.collapsed && g.text.length < text.length) {
       const saved = saveOut(input, text);
       const body = `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
-      log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
-      const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
-      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
-      return;
+      /* Act only when the FULL emitted body (collapse + the summary note that names the saved path) is actually
+         smaller than the original AND fits the hook cap. A tiny generated hunk in an otherwise large real-source
+         diff can shrink `g.text` yet leave `body` bigger than the diff once the note is added -- emitting that
+         would grow context and log kept > chars, poisoning the A/B. When it does not pay off (or a huge
+         all-real-source diff would still overflow the cap), fall through to the normal trim below; that path
+         re-saves the same out/ file (idempotent, same tool_use_id) -- accepted for this uncommon case. */
+      if (body.length < text.length && body.length <= HOOK_OUTPUT_CAP) {
+        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+        const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
+        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
+        return;
+      }
     }
   }
 
