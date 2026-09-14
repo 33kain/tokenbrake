@@ -39,7 +39,7 @@ const DEFAULTS = {
   readAfterEdit: false,  // OFF by default: after an Edit, narrow an unbounded Read of the same file to the changed region; A/B before flipping
   editContextLines: 20,  // lines of context kept on each side of the changed region by the delta
   reReadElide: false,    // OFF by default: a re-read of a file already read WHOLE this session, unchanged and recent, is narrowed to a pointer; A/B before flipping
-  reReadRecency: 8,      // only elide if fewer than this many whole-file reads happened since -- a compaction (which the guard can't see) is unlikely within a few reads
+  reReadRecency: 8,      // only elide if fewer than this many whole-file reads happened since; a frequency limiter -- the guard does not consult compaction, so this just keeps elision to still-fresh reads
   reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
@@ -239,9 +239,9 @@ function locateEdits(fp, ti, tool) {
    uses it to tell an unchanged, recent re-read (the model likely still has it) from a first read. Best-effort. */
 function readsPath(session) { return sessionStatePath('reads', session); }
 function readRecord(session, rec) { appendSessionState(readsPath(session), rec); }
-/* The most recent prior whole-read of `file`, plus `since` = how many other whole-reads happened after it. A
-   compaction (which the guard cannot see) is unlikely within a few reads, so a small `since` is the proxy for
-   "the model still has it". Null when the file was not read whole this session. */
+/* The most recent prior whole-read of `file`, plus `since` = how many other whole-reads happened after it. The
+   guard does not consult compaction; a small `since` is the proxy for "the read is recent, so the model still
+   has it". Null when the file was not read whole this session. */
 function priorRead(session, file) {
   let last = null, since = 0;
   try {
@@ -673,9 +673,10 @@ function handleReadPre(input, cfg) {
      unchanged (same size + mtime) and the read was recent (few whole-reads since), so it very likely still
      has the content -- hand back only the first reReadKeepLines plus a pointer instead of re-adding the whole
      file. Off by default (reReadElide). Only files read whole get a priorRead record (a capped first read
-     means the model does NOT have the whole file), and an edit changes mtime and is caught by the delta
-     branch above -- so this reaches only genuine unchanged re-reads. The compaction it cannot see is bounded
-     by reReadRecency and, default-OFF, gated by the Backfire Auditor before the default moves. */
+     means the model does NOT have the whole file), and any change to the file -- an edit, or any external
+     write -- changes size or mtime and fails the equality check below, so this reaches only genuine unchanged
+     re-reads. The one thing the guard does not consult is compaction (it never sees the context window); that
+     risk is mitigated by reReadRecency and, default-OFF, gated by the Backfire Auditor before the default moves. */
   if (cfg.reReadElide && nLines != null && cfg.reReadKeepLines < nLines) {
     const prior = priorRead(input.session_id, path.resolve(fp));
     if (prior && prior.size === st.size && prior.mtime === st.mtimeMs && prior.since < cfg.reReadRecency) {

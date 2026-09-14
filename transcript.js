@@ -835,61 +835,54 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas, reReads };
 }
 
-/* Read-After-Edit deltas (narrowing 1) and whether each sent the model back for more. A delta narrows an
-   unbounded Read of a just-edited file to the changed region; the guard logs it as ev:'read-delta' with the
-   window (offset, limit) it injected. It BACKFIRED when the model then read the SAME file again at a line
-   OUTSIDE that window -- the delta hid what it actually wanted. The narrowed read itself starts inside the
-   window, which is why the window is recorded: it lets a real "went back for more" read be told apart from the
-   delta's own read (the reason this is not folded into the read-cap/induced machinery, where the delta read
-   would count as its own backfire). A distinct ev also keeps read-delta rows out of the readMaxBytes evidence
-   in --caps/--reads/--where, which is about the size cap, not this. */
-function readDeltas(ledgerRecs, parsed) {
+/* Shared backfire audit for both narrowings. A narrowing (guard ev:'read-delta' for narrowing 1, 'read-reread'
+   for narrowing 2) replaced an unbounded Read of a file with a bounded window, on the premise that the model
+   still had -- or did not need -- the rest. It BACKFIRED when the model then read the SAME file again at a line
+   OUTSIDE that window: the narrowing hid what it actually wanted. One loop serves both: for each ledger row of
+   the given ev in this session, count it as fired, then look for a LATER read of the same file that reached
+   outside what the narrowing left in context -- a whole-file re-read (cat / unbounded Read), or a ranged read
+   the ev-specific `wentPast(readFrom, r)` flags. The `when <= t` guard excludes the narrowed read's OWN entry
+   (its unbounded intent, recorded before the narrowing fired), so a narrowing never counts as its own backfire;
+   this is why the window is recorded on each row, and why each narrowing has its own ev rather than folding into
+   the read-cap/induced machinery (where its own read would count against it). A distinct ev also keeps these
+   rows out of the readMaxBytes evidence in --caps/--reads/--where, which is about the size cap, not this. */
+function auditNarrowing(ledgerRecs, parsed, ev, wentPast) {
   const cwd = parsed && parsed.cwd;
   let fired = 0, backfired = 0;
   for (const r of ledgerRecs || []) {
-    if (!r || r.ev !== 'read-delta') continue;
+    if (!r || r.ev !== ev) continue;
     if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
     fired++;
     const key = normReadPath(r.what, cwd), t = Number(r.t) || null;
-    const from = Number(r.offset) || 1, to = from + (Number(r.limit) || 0) - 1;
     const hit = (parsed.results || []).some((res) => {
       if (!res.file || normReadPath(res.file, cwd) !== key) return false;
       const when = res.askedAt != null ? res.askedAt : res.at;
-      if (t != null && when != null && when <= t) return false;   // must come after the delta fired; excludes the
-      if (res.whole) return true;                                 //   delta's own narrowed read, so a whole-file
-      if (res.readFrom == null) return false;                     //   re-read (cat / unbounded Read) counts, but a
-      return res.readFrom < from || res.readFrom > to;            //   ranged read outside the shown region does too
+      if (t != null && when != null && when <= t) return false;   // must come after the narrowing fired
+      if (res.whole) return true;                                 // read the whole file again
+      if (res.readFrom == null) return false;
+      return wentPast(res.readFrom, r);
     });
     if (hit) backfired++;
   }
   return { fired, backfired };
 }
 
+/* A delta backfires when a later read starts outside the [offset, offset+limit) window it showed. */
+function readDeltas(ledgerRecs, parsed) {
+  return auditNarrowing(ledgerRecs, parsed, 'read-delta', (readFrom, r) => {
+    const from = Number(r.offset) || 1, to = from + (Number(r.limit) || 0) - 1;
+    return readFrom < from || readFrom > to;
+  });
+}
+
 /* Re-read elisions (narrowing 2) and whether each sent the model back. An elision (guard ev:'read-reread')
    caps a re-read of an unchanged, already-whole-read file to the first `limit` lines on the premise that the
    model still has the rest. It BACKFIRED when the model then read the SAME file again past that -- a
    whole-file read, or a ranged read starting beyond `limit` -- meaning it did NOT still have it (a compaction
-   the guard could not see). The `when <= t` guard excludes the elided read's own (unbounded-intent) entry, as
-   in readDeltas. Its own ev keeps read-reread rows out of the size-cap evidence in --caps/--reads/--where. */
+   the guard does not consult). */
 function readReReads(ledgerRecs, parsed) {
-  const cwd = parsed && parsed.cwd;
-  let fired = 0, backfired = 0;
-  for (const r of ledgerRecs || []) {
-    if (!r || r.ev !== 'read-reread') continue;
-    if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
-    fired++;
-    const key = normReadPath(r.what, cwd), t = Number(r.t) || null, shown = Number(r.limit) || 0;
-    const hit = (parsed.results || []).some((res) => {
-      if (!res.file || normReadPath(res.file, cwd) !== key) return false;
-      const when = res.askedAt != null ? res.askedAt : res.at;
-      if (t != null && when != null && when <= t) return false;   // after the elision; excludes its own read
-      if (res.whole) return true;                                 // read the whole file again
-      if (res.readFrom == null) return false;
-      return res.readFrom > shown;                                // asked for content past what the elision showed
-    });
-    if (hit) backfired++;
-  }
-  return { fired, backfired };
+  return auditNarrowing(ledgerRecs, parsed, 'read-reread', (readFrom, r) =>
+    readFrom > (Number(r.limit) || 0));   // asked for content past what the elision showed
 }
 
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +

@@ -158,13 +158,23 @@ grandfathered, to be cleaned up later, not extended).
   session, unchanged (same size + mtime) and recent (fewer than `reReadRecency` whole-reads since), is narrowed
   to the first `reReadKeepLines` + a pointer — the model very likely still has it. `reReadElide` (default
   false): the read-whole branch records each whole delivery to `reads/<session>.jsonl`; `handleReadPre` elides
-  after the read-after-edit branch (an edit changes mtime → the delta handles it) and before the size cap
-  (only files read whole get a record; a capped first read means the model lacks the whole file). Its honest
-  limit is a **compaction** the guard can't see (the model may have lost the content) — bounded by
-  `reReadRecency`, default-OFF, and measured: `transcript.readReReads` counts an elision that backfired (the
-  model read the file again past what the elision showed), surfaced by `report --backfire`. Distinct
-  `ev:'read-reread'`, so the elision's own read isn't miscounted and its rows stay out of the `readMaxBytes`
-  evidence. 13 new checks. On-strategy request narrowing; A/B gates the default.
+  after the read-after-edit branch (any edit or external write changes size/mtime → fails the equality check,
+  so only genuine unchanged re-reads reach it) and before the size cap (only files read whole get a record; a
+  capped first read means the model lacks the whole file). Its honest limit is a **compaction** the guard does
+  not consult (it never sees the context window, so the model may have lost the content) — that risk is
+  *mitigated*, not eliminated, by `reReadRecency` (a frequency limiter, not a compaction bound), default-OFF,
+  and measured: `transcript.readReReads` counts an elision that backfired (the model read the file again past
+  what the elision showed), surfaced by `report --backfire`. Distinct `ev:'read-reread'`, so the elision's own
+  read isn't miscounted and its rows stay out of the `readMaxBytes` evidence. The delta and re-read audits share
+  one `auditNarrowing(ledgerRecs, parsed, ev, wentPast)` loop (the two differ only in the "went past" test).
+  13 new checks. On-strategy request narrowing; A/B gates the default.
+  - **Deferred follow-ups (recorded, not built):** (1) a *compaction-boundary check* — skip elision when a
+    compaction happened between the whole-read and the re-read — is the real fix for the one risk above, but it
+    depends on `transcript_path` being present on the PreToolUse stdin, which is **unverified**. Building on an
+    unconfirmed input shape risks a silent no-op (the 0.1.0 "verify the shape before you build on it" lesson),
+    so this waits on a live check that PreToolUse actually delivers `transcript_path`. (2) A `forEachSessionLine`
+    helper to fold the near-identical JSONL scan loops in `priorRead`/state readers — modest, pre-existing, not
+    worth coupling to this change.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,

@@ -461,11 +461,12 @@ this session. When you `Read` a file **whole**, the guard remembers its size and
 under `reads/`); if you re-`Read` the same file **unbounded** while it is **unchanged** and the re-read is
 **recent** (fewer than `reReadRecency`, default 8, whole-reads since), it hands back only the first
 `reReadKeepLines` (default 5) plus a pointer, instead of re-adding the whole file you likely still have. It
-only fires for files read whole (a capped first read means you don't have all of it), and an edit changes the
-mtime so the read-after-edit delta handles that case instead. Its one real risk is a **compaction** between
-the two reads — which the guard can't see — that dropped the content; that's bounded by `reReadRecency`, and a
-re-read that has to go back for the file anyway is a **backfire** `report --backfire` counts (`Re-read
-elisions: N fired; M sent the model back`). Off until an A/B moves it.
+only fires for files read whole (a capped first read means you don't have all of it), and any edit or external
+write changes the size or mtime so the equality check fails and the read-after-edit delta handles the edit case
+instead. Its one real risk is a **compaction** between the two reads — which the guard does not consult — that
+dropped the content; `reReadRecency` *mitigates* that (it limits elision to still-fresh reads, it is not a
+compaction bound), and a re-read that has to go back for the file anyway is a **backfire** `report --backfire`
+counts (`Re-read elisions: N fired; M sent the model back`). Off until an A/B moves it.
 
 ## Presets
 

@@ -1181,7 +1181,7 @@ function auditReport() {
     reReadsFired += a.reReads.fired; reReadsBackfired += a.reReads.backfired;
     for (const k of Object.keys(a.byKind)) byKind[k] = (byKind[k] || 0) + a.byKind[k];
   }
-  const deltaLine = () => {
+  const narrowingLines = () => {
     if (deltasFired) console.log('  Read-After-Edit deltas: ' + deltasFired + ' fired; '
       + deltasBackfired + ' sent the model back for a wider read of the file (a delta that hid what it wanted)');
     if (reReadsFired) console.log('  Re-read elisions: ' + reReadsFired + ' fired; '
@@ -1199,7 +1199,7 @@ function auditReport() {
     console.log('  No withholds in these session(s) -- nothing to audit (the guard trimmed nothing that carried its marker here).');
     alsoBack();
     if (capsFired) console.log('  Read caps fired: ' + capsFired + (induced ? ', ' + induced + ' later ranged read(s) followed a cap on the same file' : ''));
-    deltaLine();
+    narrowingLines();
     console.log('\n  A withhold is a trim, MCP trim or dedup the model saw. Turn a narrowing on and run a session, then this says whether it paid off.');
     return;
   }
@@ -1223,7 +1223,7 @@ function auditReport() {
   console.log('  Verdict: ' + say);
   if (capsFired) console.log('  Read caps (softer signal, reported apart): ' + capsFired + ' fired; ' + induced
     + ' later ranged read(s) followed a cap on the same file -- a bounded re-read is partly what the cap asks for');
-  deltaLine();
+  narrowingLines();
   console.log('\n  A withhold backfires when the model retrieves what was withheld -- the two ways the guard creates it: reading the'
     + '\n  saved out/ file, or `tokenbrake show`. This is the gate for turning a narrowing on: a narrowing whose net is'
     + '\n  negative is spending tokens, not saving them. Token-reads only; --cost is where dollars live.');
