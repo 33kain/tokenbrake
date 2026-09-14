@@ -95,7 +95,15 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     `init --project` + a live call verifies the accept side in-session — no fresh container needed. **Remaining
     before MCP is closed:** only the A/B per `AB-TASK.md` (arm A off vs arm B on) before the default moves off
     false.
-  - Remaining: dedup (6), then the `trim.js` extraction (deferred to Wave 3, right before simulation — it is
-    the only consumer that truly needs a shared pure trim module; MCP and shaping did not). dedup needs
-    cross-call state (the guard is one stateless process per call), so it adds a small per-session state file —
-    heavier plumbing; do it after MCP is confirmed.
+  - dedup (6) — DONE. `dedup` (default false) hands back a pointer to the first copy when a Bash/PowerShell or
+    `mcp__*` result over `dedupMinChars` (1,000) repeats byte-for-byte in a session. The guard is one stateless
+    process per call, so state is a per-session **append-only JSONL** under `dedup/<session>.jsonl` (append, not
+    rewrite, so concurrent calls can't lose each other's entry). Hashes the original bytes before shaping; the
+    first copy is saved to `out/` so the pointer resolves via `tokenbrake show` (ties to feature 3); pointer
+    rebuilt in the tool's shape; honors `noTrim`; fails open throughout. Ledger row `{dedup, sameAs, chars,
+    kept}` → `report` credits it via the existing chars−kept path. Ships off; A/B gates the default (same
+    recovery-read risk as mcpTrim). Guard copy re-synced; 8 new checks.
+  - Remaining: **`trim.js` extraction → simulation (10)** — Wave 3. The extraction is the only thing left that
+    truly needs a shared pure trim module (simulation calls the engine from `cli.js`); it also changes the
+    single-file install (copy both files, drift-check both, pin both in `test.mjs`), so it is done right before
+    simulation, not before.

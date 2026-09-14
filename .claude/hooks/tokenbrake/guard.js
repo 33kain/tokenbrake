@@ -34,6 +34,8 @@ const DEFAULTS = {
   jsonShape: false,      // OFF by default: when trimming JSON, keep a sample of the big array + a count, not a char slice
   jsonSampleItems: 5,    // how many array items the JSON-aware trim keeps
   mcpTrim: false,        // OFF by default: also trim oversized mcp__* results (a content-block array); A/B before flipping. Pairs with jsonShape, since MCP bodies are usually JSON.
+  dedup: false,          // OFF by default: replace an identical repeated result in a session with a pointer to the first; A/B before flipping
+  dedupMinChars: 1000,   // don't dedup results shorter than this -- a small repeat is not worth a pointer
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -137,6 +139,33 @@ function saveOut(input, text) {
     fs.writeFileSync(saved, text);
     return saved;
   } catch { return null; }
+}
+
+/* Dedup state (feature 6). One append-only JSONL per session under dedup/<session>.jsonl, a line
+   { h, id, chars } for the first time each result was seen -- append, not rewrite, so two tool calls landing
+   at once cannot lose each other's entry. Lookup scans for the hash (files are per-session and small). Every
+   step is best-effort: a missing or corrupt file just means no dedup, never an error. */
+function hashOf(text) {
+  try { return require('crypto').createHash('sha256').update(text).digest('hex').slice(0, 32); } catch { return null; }
+}
+function dedupPath(session) {
+  return path.join(TB_DIR, 'dedup', String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl');
+}
+function dedupLookup(session, h) {
+  try {
+    for (const line of fs.readFileSync(dedupPath(session), 'utf8').split('\n')) {
+      if (!line) continue;
+      try { const o = JSON.parse(line); if (o.h === h) return o; } catch { /* skip a bad line */ }
+    }
+  } catch { /* no state yet */ }
+  return null;
+}
+function dedupRecord(session, rec) {
+  try {
+    const p = dedupPath(session);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.appendFileSync(p, JSON.stringify(rec) + '\n');
+  } catch { /* best-effort */ }
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -367,6 +396,32 @@ function handlePost(input, cfg) {
   /* A per-tool profile can switch the guard off for one tool while it runs for the rest: still measure the
      result in the ledger, but pass it through untrimmed. */
   if (!cfg.enabled) { if (cfg.logAllTools) log(rec); return; }
+
+  /* Dedup (feature 6): the same result twice in one session is paid for twice -- it re-enters context and is
+     carried from then on. When it repeats, hand back a short pointer to the first copy instead of the whole
+     thing. Hash the ORIGINAL bytes (the inner text: stdout for shell, the joined text blocks for MCP), before
+     any shaping. Bash/PowerShell + MCP only; a Read is already covered by the read cap. The first occurrence is
+     saved to out/ even if it is never trimmed, so the pointer is retrievable via `tokenbrake show`. Off by
+     default (dedup); A/B gates it. Honors noTrim, and fails open on every step. The pointer carries the marker,
+     so `report` credits chars - kept the same way it credits a trim. */
+  const dsubject = isShell ? String(ti.command || '') : tool;
+  if (cfg.dedup && !failed && (isShell || isMcp) && input.session_id && !matchesAny(cfg.noTrim, dsubject)) {
+    const mcp = isMcp ? mcpBody(resp) : null;
+    const dtext = isMcp ? (mcp && mcp.text) : text;
+    if (dtext && dtext.length >= cfg.dedupMinChars) {
+      const h = hashOf(dtext);
+      const prior = h ? dedupLookup(input.session_id, h) : null;
+      if (prior) {
+        const pointer = `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
+        const updated = isMcp ? mcp.rebuild(pointer)
+          : (resp && typeof resp === 'object' ? { ...resp, stdout: pointer, stderr: '' } : pointer);
+        log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
+        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updated } });
+        return;
+      }
+      if (h) { const saved = saveOut(input, dtext); if (saved) dedupRecord(input.session_id, { h, id: path.basename(saved).replace(/\.txt$/, ''), chars: dtext.length }); }
+    }
+  }
 
   /* MCP tool-output trimming (feature 1). An mcp__* result is a content-block array the guard sees in full,
      before Claude Code's own "too large → saved to file + preview" step (which otherwise persists the whole

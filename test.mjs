@@ -2030,6 +2030,53 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Wave 2: dedup of repeated results (feature 6) ------------------------
+   The same result twice in a session is paid for twice; when it repeats, the guard hands back a pointer to
+   the first copy. Off by default; A/B gates it. Bash/PowerShell + MCP, over dedupMinChars, honoring noTrim. */
+{
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-dedup-'));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const g = (input) => spawnSync(process.execPath, [join(process.cwd(), 'guard.js'), 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: e });
+  const cli2 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e });
+  const setCfg = (o) => writeFileSync(join(cfg, 'tokenbrake.json'), JSON.stringify(o));
+  const uOf = (r) => { if (!r.stdout.trim()) return null; try { return JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput; } catch { return null; } };
+  const big = 'x'.repeat(2000);
+  const bash = (id, out, sess = 's1') => ({ session_id: sess, tool_use_id: id, tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: out, stderr: '', interrupted: false, isImage: false } });
+
+  setCfg({ dedup: true });
+  t('dedup: first occurrence is not rewritten (recorded, passed through)', g(bash('toolu_A', big)).stdout.trim() === '');
+  const u = uOf(g(bash('toolu_B', big)));
+  t('dedup: an identical second result becomes a pointer to the first', !!u && /identical to an earlier result this session \(2,000 chars\)/.test(u.stdout) && /show s1-toolu_A/.test(u.stdout));
+  const show = cli2(['show', 's1-toolu_A']);
+  t('dedup: the pointer id is retrievable via tokenbrake show', show.status === 0 && show.stdout.startsWith('x'.repeat(50)));
+  const led = readFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const drow = led.find(x => x.id === 'toolu_B');
+  t('dedup: ledger row carries dedup:true, sameAs, chars(full) and kept(pointer)', !!drow && drow.dedup === true && drow.sameAs === 's1-toolu_A' && drow.chars === 2000 && drow.kept < 200);
+  t('dedup: a different result is not pointed', g(bash('toolu_C', 'z'.repeat(2000))).stdout.trim() === '');
+
+  setCfg({ dedup: true, dedupMinChars: 1000 });
+  const small = 'y'.repeat(500);
+  g(bash('toolu_D', small, 's2'));
+  t('dedup: a repeat under dedupMinChars is left alone', g(bash('toolu_E', small, 's2')).stdout.trim() === '');
+
+  setCfg({ dedup: true, noTrim: ['git diff'] });
+  const gd = (id) => ({ session_id: 's3', tool_use_id: id, tool_name: 'Bash', tool_input: { command: 'git diff' }, tool_response: { stdout: big, stderr: '', interrupted: false, isImage: false } });
+  g(gd('toolu_G1'));
+  t('dedup: a noTrim command is never deduped', g(gd('toolu_G2')).stdout.trim() === '');
+
+  setCfg({});
+  g(bash('toolu_H1', big, 's5'));
+  t('dedup off by default: an identical repeat is not pointed', g(bash('toolu_H2', big, 's5')).stdout.trim() === '');
+
+  setCfg({ dedup: true });
+  const mcp = (id) => ({ session_id: 's4', tool_use_id: id, tool_name: 'mcp__x__y', tool_input: {}, tool_response: [{ type: 'text', text: big }] });
+  g(mcp('toolu_MC1'));
+  const um = uOf(g(mcp('toolu_MC2')));
+  t('dedup: an identical MCP result becomes a content-block array pointer', Array.isArray(um) && /identical to an earlier result/.test(um[0].text));
+
+  rmSync(cfg, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);

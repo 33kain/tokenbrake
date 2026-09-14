@@ -418,6 +418,16 @@ against the tool's own schema and drops a wrong shape silently. Target one serve
 (`"tools": { "mcp__github__list_commits": { … } }`) or protect one by name with `noTrim`. Off until an A/B
 moves it; pairs with `jsonShape`, since MCP bodies are usually JSON.
 
+`dedup` (default `false`) catches the same result arriving **twice in one session**. A result is re-sent as
+context on every later request, so a 30k-char output produced twice is carried twice; when a Bash/PowerShell or
+`mcp__*` result over `dedupMinChars` (1,000) is byte-for-byte identical to one seen earlier this session, the
+guard hands back a one-line pointer — `[tokenbrake] identical to an earlier result this session (N chars). Full:
+tokenbrake show <id>` — in the tool's own shape, instead of the whole thing again. The first copy is saved to
+`out/` (even when it is never trimmed) so the pointer is retrievable; state is a per-session append-only file
+under `dedup/`, and every step fails open. It honors `noTrim`. Like a trim, the pointer can send the model back
+for the full copy (a recovery read), so it is off until an A/B moves it — best per-tool for a tool you call
+repeatedly with identical results.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,
