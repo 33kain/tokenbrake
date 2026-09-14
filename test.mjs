@@ -1795,6 +1795,59 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a whole-file read at/before the delta (its own narrowed read) is not counted', T.backfireAudit(whole(900), deltaLedger).deltas.backfired === 0, 'whole-own');
 }
 
+/* Re-read elision (narrowing 2, off by default): a re-read of a file already read WHOLE this session,
+   unchanged and recent, is narrowed to the first reReadKeepLines + a pointer -- the model likely still has it.
+   Off by default; a changed file, an old re-read, or a first read are all left alone. */
+{
+  console.log('\n-- re-read elision (narrowing 2, off by default)');
+  const body = Array.from({ length: 200 }, (_, i) => 'const line_' + i + ' = 0;').join('\n') + '\n';
+  const rp = (dir, file) => parse(spawnSync(process.execPath, ['./guard.js', 'read-pre'],
+    { input: JSON.stringify({ session_id: 'rr', tool_name: 'Read', tool_input: { file_path: file } }), encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } }).stdout);
+  const uiOf = (o) => (o && o.hookSpecificOutput && o.hookSpecificOutput.updatedInput) || null;
+
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-rr-'));
+  const file = join(dir, 'src.js'); writeFileSync(file, body);
+  writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ reReadElide: true }));
+  const first = uiOf(rp(dir, file));
+  t('a first whole read is not elided', !(first && first.limit === 5), JSON.stringify(first));
+  t('the whole read was recorded to reads-state', existsSync(join(dir, 'tokenbrake', 'reads', 'rr.jsonl')), 'reads state');
+  const second = uiOf(rp(dir, file));
+  t('an unchanged, recent re-read is elided to reReadKeepLines', second && second.limit === 5 && second.offset == null, JSON.stringify(second));
+  t('the re-read is logged as ev:read-reread', /"ev":"read-reread"/.test(readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8')), 'ledger');
+  writeFileSync(file, body + 'const added = 1;\n');   // changes size + mtime
+  const changed = uiOf(rp(dir, file));
+  t('a changed file is not elided', !(changed && changed.limit === 5), JSON.stringify(changed));
+  rmSync(dir, { recursive: true, force: true });
+
+  /* Recency: with reReadRecency:1, one other whole-read since means the re-read is no longer "recent". */
+  const dirR = mkdtempSync(join(tmpdir(), 'tokenbrake-rr-recency-'));
+  const fA = join(dirR, 'a.js'), fB = join(dirR, 'b.js'); writeFileSync(fA, body); writeFileSync(fB, body);
+  writeFileSync(join(dirR, 'tokenbrake.json'), JSON.stringify({ reReadElide: true, reReadRecency: 1 }));
+  rp(dirR, fA); rp(dirR, fB);   // read A, then B (since-A becomes 1)
+  t('a re-read past reReadRecency is not elided', !((uiOf(rp(dirR, fA)) || {}).limit === 5), 'recency');
+  rmSync(dirR, { recursive: true, force: true });
+
+  /* Default OFF: nothing recorded, nothing elided. */
+  const dirOff = mkdtempSync(join(tmpdir(), 'tokenbrake-rr-off-'));
+  const fOff = join(dirOff, 'src.js'); writeFileSync(fOff, body);
+  rp(dirOff, fOff); const off2 = uiOf(rp(dirOff, fOff));
+  t('default off: no reads-state recorded', !existsSync(join(dirOff, 'tokenbrake', 'reads', 'rr.jsonl')), 'off state');
+  t('default off: a re-read is not elided', !(off2 && off2.limit === 5), JSON.stringify(off2));
+  rmSync(dirOff, { recursive: true, force: true });
+
+  /* Auditor side: an elision backfires when the model reads the file again past what the elision showed. */
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const rrLedger = [{ ev: 'read-reread', session: 'ds', what: '/w/src.js', limit: 5, t: 1000 }];
+  const mk = (r) => ({ sessionId: 'ds', cwd: '/w', requests: [{}, {}], compactions: [],
+    results: [{ id: 'r', name: 'Read', file: '/w/src.js', tokens: 100, afterReq: 0, ...r }] });
+  t('a whole-file re-read after the elision is a re-read backfire', T.backfireAudit(mk({ whole: true, readFrom: null, at: 2000 }), rrLedger).reReads.backfired === 1, 'whole-after');
+  t('a ranged read past what the elision showed is a re-read backfire', T.backfireAudit(mk({ readFrom: 40, at: 2000 }), rrLedger).reReads.backfired === 1, 'past-window');
+  t('a read within the shown lines is not a re-read backfire', T.backfireAudit(mk({ readFrom: 3, at: 2000 }), rrLedger).reReads.backfired === 0, 'within');
+  t('the elision\'s own read (at/before it) is not a backfire', T.backfireAudit(mk({ whole: true, readFrom: null, at: 900 }), rrLedger).reReads.backfired === 0, 'own');
+  t('a session with no elisions reports zero re-reads', T.backfireAudit(mk({ whole: true, at: 2000 }), []).reReads.fired === 0, 'none');
+}
+
 /* ---- shape filters, off by default ---------------------------------------
    The trim only acts above maxChars and spends that budget on whatever is there, which on an install log
    is progress redraws: measured, 400 such lines kept 65 of them and 144 ANSI escapes and left the final

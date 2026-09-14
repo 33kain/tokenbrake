@@ -38,6 +38,9 @@ const DEFAULTS = {
   dedupMinChars: 1000,   // don't dedup results shorter than this -- a small repeat is not worth a pointer
   readAfterEdit: false,  // OFF by default: after an Edit, narrow an unbounded Read of the same file to the changed region; A/B before flipping
   editContextLines: 20,  // lines of context kept on each side of the changed region by the delta
+  reReadElide: false,    // OFF by default: a re-read of a file already read WHOLE this session, unchanged and recent, is narrowed to a pointer; A/B before flipping
+  reReadRecency: 8,      // only elide if fewer than this many whole-file reads happened since -- a compaction (which the guard can't see) is unlikely within a few reads
+  reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -229,6 +232,27 @@ function locateEdits(fp, ti, tool) {
     ranges.push([from, from + ns.split('\n').length - 1]);
   }
   return ranges;
+}
+
+/* Re-read state (narrowing 2). One line per whole-file Read the guard delivered whole this session, appended
+   to reads/<session>.jsonl: { file, size, mtime, t }. On a later unbounded Read of the same file, handleReadPre
+   uses it to tell an unchanged, recent re-read (the model likely still has it) from a first read. Best-effort. */
+function readsPath(session) { return sessionStatePath('reads', session); }
+function readRecord(session, rec) { appendSessionState(readsPath(session), rec); }
+/* The most recent prior whole-read of `file`, plus `since` = how many other whole-reads happened after it. A
+   compaction (which the guard cannot see) is unlikely within a few reads, so a small `since` is the proxy for
+   "the model still has it". Null when the file was not read whole this session. */
+function priorRead(session, file) {
+  let last = null, since = 0;
+  try {
+    for (const line of fs.readFileSync(readsPath(session), 'utf8').split('\n')) {
+      if (!line) continue;
+      let o; try { o = JSON.parse(line); } catch { continue; }
+      if (!o || !o.file) continue;
+      if (o.file === file) { last = o; since = 0; } else if (last) { since++; }
+    }
+  } catch { /* no state yet */ }
+  return last ? { size: last.size, mtime: last.mtime, since } : null;
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -644,6 +668,23 @@ function handleReadPre(input, cfg) {
       }
     }
   }
+
+  /* Read-After-Read elision (narrowing 2): the model already read this file WHOLE this session, it is
+     unchanged (same size + mtime) and the read was recent (few whole-reads since), so it very likely still
+     has the content -- hand back only the first reReadKeepLines plus a pointer instead of re-adding the whole
+     file. Off by default (reReadElide). Only files read whole get a priorRead record (a capped first read
+     means the model does NOT have the whole file), and an edit changes mtime and is caught by the delta
+     branch above -- so this reaches only genuine unchanged re-reads. The compaction it cannot see is bounded
+     by reReadRecency and, default-OFF, gated by the Backfire Auditor before the default moves. */
+  if (cfg.reReadElide && nLines != null && cfg.reReadKeepLines < nLines) {
+    const prior = priorRead(input.session_id, path.resolve(fp));
+    if (prior && prior.size === st.size && prior.mtime === st.mtimeMs && prior.since < cfg.reReadRecency) {
+      log({ ev: 'read-reread', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, limit: cfg.reReadKeepLines });
+      emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, limit: cfg.reReadKeepLines },
+        additionalContext: `${path.basename(fp)}: you already read this file whole earlier this session and it is unchanged, so tokenbrake is showing only the first ${cfg.reReadKeepLines} lines instead of re-adding all ${nLines}. Read with an explicit offset/limit if you need part of it again.` } });
+      return;
+    }
+  }
   /* A whole-file read the cap did NOT act on is still worth recording, and until now nothing recorded it.
      Without it, `report --reads` had to infer every file's size from the delivered text -- which Claude Code
      line-numbers, so every file came out 5-6% large and the long ones worse -- and `report --where` could
@@ -655,6 +696,8 @@ function handleReadPre(input, cfg) {
   if (!persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
       bytes: st.size, lines: nLines });
+    /* Remember this whole delivery so a later unchanged, recent re-read can be elided (narrowing 2). */
+    if (cfg.reReadElide) readRecord(input.session_id, { file: path.resolve(fp), size: st.size, mtime: st.mtimeMs, t: Date.now() });
     return;
   }
   const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;

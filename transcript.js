@@ -828,10 +828,11 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const caps = readCaps(ledger, parsed.sessionId);
   const cls = classifyRangedReads(parsed, ledger, { sessionId: parsed.sessionId });
   const deltas = readDeltas(ledger, parsed);
+  const reReads = readReReads(ledger, parsed);
 
   return { withholds, byKind, saved, savedCarried, recoveredEvents: matched.length,
     recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
-    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas };
+    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas, reReads };
 }
 
 /* Read-After-Edit deltas (narrowing 1) and whether each sent the model back for more. A delta narrows an
@@ -858,6 +859,33 @@ function readDeltas(ledgerRecs, parsed) {
       if (res.whole) return true;                                 //   delta's own narrowed read, so a whole-file
       if (res.readFrom == null) return false;                     //   re-read (cat / unbounded Read) counts, but a
       return res.readFrom < from || res.readFrom > to;            //   ranged read outside the shown region does too
+    });
+    if (hit) backfired++;
+  }
+  return { fired, backfired };
+}
+
+/* Re-read elisions (narrowing 2) and whether each sent the model back. An elision (guard ev:'read-reread')
+   caps a re-read of an unchanged, already-whole-read file to the first `limit` lines on the premise that the
+   model still has the rest. It BACKFIRED when the model then read the SAME file again past that -- a
+   whole-file read, or a ranged read starting beyond `limit` -- meaning it did NOT still have it (a compaction
+   the guard could not see). The `when <= t` guard excludes the elided read's own (unbounded-intent) entry, as
+   in readDeltas. Its own ev keeps read-reread rows out of the size-cap evidence in --caps/--reads/--where. */
+function readReReads(ledgerRecs, parsed) {
+  const cwd = parsed && parsed.cwd;
+  let fired = 0, backfired = 0;
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'read-reread') continue;
+    if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
+    fired++;
+    const key = normReadPath(r.what, cwd), t = Number(r.t) || null, shown = Number(r.limit) || 0;
+    const hit = (parsed.results || []).some((res) => {
+      if (!res.file || normReadPath(res.file, cwd) !== key) return false;
+      const when = res.askedAt != null ? res.askedAt : res.at;
+      if (t != null && when != null && when <= t) return false;   // after the elision; excludes its own read
+      if (res.whole) return true;                                 // read the whole file again
+      if (res.readFrom == null) return false;
+      return res.readFrom > shown;                                // asked for content past what the elision showed
     });
     if (hit) backfired++;
   }

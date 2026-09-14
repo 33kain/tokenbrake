@@ -1168,7 +1168,7 @@ function auditReport() {
 
   let W = 0, saved = 0, savedCarried = 0, recTokens = 0, recCarried = 0, backfired = 0, sessions = 0;
   let unmatchedEvents = 0, unmatchedCarried = 0;
-  const byKind = {}; let capsFired = 0, induced = 0, deltasFired = 0, deltasBackfired = 0;
+  const byKind = {}; let capsFired = 0, induced = 0, deltasFired = 0, deltasBackfired = 0, reReadsFired = 0, reReadsBackfired = 0;
   for (const file of files) {
     let p; try { p = transcript.parseTranscript(file); } catch { continue; }
     sessions++;
@@ -1178,10 +1178,15 @@ function auditReport() {
     unmatchedEvents += a.unmatchedEvents; unmatchedCarried += a.unmatchedCarried;
     backfired += a.backfired; capsFired += a.caps.fired; induced += a.caps.induced;
     deltasFired += a.deltas.fired; deltasBackfired += a.deltas.backfired;
+    reReadsFired += a.reReads.fired; reReadsBackfired += a.reReads.backfired;
     for (const k of Object.keys(a.byKind)) byKind[k] = (byKind[k] || 0) + a.byKind[k];
   }
-  const deltaLine = () => { if (deltasFired) console.log('  Read-After-Edit deltas: ' + deltasFired + ' fired; '
-    + deltasBackfired + ' sent the model back for a wider read of the file (a delta that hid what it wanted)'); };
+  const deltaLine = () => {
+    if (deltasFired) console.log('  Read-After-Edit deltas: ' + deltasFired + ' fired; '
+      + deltasBackfired + ' sent the model back for a wider read of the file (a delta that hid what it wanted)');
+    if (reReadsFired) console.log('  Re-read elisions: ' + reReadsFired + ' fired; '
+      + reReadsBackfired + ' sent the model back to read the file again (it did not still have it)');
+  };
   /* A read of a saved output this audit could not tie to a withhold it counted -- an earlier session's out/
      file, or a capped/over-ceiling output that carries no marker. Real token-reads, but not this session's
      saving coming back, so it is reported apart from the net rather than silently docking it. */
