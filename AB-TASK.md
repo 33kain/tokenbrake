@@ -2922,3 +2922,43 @@ yet a moved default. It ships as a **recommended opt-in** (`blobElide: true`). T
 best-behaved narrowing measured so far — 0% backfire where the delta's forced run was 40% before its size gate —
 and blobs are the high-value "context bomb" case, so it is the strongest opt-in of the three. Flipping the
 default would need an organic session (no created-on-purpose blobs) showing it fires and nets a saving on its own.
+
+## Change-Aware Git View (narrowing 4) — the A/B protocol
+
+`gitView` collapses the hunks of generated/lockfile paths in a `git diff`/`git show` to a `+adds/-dels` summary,
+keeping real-source hunks. It ships **OFF**; this A/B is the gate, read off `tokenbrake report --backfire` (the
+`gitview` byKind count and its backfires). Both arms differ only by the step-0 config write. This is the
+**frequency** play: the backfire question is whether collapsing a lockfile diff sends the model back to Read the
+saved full diff.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It builds a scratch git repo under
+`/tmp`, so it is fully reversible and repeatable:
+
+```
+Git-diff A/B task. Do every step with tools, in order, autonomously (do not ask questions). At the end write the final answer in step 6.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"gitView": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"gitView": true}'  > ~/.claude/tokenbrake.json
+1. Run  rm -rf /tmp/gitwork && mkdir -p /tmp/gitwork/src && git -C /tmp/gitwork init -q && git -C /tmp/gitwork config user.email a@example.com && git -C /tmp/gitwork config user.name tester
+2. Create and commit the initial files:
+   node -e "let d={};for(let i=0;i<120;i++)d['pkg-'+i]={version:'1.0.'+i,resolved:'https://reg/pkg-'+i};d['lodash']={version:'4.17.20',resolved:'https://reg/lodash'};require('fs').writeFileSync('/tmp/gitwork/package-lock.json',JSON.stringify({name:'app',lockfileVersion:3,packages:d},null,2))"
+   node -e "require('fs').writeFileSync('/tmp/gitwork/src/app.js','function total(items){\n  return items.reduce((a,b)=>a+b,0);\n}\nmodule.exports={total};\n')"
+   git -C /tmp/gitwork add -A && git -C /tmp/gitwork commit -q -m init
+3. Modify both files:
+   node -e "let p=require('/tmp/gitwork/package-lock.json');for(let i=0;i<120;i++)p.packages['pkg-'+i].version='1.1.'+i;p.packages['lodash'].version='4.17.21';require('fs').writeFileSync('/tmp/gitwork/package-lock.json',JSON.stringify(p,null,2))"
+   node -e "let s=require('fs').readFileSync('/tmp/gitwork/src/app.js','utf8').replace('a+b','a+b+0');require('fs').writeFileSync('/tmp/gitwork/src/app.js',s)"
+4. Run  git -C /tmp/gitwork diff   and read the result.
+5. Answer BOTH from what you have: (a) what changed in src/app.js; (b) the NEW version of the "lodash" dependency in package-lock.json. State honestly how you obtained EACH -- especially whether getting (b) meant re-reading a saved tokenbrake out/ file or running `tokenbrake show` (a backfire) versus a grep/read of the original file or a fresh targeted git diff (not a backfire).
+6. Run `node cli.js report --backfire` in the tokenbrake repo checkout and paste its full output verbatim, then `cat ~/.claude/tokenbrake.json`.
+
+Final answer: whether the package-lock.json hunk was collapsed (you will see a "[tokenbrake] ... diff collapsed" note), how you got (a) and (b), and the pasted outputs of step 6.
+```
+
+**What the comparison reads.** Arm B's `report --backfire`: the `Withholds` byKind shows `1 gitview` (the one
+`git diff`), and the backfire count says whether getting the collapsed lockfile detail sent the model to Read
+the saved diff. Getting (b) via `grep lodash` / a fresh `git diff package-lock.json` on the original repo is
+NOT a pull-back (it doesn't read the `out/` file) -- the sanctioned path. Arm A is the baseline: with `gitView`
+off the whole diff (including the lockfile hunk) enters and is carried.
+
+**Decision rule, fixed before the run.** Flip the default to `gitView: true` only if the gitview backfire rate
+is low **and** arm B carries meaningfully fewer read token-reads than arm A. Burden of proof on the flip.
