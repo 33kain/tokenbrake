@@ -2814,3 +2814,26 @@ class by construction: re-run the ON arm and the two large-file firings should b
 small-file firings that helped. **Default is still OFF** — flip it only after that re-run measures the backfire
 rate low with the gate in place; the change narrows *where* the delta fires, it does not itself move the
 default.
+
+### Re-run — ON arm with the gate, 2026-09-14 (Opus, spawned session)
+
+Same ON arm with the gate in place; the task edited four small files (under `readMaxBytes`) plus one 96 KB
+file (over it), each verify-read whole. `report --backfire`:
+
+```
+Read caps fired: 2
+Read-After-Edit deltas: 4 fired; 0 sent the model back for a wider read of the file
+```
+
+**4 fired, 0 backfired (0%), and the 96 KB file was CAPPED, not narrowed.** The size gate excluded the large
+file in a real session, not just in the unit tests; each small-file window (lines 77–123) contained the edit,
+so the verify was satisfied without a wider re-read. Combined with run 1 (small files 0 of 3 backfired; the 2
+backfires there were the large files now gated out), small-file verify-reads have backfired **0 of 7** across
+both runs.
+
+**Default still OFF / opt-in.** The gated delta is validated *when it fires* — on the files it now touches it
+does not backfire, and the risky large files are excluded. But the flip's burden is not met: the pattern was
+**forced** by the task, on one model, and neither the organic firing RATE (Opus is told not to re-read after
+an edit, so it may rarely fire on its own) nor the real carried-token SAVINGS against an OFF arm was measured.
+So it ships as a **recommended opt-in** (`readAfterEdit: true`), not a moved default. Flipping would need an
+organic session (no forced re-reads) showing the delta fires and nets a saving on its own.
