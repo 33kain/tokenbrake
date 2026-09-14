@@ -10,7 +10,7 @@
    that; this file pins the shape so it cannot regress unnoticed. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1611,6 +1611,57 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   cleanBase.results = cleanBase.results.slice(0, 3);   // A, B, C; drop the recovery read
   const a4 = T.backfireAudit(cleanBase, ledger);
   t('three withholds and no pull-back verdicts clean', a4.verdict === 'clean' && a4.backfired === 0, a4.verdict);
+
+  /* An excerpt cap (a `cat` of a large file, capped like a Read: ev:'post', excerpt:true, saved:null) carries
+     a marker and kept but saves nothing to out/, so it is a Read-cap event, not a net-able trim -- it must
+     NOT be counted as a withhold, or it would pad the saving side and could only ever read "clean". */
+  const excerptTx = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [{ id: 'toolu_CAT', name: 'Bash', file: null, what: 'cat huge.log', marker: true, tokens: 300, afterReq: 0 }] };
+  const aex = T.backfireAudit(excerptTx, [{ ev: 'post', session: sid, id: 'toolu_CAT', tool: 'Bash', chars: 90000, kept: 8000, excerpt: true, saved: null }]);
+  t('an excerpt cap is not counted as a withhold (it saves nothing to out/)', aex.withholds.length === 0 && aex.verdict === 'nothing', JSON.stringify({ w: aex.withholds.length, v: aex.verdict }));
+
+  /* `show` resolves a full path, an exact stem, or a UNIQUE prefix, exactly as the CLI does; mirror that. */
+  const showRef = (what) => T.backfireAudit({ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: 'toolu_S', name: 'Bash', file: null, what, marker: false, tokens: 2000, afterReq: 1 }] }, [trimRow(A)], { min: 1 });
+  t('`show <unique prefix>` attributes to the one withhold it resolves', showRef('tokenbrake show ' + stem(A).slice(0, 12)).backfired === 1, 'prefix');
+  t('`show <full out/ path>` attributes to its withhold', showRef('npx tokenbrake show ' + outPath(A)).backfired === 1, 'path');
+  const amb = T.backfireAudit({ sessionId: sid, cwd: '/w', requests: reqs(5), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'a', marker: true, tokens: 100, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'b', marker: true, tokens: 100, afterReq: 1 },
+      { id: 'toolu_S', name: 'Bash', file: null, what: 'tokenbrake show ' + sid.slice(0, 8), marker: false, tokens: 2000, afterReq: 2 }] },
+    [trimRow(A), trimRow(B)]);
+  t('an ambiguous `show <sid8>` prefix is counted but not cross-attributed', amb.backfired === 0 && amb.unmatchedEvents === 1, JSON.stringify({ b: amb.backfired, u: amb.unmatchedEvents }));
+
+  /* A net of exactly zero with a backfire is break-even, not a win. savedCarried == recoveredCarried by
+     construction: A at afterReq0 of 3 requests carries 2 turns, savedTokens*(2+1) = 2000*3 = 6000; the
+     recovery at afterReq1 carries 1 turn, foot = 3000 + 3000 = 6000. */
+  const evenTx = { sessionId: sid, cwd: '/w', requests: reqs(3), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'x', marker: true, tokens: 100, afterReq: 0 },
+      { id: 'toolu_P', name: 'Read', file: outPath(A), what: outPath(A), marker: false, tokens: 3000, afterReq: 1 }] };
+  const aeven = T.backfireAudit(evenTx, [{ ev: 'post', session: sid, id: A, tool: 'Bash', chars: 10000, kept: 2000 }], { min: 1 });
+  t('a net of exactly zero with a backfire verdicts break-even, not net positive', aeven.net === 0 && aeven.verdict === 'break-even', JSON.stringify({ net: aeven.net, v: aeven.verdict }));
+
+  /* Integration pin: backfireAudit rebuilds guard.js saveOut's out/ filename, and the two cannot share code
+     (the guard installs as a single file). So pin them end to end -- a REAL guard trim, its real out/ file,
+     attributed by the audit. A change to saveOut's naming breaks this test, not silently the gate. */
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-bf-int-'));
+  const isid = 'inteGRATION-sess-0001', itid = 'toolu_01INTEGRATION9999';
+  const bigOut = Array.from({ length: 400 }, (_, i) => 'line ' + i + ' ' + 'x'.repeat(40)).join('\n');   // > maxChars, not a cat
+  spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: isid, tool_use_id: itid, tool_name: 'Bash', tool_input: { command: 'npm test' }, tool_response: bashResp(bigOut) }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+  const outDir = join(dir, 'tokenbrake', 'out');
+  const outFiles = existsSync(outDir) ? readdirSync(outDir).filter(f => f.endsWith('.txt')) : [];
+  const intLedger = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const realPath = join(outDir, outFiles[0] || 'none.txt');
+  const intTx = { sessionId: isid, cwd: '/w', requests: reqs(3), compactions: [],
+    results: [{ id: itid, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: 'toolu_READ', name: 'Read', file: realPath, what: realPath, marker: false, tokens: 3000, afterReq: 1 }] };
+  const ai = T.backfireAudit(intTx, intLedger, { min: 1 });
+  t('the audit attributes a read of a REAL guard-written out/ file (pins stemOf to saveOut)',
+    outFiles.length === 1 && ai.withholds.length === 1 && ai.backfired === 1, JSON.stringify({ files: outFiles, w: ai.withholds.length, b: ai.backfired }));
+  rmSync(dir, { recursive: true, force: true });
 }
 
 /* ---- shape filters, off by default ---------------------------------------

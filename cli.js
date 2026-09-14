@@ -1209,7 +1209,8 @@ function auditReport() {
   const verdict = transcript.backfireVerdict(W, net, backfired);
   const say = { nothing: 'nothing to audit', 'too few': 'too few withholds to call it (need a few)',
     backfired: 'BACKFIRED -- the pull-backs cost more than the trims saved', 'net positive': 'net positive despite backfires',
-    clean: 'clean -- nothing was pulled back' }[verdict] || verdict;
+    'break-even': 'break-even -- the pull-backs cost exactly what the trims saved',
+    clean: 'clean -- no withheld output was read back' }[verdict] || verdict;
   console.log('  Verdict: ' + say);
   if (capsFired) console.log('  Read caps (softer signal, reported apart): ' + capsFired + ' fired; ' + induced
     + ' later ranged read(s) followed a cap on the same file -- a bounded re-read is partly what the cap asks for');

@@ -745,8 +745,9 @@ const MIN_WITHHOLDS = 3;   // a chosen confidence floor: below it a "rate" is no
 function backfireVerdict(n, net, backfired, min) {
   if (!n) return 'nothing';
   if (net < 0) return 'backfired';                 // a measured net loss is real at any sample size
-  if (n < (min || MIN_WITHHOLDS)) return 'too few';
-  return backfired ? 'net positive' : 'clean';
+  if (n < (min == null ? MIN_WITHHOLDS : min)) return 'too few';   // an explicit floor of 0 must not coerce to the default
+  if (!backfired) return 'clean';
+  return net === 0 ? 'break-even' : 'net positive';   // break-even: the pull-backs cost exactly what was saved
 }
 function backfireAudit(parsed, ledgerRecs, opts) {
   carry(parsed);
@@ -754,18 +755,22 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const idx = ledgerIndex(ledger, parsed.sessionId);
   const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
 
-  /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND
-     a ledger row (the original and kept sizes). kind is read from the row -- a dedup row carries `dedup`, an
-     MCP trim carries `mcp`, everything else is a plain trim. `stem` is the exact out/ filename (minus .txt)
-     the guard would have written for this withhold: for a dedup that is the first copy's stem in `sameAs`;
-     otherwise it is rebuilt the way saveOut names it. A withhold with no rebuildable stem attributes nothing. */
+  /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND a
+     ledger row that saved the withheld bytes to out/ (the original and kept sizes). kind is read from the row
+     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, everything else is a plain trim. An EXCERPT
+     row (a `cat` of a large file capped like a Read: guard.js logs ev:'post', excerpt:true, saved:null) is
+     NOT netted here: it saves nothing to out/, so it could only ever read as "clean" and would pad the saving
+     side of the gate. It is a Read-cap-family event and belongs to the caps line / `report --caps`. `stem` is
+     the exact out/ filename (minus .txt) the guard would have written: for a dedup, the first copy's stem in
+     `sameAs`; otherwise rebuilt the way saveOut names it (guard.js saveOut -- pinned by the integration test
+     in test.mjs, since the guard installs as a single file and cannot share this helper). No stem => no match. */
   const sid8 = String(parsed.sessionId || '').slice(0, 8);
   const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
   const withholds = [];
   for (const r of parsed.results) {
     if (!r.marker) continue;
     const l = offeredOf(r);
-    if (!l) continue;
+    if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
     const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
     withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
@@ -773,26 +778,39 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   }
 
   /* A pull-back: a later result that read a saved output back into context. Two shapes, both the guard's own
-     doing -- the out/ file it wrote (ref = its stem), or `tokenbrake show <stem>` (ref = the argument). `foot`
-     is the token-read footprint on the same basis as savedCarried: what re-entered (tokens) plus what it was
-     then carried through (carried). */
+     doing -- the out/ file it wrote (ref = its stem), or `tokenbrake show <arg>` (ref = the argument, which
+     may be a stem, a prefix, or a full path, exactly as `show` itself accepts). `foot` is the token-read
+     footprint on the same basis as savedCarried: what re-entered (tokens) plus what it was then carried
+     through. This is a LOWER bound on pull-backs: a Grep TOOL call on the saved file names the path in the
+     tool's `path` input, which parseTranscript does not surface as `file`, so that one door is not counted
+     -- which biases the net optimistic, the direction a gate should be cautious about, so treat a clean
+     result as "none seen", not "none happened". */
   const recoveries = [];
   for (const r of parsed.results) {
     let ref = null, kind = null;
     const mf = r.file && OUT_FILE.exec(String(r.file));
     if (mf) { ref = mf[1]; kind = 'out-file'; }
-    else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]).replace(/\.txt$/, ''); kind = 'show'; } }
+    else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]); kind = 'show'; } }
     if (!kind) continue;
     recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false });
   }
 
-  /* One pass sets both flags: a recovery is matched, and its withhold is recovered, when the read's stem
-     equals the stem the guard would have written for that withhold. Exact string equality -- no containment,
-     so a shared id prefix cannot cross-attribute. */
-  for (const rec of recoveries) {
-    const w = withholds.find((x) => x.stem && x.stem === rec.ref);
-    if (w) { rec.matched = true; w.recovered = true; }
-  }
+  /* Match a pull-back to the withhold whose saved output it read, setting both flags in one pass. An out/
+     file read must EQUAL the stem the guard would have written -- exact, so a shared sid8 prefix cannot
+     cross-attribute. A `show` argument is looser by design: `show` resolves a full path, an exact stem, or a
+     unique prefix, and refuses an ambiguous one (cli.js showOutput), so mirror that -- reduce a path to its
+     stem, then take an exact stem, else a prefix that resolves to exactly one withhold; an ambiguous prefix
+     stays unattributed (counted as a pull-back, not netted). */
+  const stemFromShow = (arg) => { const m = OUT_FILE.exec(String(arg)); return m ? m[1] : String(arg).replace(/\.txt$/, ''); };
+  const attribute = (rec) => {
+    const ref = rec.kind === 'show' ? stemFromShow(rec.ref) : rec.ref;
+    if (!ref) return null;
+    const exact = withholds.filter((w) => w.stem && w.stem === ref);
+    if (exact.length) return exact[0];
+    if (rec.kind === 'show') { const pre = withholds.filter((w) => w.stem && w.stem.startsWith(ref)); if (pre.length === 1) return pre[0]; }
+    return null;
+  };
+  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; } }
 
   const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
   const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
