@@ -716,22 +716,36 @@ function recoveryReads(parsed) {
    WITHHOLD is a result the model saw carrying the guard's marker AND matching a ledger row (a trim, an MCP
    trim, or a dedup pointer): the ledger gives the original and kept sizes, so its saving is exact. It
    BACKFIRES only when the model pulls the withheld bytes back the two ways the guard itself created --
-   reading the out/<sid>-<tid>.txt file the guard saved (the trim/MCP marker names that path), or
-   `tokenbrake show <id>` (the dedup pointer names that id). Nothing else lives in out/ and no other `show`
-   exists, so a hit is the guard's own cost by construction, not an ordinary re-read.
+   reading the out/ file the guard saved (the trim/MCP marker names that path), or `tokenbrake show <id>`
+   (the dedup pointer names that id). Nothing else lives in out/ and no other `show` exists, so a hit is the
+   guard's own cost by construction, not an ordinary re-read.
 
-   The NET is the gross saving (trimSavings, the same figure the report and --cost rest on) minus what those
-   pull-backs carried, measured on the SAME basis (a footprint of size x (its own later requests + 1), so
+   Attribution is EXACT, not a substring guess: the guard names each save `<session_id[0..8]>-<tool_use_id
+   last 10, cleaned>.txt` (guard.js saveOut), so this rebuilds that stem for each withhold from its own id
+   and the session id and compares the read's stem to it whole. A dedup row's saving is its FIRST copy, saved
+   under that copy's stem, which the row carries verbatim as `sameAs` and the pointer names as the `show`
+   argument -- so a dedup withhold matches on `sameAs`. A read whose stem this session cannot rebuild (an
+   earlier session's file, a different session id) matches nothing here, which is the point of doing it whole
+   rather than by containment.
+
+   The NET is the gross saving (the same removed-tokens x carried basis trimSavings and --cost rest on) minus
+   what those pull-backs carried, measured on the SAME footprint (size x (its own later requests + 1), so
    entry and every re-read count on both sides). The verdict reads the net, not the count: ab10 established
-   that the number of trims does not predict the bill. Money is deliberately absent -- this is a token gate.
-   Read caps are reported apart, as a softer signal: a bounded re-read after a cap is partly the behaviour
-   the cap asks for, and trimSavings never counted a saving for them to net against. */
+   that the number of trims does not predict the bill, so a measured net loss is called a backfire at any
+   sample size, and only the "did it help" labels wait for MIN_WITHHOLDS results before a rate is asserted.
+   Money is deliberately absent -- this is a token gate. Only a MATCHED pull-back nets against the saving: a
+   read of a save this audit did not count as a withhold (an earlier session's out/ file, or a capped or
+   over-ceiling output that carries no marker) is a real cost but not THIS saving coming back, so netting it
+   would let the rate say "nothing backfired" while the net was silently docked -- it is reported apart
+   instead. Read caps are reported apart too, as a softer signal: a bounded re-read after a cap is partly the
+   behaviour the cap asks for, and trimSavings never counted a saving for them to net against. */
 const OUT_FILE = /(?:^|[\\/])tokenbrake[\\/]out[\\/]([^\\/]+?)\.txt$/;
 const SHOW_CMD = /(?:tokenbrake|cli\.js)\s+show\s+(\S+)/;
+const MIN_WITHHOLDS = 3;   // a chosen confidence floor: below it a "rate" is not asserted, only a measured loss
 function backfireVerdict(n, net, backfired, min) {
   if (!n) return 'nothing';
-  if (n < (min || 3)) return 'too few';
-  if (net < 0) return 'backfired';
+  if (net < 0) return 'backfired';                 // a measured net loss is real at any sample size
+  if (n < (min || MIN_WITHHOLDS)) return 'too few';
   return backfired ? 'net positive' : 'clean';
 }
 function backfireAudit(parsed, ledgerRecs, opts) {
@@ -742,7 +756,11 @@ function backfireAudit(parsed, ledgerRecs, opts) {
 
   /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND
      a ledger row (the original and kept sizes). kind is read from the row -- a dedup row carries `dedup`, an
-     MCP trim carries `mcp`, everything else is a plain trim. */
+     MCP trim carries `mcp`, everything else is a plain trim. `stem` is the exact out/ filename (minus .txt)
+     the guard would have written for this withhold: for a dedup that is the first copy's stem in `sameAs`;
+     otherwise it is rebuilt the way saveOut names it. A withhold with no rebuildable stem attributes nothing. */
+  const sid8 = String(parsed.sessionId || '').slice(0, 8);
+  const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
   const withholds = [];
   for (const r of parsed.results) {
     if (!r.marker) continue;
@@ -750,12 +768,14 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     if (!l) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
     const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
-    withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1), recovered: false });
+    withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
+      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
   }
 
   /* A pull-back: a later result that read a saved output back into context. Two shapes, both the guard's own
-     doing -- the out/ file it wrote, or `tokenbrake show`. `foot` is the token-read footprint on the same
-     basis as savedCarried: what re-entered (tokens) plus what it was then carried through (carried). */
+     doing -- the out/ file it wrote (ref = its stem), or `tokenbrake show <stem>` (ref = the argument). `foot`
+     is the token-read footprint on the same basis as savedCarried: what re-entered (tokens) plus what it was
+     then carried through (carried). */
   const recoveries = [];
   for (const r of parsed.results) {
     let ref = null, kind = null;
@@ -763,19 +783,16 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     if (mf) { ref = mf[1]; kind = 'out-file'; }
     else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]).replace(/\.txt$/, ''); kind = 'show'; } }
     if (!kind) continue;
-    recoveries.push({ kind, ref, tokens: r.tokens || 0, foot: (r.tokens || 0) + (r.carried || 0), matched: false });
+    recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false });
   }
 
-  /* Attribute by id membership, the rule showOutput resolves a `show` argument by: the out/ file is named
-     <sid>-<tid> and a `show` id is a tool_use_id or a prefix of one, so a withhold is pulled back when its
-     id appears in a recovery's ref, or the ref is a prefix of the id. Only a MATCHED pull-back nets against
-     the saving: a read of a save this audit did not count as a withhold (an earlier session's out/ file, or
-     a capped or over-ceiling output that carries no marker) is a real cost but not THIS saving coming back,
-     so netting it here would let the rate say "nothing backfired" while the net was silently docked for it.
-     It is reported apart instead. */
-  const matches = (id, ref) => !!id && !!ref && (String(ref).includes(id) || String(id).startsWith(String(ref)));
-  for (const rec of recoveries) rec.matched = withholds.some((w) => matches(w.id, rec.ref));
-  for (const w of withholds) w.recovered = recoveries.some((rec) => matches(w.id, rec.ref));
+  /* One pass sets both flags: a recovery is matched, and its withhold is recovered, when the read's stem
+     equals the stem the guard would have written for that withhold. Exact string equality -- no containment,
+     so a shared id prefix cannot cross-attribute. */
+  for (const rec of recoveries) {
+    const w = withholds.find((x) => x.stem && x.stem === rec.ref);
+    if (w) { rec.matched = true; w.recovered = true; }
+  }
 
   const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
   const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
@@ -786,7 +803,6 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const unmatchedCarried = unmatched.reduce((s, x) => s + x.foot, 0);
   const backfired = withholds.filter((w) => w.recovered).length;
   const net = savedCarried - recoveredCarried;
-  const rate = withholds.length ? backfired / withholds.length : 0;
   const verdict = backfireVerdict(withholds.length, net, backfired, opts && opts.min);
 
   const byKind = {};
@@ -794,9 +810,9 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const caps = readCaps(ledger, parsed.sessionId);
   const cls = classifyRangedReads(parsed, ledger, { sessionId: parsed.sessionId });
 
-  return { withholds, recoveries, byKind, saved, savedCarried, recoveredEvents: matched.length,
+  return { withholds, byKind, saved, savedCarried, recoveredEvents: matched.length,
     recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
-    backfired, net, rate, verdict, caps: { fired: caps.n, induced: cls.induced.length } };
+    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length } };
 }
 
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +

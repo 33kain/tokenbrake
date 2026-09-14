@@ -1536,62 +1536,79 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 }
 
 /* The Backfire Auditor (Step 0 gate): a withhold (marker + ledger row) backfires only when the model pulls
-   the withheld bytes back the two ways the guard itself makes possible -- reading its saved out/ file, or
-   `tokenbrake show <id>`. The net is the gross saving minus what those pull-backs carried, on the same
-   footprint basis; the verdict reads the net, not the count. */
+   the withheld bytes back the two ways the guard makes possible -- reading its saved out/ file, or
+   `tokenbrake show <stem>`. Attribution is EXACT: the audit rebuilds the guard's own filename
+   (<sid[0..8]>-<tool_use_id last 10, cleaned>) and compares the read's stem to it whole, so this fixture
+   builds the out/ names the SAME way saveOut does -- a matcher that compared the full id would fail here. */
 {
   console.log('\n-- backfire audit (Step 0 gate)');
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
-  const sid = 'bf-sess';
+  const sid = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789';                                 // realistic: > 8 chars
+  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it
+  const outPath = (id) => '/cfg/tokenbrake/out/' + stem(id) + '.txt';
   const reqs = (n) => Array.from({ length: n }, () => ({ model: 'claude-opus-5' }));
-  const outPath = (id) => '/cfg/tokenbrake/out/' + sid + '-' + id + '.txt';
-  /* 6 requests; three marked + ledgered withholds (A, B, C). A Read of B's saved out/ file pulls B back. */
+  const A = 'toolu_01AAAAAAAAAAAAAAAAA1', B = 'toolu_01BBBBBBBBBBBBBBBBB2', C = 'toolu_01CCCCCCCCCCCCCCCCC3';
+  /* 6 requests; three marked + ledgered trims (A, B, C). A Read of B's saved out/ file pulls B back. */
   const base = {
     sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
     results: [
-      { id: 'toolu_A', name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
-      { id: 'toolu_B', name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 500, afterReq: 1 },
-      { id: 'toolu_C', name: 'Bash', file: null, what: 'grep x src', marker: true, tokens: 500, afterReq: 2 },
-      { id: 'toolu_R', name: 'Read', file: outPath('toolu_B'), what: outPath('toolu_B'), marker: false, tokens: 3000, afterReq: 3 },
+      { id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 500, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 500, afterReq: 1 },
+      { id: C, name: 'Bash', file: null, what: 'grep x src', marker: true, tokens: 500, afterReq: 2 },
+      { id: 'toolu_R', name: 'Read', file: outPath(B), what: outPath(B), marker: false, tokens: 3000, afterReq: 3 },
     ],
   };
-  const ledger = [
-    { ev: 'post', session: sid, id: 'toolu_A', tool: 'Bash', chars: 20000, kept: 2000 },
-    { ev: 'post', session: sid, id: 'toolu_B', tool: 'Bash', chars: 20000, kept: 2000 },
-    { ev: 'post', session: sid, id: 'toolu_C', tool: 'Bash', chars: 20000, kept: 2000 },
-  ];
+  const trimRow = (id) => ({ ev: 'post', session: sid, id, tool: 'Bash', chars: 20000, kept: 2000 });
+  const ledger = [trimRow(A), trimRow(B), trimRow(C)];
   const a = T.backfireAudit(JSON.parse(JSON.stringify(base)), ledger);
   t('marker + ledger row makes a withhold, one per marked result', a.withholds.length === 3, String(a.withholds.length));
-  t('only the withhold whose saved out/ file was read is flagged recovered',
-    a.backfired === 1 && a.withholds.find(w => w.id === 'toolu_B').recovered && !a.withholds.find(w => w.id === 'toolu_A').recovered,
-    JSON.stringify(a.withholds.map(w => [w.id, w.recovered])));
+  t('a read of the guard-named out/ file attributes to that withhold (exact stem, not the full id)',
+    a.backfired === 1 && a.withholds.find(w => w.id === B).recovered && !a.withholds.find(w => w.id === A).recovered,
+    JSON.stringify(a.withholds.map(w => [w.id.slice(-4), w.recovered])));
   t('a saved-output read is one recovery event with a positive footprint', a.recoveredEvents === 1 && a.recoveredCarried > 0, JSON.stringify({ e: a.recoveredEvents, c: a.recoveredCarried }));
   t('net is gross saved-carried minus what was pulled back', a.net === a.savedCarried - a.recoveredCarried, JSON.stringify({ net: a.net, s: a.savedCarried, r: a.recoveredCarried }));
   t('a pull-back with a positive net verdicts net positive', a.verdict === 'net positive', a.verdict + ' net=' + a.net);
 
-  /* `tokenbrake show <id>` is the dedup pointer's retrieval path; it attributes by id, not by a file path. */
-  const show = JSON.parse(JSON.stringify(base));
-  show.results[3] = { id: 'toolu_S', name: 'Bash', file: null, what: 'npx tokenbrake show toolu_A', marker: false, tokens: 3000, afterReq: 3 };
-  const a2 = T.backfireAudit(show, ledger);
-  t('`tokenbrake show <id>` is detected as a pull-back and attributed by id',
-    a2.backfired === 1 && a2.withholds.find(w => w.id === 'toolu_A').recovered, JSON.stringify(a2.withholds.map(w => [w.id, w.recovered])));
+  /* An out/ read whose stem differs by even one char attributes to nothing -- exact equality, no containment. */
+  const near = JSON.parse(JSON.stringify(base));
+  near.results[3] = { id: 'toolu_R', name: 'Read', file: '/cfg/tokenbrake/out/' + stem(B).slice(0, -1) + 'Z.txt', what: '', marker: false, tokens: 3000, afterReq: 3 };
+  const an = T.backfireAudit(near, ledger);
+  t('a near-miss stem is not cross-attributed, but is counted apart', an.backfired === 0 && an.unmatchedEvents === 1, JSON.stringify({ b: an.backfired, u: an.unmatchedEvents }));
+
+  /* Dedup: the ledger row carries the FIRST copy's stem as `sameAs`, which the pointer names as the `show`
+     argument -- so a dedup withhold attributes on sameAs, not on its own id. */
+  const priorStem = sid.slice(0, 8) + '-priorcopyX';
+  const dedupTx = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [
+      { id: 'toolu_DEDUP1', name: 'Bash', file: null, what: 'cat big.log', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_SHOW', name: 'Bash', file: null, what: 'npx tokenbrake show ' + priorStem, marker: false, tokens: 3000, afterReq: 1 },
+    ] };
+  const ad = T.backfireAudit(dedupTx, [{ ev: 'post', session: sid, id: 'toolu_DEDUP1', tool: 'Bash', chars: 20000, kept: 60, dedup: true, sameAs: priorStem }], { min: 1 });
+  t('a dedup withhold is pulled back by `show <sameAs>`, not by its own id',
+    ad.backfired === 1 && ad.withholds[0].kind === 'dedup' && ad.withholds[0].recovered, JSON.stringify(ad.withholds.map(w => [w.kind, w.recovered])));
 
   const none = T.backfireAudit({ sessionId: 'z', cwd: '/w', requests: reqs(2), compactions: [],
     results: [{ id: 'x', name: 'Bash', file: null, what: 'ls', marker: false, tokens: 10, afterReq: 0 }] }, []);
   t('a session with no withholds audits to the nothing verdict', none.verdict === 'nothing' && none.withholds.length === 0, none.verdict);
 
-  /* A pull-back heavier than the saving verdicts backfired (min:1 so one withhold is enough to call it). */
-  const heavy = { sessionId: 's2', cwd: '/w', requests: reqs(6), compactions: [],
+  /* A measured net loss is a backfire at any sample size -- one withhold, a pull-back that dwarfs it. */
+  const heavy = { sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
     results: [
-      { id: 'toolu_W', name: 'Bash', file: null, what: 'cat log', marker: true, tokens: 100, afterReq: 0 },
-      { id: 'toolu_P', name: 'Read', file: outPath('toolu_W'), what: outPath('toolu_W'), marker: false, tokens: 9000, afterReq: 1 },
+      { id: A, name: 'Bash', file: null, what: 'cat log', marker: true, tokens: 100, afterReq: 0 },
+      { id: 'toolu_P', name: 'Read', file: outPath(A), what: outPath(A), marker: false, tokens: 9000, afterReq: 1 },
     ] };
-  const a3 = T.backfireAudit(heavy, [{ ev: 'post', session: 's2', id: 'toolu_W', tool: 'Bash', chars: 5000, kept: 4000 }], { min: 1 });
-  t('a pull-back that costs more than the trim saved verdicts backfired', a3.net < 0 && a3.verdict === 'backfired', JSON.stringify({ net: a3.net, v: a3.verdict }));
+  const a3 = T.backfireAudit(heavy, [{ ev: 'post', session: sid, id: A, tool: 'Bash', chars: 5000, kept: 4000 }]);
+  t('a measured net loss verdicts backfired even below the sample floor', a3.net < 0 && a3.verdict === 'backfired', JSON.stringify({ net: a3.net, v: a3.verdict }));
+
+  /* Below the floor with no loss is too little to assert a rate -- 2 clean withholds do not get a verdict. */
+  const twoTx = JSON.parse(JSON.stringify(base));
+  twoTx.results = twoTx.results.slice(0, 2);   // A, B; no recovery
+  const a2few = T.backfireAudit(twoTx, ledger);
+  t('two clean withholds are too few to call a rate', a2few.verdict === 'too few' && a2few.backfired === 0, a2few.verdict);
 
   const cleanBase = JSON.parse(JSON.stringify(base));
-  cleanBase.results = cleanBase.results.slice(0, 3);   // drop the recovery read
+  cleanBase.results = cleanBase.results.slice(0, 3);   // A, B, C; drop the recovery read
   const a4 = T.backfireAudit(cleanBase, ledger);
   t('three withholds and no pull-back verdicts clean', a4.verdict === 'clean' && a4.backfired === 0, a4.verdict);
 }

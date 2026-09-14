@@ -1061,12 +1061,14 @@ function doctor() {
    cost rests on. --all pools every session; --session=<prefix>/--transcript=<path> pick one. */
 const MODEL_ALIASES = { opus: 'claude-opus-5', sonnet: 'claude-sonnet-5', haiku: 'claude-haiku-4-5', fable: 'claude-fable-5-1' };
 
-function costReport() {
+/* Pick the session transcript(s) a report runs on, shared by --cost and --backfire so the two cannot drift.
+   --transcript=<path> and --all take precedence over --session=<prefix>; with none, the last session the
+   ledger saw (whose transcript still exists), else the newest transcript on disk. Returns { ledger, found,
+   files } or null after printing the reason -- a caller returns on null. */
+function pickSessions() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
-  const usd = (x) => x == null ? 'n/a' : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
   const ledger = loadLedger();
   const found = transcript.findTranscripts(CFG_DIR);
-
   let files = [];
   const tpath = opt('--transcript');
   const want = opt('--session');
@@ -1074,13 +1076,22 @@ function costReport() {
   else if (flag('--all')) files = found.map(f => f.file);
   else if (want) {
     const hit = found.find(f => String(f.session).startsWith(want));
-    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
+    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return null; }
     files = [hit.file];
   } else {
     const lastRow = [...ledger].reverse().find(r => r && r.transcript && fs.existsSync(r.transcript));
     files = lastRow ? [lastRow.transcript] : (found[0] ? [found[0].file] : []);
   }
-  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return null; }
+  return { ledger, found, files };
+}
+
+function costReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const usd = (x) => x == null ? 'n/a' : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
+  const picked = pickSessions();
+  if (!picked) return;
+  const { ledger, files } = picked;
 
   const modelArg = opt('--model');
   let forced = null;
@@ -1151,26 +1162,11 @@ function costReport() {
    measurement gate, and ab10's lesson is that the count of trims does not predict the saving, so it reads
    the net. Selection matches --cost: --all pools, --session=<prefix>/--transcript=<path> pick one. */
 function auditReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
-  const ledger = loadLedger();
-  const found = transcript.findTranscripts(CFG_DIR);
+  const picked = pickSessions();
+  if (!picked) return;
+  const { ledger, files } = picked;
 
-  let files = [];
-  const tpath = opt('--transcript');
-  const want = opt('--session');
-  if (tpath) files = [tpath];
-  else if (flag('--all')) files = found.map(f => f.file);
-  else if (want) {
-    const hit = found.find(f => String(f.session).startsWith(want));
-    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
-    files = [hit.file];
-  } else {
-    const lastRow = [...ledger].reverse().find(r => r && r.transcript && fs.existsSync(r.transcript));
-    files = lastRow ? [lastRow.transcript] : (found[0] ? [found[0].file] : []);
-  }
-  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
-
-  let W = 0, saved = 0, savedCarried = 0, recEvents = 0, recTokens = 0, recCarried = 0, backfired = 0, sessions = 0;
+  let W = 0, saved = 0, savedCarried = 0, recTokens = 0, recCarried = 0, backfired = 0, sessions = 0;
   let unmatchedEvents = 0, unmatchedCarried = 0;
   const byKind = {}; let capsFired = 0, induced = 0;
   for (const file of files) {
@@ -1178,7 +1174,7 @@ function auditReport() {
     sessions++;
     const a = transcript.backfireAudit(p, ledger);
     W += a.withholds.length; saved += a.saved; savedCarried += a.savedCarried;
-    recEvents += a.recoveredEvents; recTokens += a.recoveredTokens; recCarried += a.recoveredCarried;
+    recTokens += a.recoveredTokens; recCarried += a.recoveredCarried;
     unmatchedEvents += a.unmatchedEvents; unmatchedCarried += a.unmatchedCarried;
     backfired += a.backfired; capsFired += a.caps.fired; induced += a.caps.induced;
     for (const k of Object.keys(a.byKind)) byKind[k] = (byKind[k] || 0) + a.byKind[k];
