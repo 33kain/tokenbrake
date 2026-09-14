@@ -2885,3 +2885,40 @@ the `out/` file) — that is the cheap, sanctioned path and the good outcome. Ar
 **Decision rule, fixed before the run.** Flip the default to `blobElide: true` only if the blob backfire rate
 is low **and** arm B carries meaningfully fewer read token-reads than arm A. A model that Reads the saved file
 back on most firings keeps it OFF/opt-in. Burden of proof is on the flip, as with every other narrowing.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned cloud session on this branch)
+
+One ON-arm session ran the task above (`blobElide: true`) autonomously on a checkout of this branch.
+`report --backfire`:
+
+```
+Withholds: 2 (2 blob) -- ~ 6,215 tokens kept out, ~ 28,251 token-reads not carried
+Pulled back: none of the 2 withholds was read back -- backfire rate 0%
+Net: ~ 28,251 token-reads saved after backfires   (28,251 saved - 0 pulled back)
+Verdict: too few withholds to call it (need a few)
+```
+
+**2 fired, 0 backfired (0%), ~28.3k token-reads saved.** Two of the three blobs elided —
+`bundle.min.js` (one 19,601-char line) and `config.json` (one 6,035-char line), each replaced by a head +
+descriptor + saved `out/` copy. The per-firing net is clean: the task hid `targetValue` past the 160-char
+head, and the model fetched it with a targeted `jq` on the **original** `/tmp` file — not by reading the saved
+`out/` file and not by `tokenbrake show`. So the elision withheld ~28k token-reads of unreadable bytes and the
+model still got the one value it needed by the cheap, sanctioned path. That is exactly the behaviour the design
+leaves room for, and the reason blobs are a low-backfire target: the raw bytes are rarely what the model wants.
+
+**The base64 case did not go through the elider — a fixture artifact, not a miss.** `cat photo.b64` (a
+`data:image/png;base64,…` line) was intercepted by the Claude Code harness as an *image* (a resize/render error)
+before the guard's PostToolUse note could show, so its bytes never entered context and it is not one of the two
+withholds. A real base64 blob that is *not* a `data:image` URI (a base64-encoded archive, a JWT dump) would not
+trigger image handling and would elide like the other two; the fixture just picked a shape the harness treats
+specially. Worth remembering for the deferred **MCP base64** follow-up (those arrive as image content blocks,
+not shell text, and need their own path).
+
+**Decision: default stays OFF / opt-in.** The pre-registered rule wants low backfire **and** a real saving, and
+both are present (0% and ~28k token-reads) — but the verdict is `too few withholds to call it` at n = 2, the
+pattern was **forced** by the task (the blobs were created and `cat`'d on purpose, so the organic firing RATE is
+unmeasured), and it is one model. This is the same bar narrowings 1 and 2 sat at: validated *when it fires*, not
+yet a moved default. It ships as a **recommended opt-in** (`blobElide: true`). That said, it is the
+best-behaved narrowing measured so far — 0% backfire where the delta's forced run was 40% before its size gate —
+and blobs are the high-value "context bomb" case, so it is the strongest opt-in of the three. Flipping the
+default would need an organic session (no created-on-purpose blobs) showing it fires and nets a saving on its own.
