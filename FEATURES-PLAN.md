@@ -189,22 +189,27 @@ grandfathered, to be cleaned up later, not extended).
   (a base64 dump, a minified bundle, a one-line JSON) is unreadable to the model as bytes yet re-enters context
   every request until compaction. `handlePost` (after shaping, before the size cap and the excerpt handling)
   replaces it with the first `blobKeepChars` (160) + a descriptor + a saved `out/` copy. The trigger is content,
-  not size: `text.length >= blobMinChars` (4,000) AND the **single longest line** `>= blobMaxLine` (2,000) AND
-  `>= blobLineShare` (0.5) of the whole — so it fires on a blob whether over or under `maxChars`, catching an
-  excerpt under `readMaxBytes` (passed whole today) and cutting an over-`maxChars` blob to a descriptor instead
-  of the `maxChars`-of-garbage the char-slice keeps. The longest-line-share test discriminates a single
-  encoded/minified run from wide-but-structured data (CSV, tables — many wide lines, none dominant) and from
-  prose/logs/pretty JSON (short lines); a failed command is never elided. `blobElide` default false. **No
+  not size: `text.length >= blobMinChars` (4,000) AND the **single longest line** is `>= blobLineShare` (0.5) of
+  the whole — one dominance ratio, which also makes that line necessarily long (>= `blobMinChars * blobLineShare`
+  = 2,000). So it fires on a blob whether over or under `maxChars`, catching an excerpt under `readMaxBytes`
+  (passed whole today) and cutting an over-`maxChars` blob to a descriptor instead of the `maxChars`-of-garbage
+  the char-slice keeps. The longest-line-share test discriminates a single encoded/minified run from
+  wide-but-structured data (CSV, tables — many wide lines, none dominant) and from prose/logs/pretty JSON (short
+  lines); a failed command is never elided. `blobElide` default false. **No
   narrowing-3 audit code:** the row is `ev:'post'` with `blob:true` + marker + saved `out/`, so the existing
   withhold/pull-back machinery counts it (labelled `blob` in `report --backfire` byKind) and a re-read of the
   saved file as a backfire. `maxLineLen` is a no-alloc longest-line scan. 12 new checks. A/B gates the default.
   - **Deferred follow-ups (recorded, not built):** (1) a **`Read` of a one-line minified file** — the highest
     single-firing waste — cannot be narrowed the way the other Read narrowings are: `updatedInput.limit` is a
-    *line* count, so `limit:1` still delivers the whole giant line, and a `Read` result never reaches
-    `handlePost`. Closing it needs `Read`'s PostToolUse response shape verified first (the "verify the shape
-    before you build on it" lesson), else a silent no-op. (2) **MCP base64 results** — the MCP branch returns
-    before the blob check; eliding a base64 image block there means going through `mcpBody`/`rebuild`, its own
-    change. Both waited on rather than bundled here.
+    *line* count, so `limit:1` still delivers the whole giant line. A `Read` result *does* reach `handlePost`
+    (the PostToolUse matcher is `*`), but as a no-op — every branch is gated on `isShell`/`isMcp` — so closing
+    this means intercepting Read there, which needs `Read`'s PostToolUse response shape verified first (the
+    "verify the shape before you build on it" lesson), else a silent no-op. (2) **MCP base64 results** — the MCP
+    branch returns before the blob check; eliding a base64 image block there means going through
+    `mcpBody`/`rebuild`, its own change. (3) When either lands, the shared `saveOut → descriptor → shaped
+    `updatedToolOutput` → emit` scaffold (now in the dedup/excerpt/trim/blob branches) is worth one helper, and
+    the guard writing an explicit `kind` on the ledger row would retire the auditor's flag-chain kind ternary.
+    All waited on rather than bundled here.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,

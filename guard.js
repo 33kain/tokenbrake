@@ -43,8 +43,7 @@ const DEFAULTS = {
   reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
   blobElide: false,      // OFF by default: replace blob-like shell output (a base64 dump, a minified bundle, a one-line JSON) with a short descriptor + a saved copy; A/B before flipping
   blobMinChars: 4000,    // don't treat output smaller than this as a blob worth eliding
-  blobMaxLine: 2000,     // the longest line must be at least this many chars (prose, logs and pretty-printed JSON are far shorter)
-  blobLineShare: 0.5,    // and that longest line must be at least this fraction of the output -- a single encoded/minified run, so wide multi-line data (CSV, tables) is left alone
+  blobLineShare: 0.5,    // the longest line must be at least this fraction of the output -- a single encoded/minified run, not wide multi-line data (CSV, tables). Sets the effective longest-line floor too: blobMinChars * blobLineShare (2000 at defaults)
   blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
@@ -574,14 +573,16 @@ function handlePost(input, cfg) {
      model can see what it was and Read the file back if it truly needs the bytes. Fires whether or not the
      output is over maxChars: an excerpt under readMaxBytes and a below-threshold blob both pass whole otherwise,
      and even an over-maxChars blob keeps maxChars of garbage under the char-slice above -- the descriptor keeps
-     a few. Off by default (blobElide); noTrim already returned above. The tell is one very long line that is
-     most of the output (blobMaxLine + blobLineShare): wide-but-structured data (CSV, tables) has many wide
-     lines, none dominant, and is left alone. Not on a failed command -- an error is wanted whole and rarely a
-     blob. Logged as ev:'post' with blob:true; a plain trim to the backfire audit (marker + saved out/), so
-     report --backfire counts it and a re-read of the saved file as a pull-back with no new machinery. */
+     a few. Off by default (blobElide); noTrim already returned above. The tell is that one line is most of the
+     output (blobLineShare): a big output (>= blobMinChars) whose longest line is at least that fraction of it is
+     a single encoded/minified run, so the line is necessarily long (>= blobMinChars * blobLineShare), while
+     wide-but-structured data (CSV, tables) has many wide lines, none dominant, and is left alone. Not on a
+     failed command -- an error is wanted whole and rarely a blob. Logged as ev:'post' with blob:true; a plain
+     trim to the backfire audit (marker + saved out/), so report --backfire counts it and a re-read of the saved
+     file as a pull-back with no new machinery. */
   if (isShell && !failed && cfg.blobElide && text.length >= cfg.blobMinChars) {
     const ml = maxLineLen(text);
-    if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
+    if (ml >= text.length * cfg.blobLineShare) {
       const saved = saveOut(input, text);
       const head = text.slice(0, cfg.blobKeepChars);
       const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
