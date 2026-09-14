@@ -759,6 +759,7 @@ function report() {
   if (flag('--reads')) return readsReport();
   if (flag('--reach')) return reachReport();
   if (flag('--cost')) return costReport();
+  if (flag('--backfire')) return auditReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -1143,6 +1144,84 @@ function costReport() {
   console.log('\n  Dollar figures use the API usage recorded in the transcript, at list price (cache writes at the 1h rate); a model not in the price table is excluded.');
 }
 
+/* The Backfire Auditor (roadmap Step 0): the gate a narrowing has to pass before its default can move. For
+   the picked session(s) it counts what the guard withheld (trims, MCP, dedup), how much of that the model
+   then pulled back the two ways the guard itself created (its saved out/ file, or `tokenbrake show`), and
+   the NET -- token-reads saved minus token-reads carried back in. Tokens only, never dollars: this is a
+   measurement gate, and ab10's lesson is that the count of trims does not predict the saving, so it reads
+   the net. Selection matches --cost: --all pools, --session=<prefix>/--transcript=<path> pick one. */
+function auditReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+
+  let files = [];
+  const tpath = opt('--transcript');
+  const want = opt('--session');
+  if (tpath) files = [tpath];
+  else if (flag('--all')) files = found.map(f => f.file);
+  else if (want) {
+    const hit = found.find(f => String(f.session).startsWith(want));
+    if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
+    files = [hit.file];
+  } else {
+    const lastRow = [...ledger].reverse().find(r => r && r.transcript && fs.existsSync(r.transcript));
+    files = lastRow ? [lastRow.transcript] : (found[0] ? [found[0].file] : []);
+  }
+  if (!files.length) { console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+
+  let W = 0, saved = 0, savedCarried = 0, recEvents = 0, recTokens = 0, recCarried = 0, backfired = 0, sessions = 0;
+  let unmatchedEvents = 0, unmatchedCarried = 0;
+  const byKind = {}; let capsFired = 0, induced = 0;
+  for (const file of files) {
+    let p; try { p = transcript.parseTranscript(file); } catch { continue; }
+    sessions++;
+    const a = transcript.backfireAudit(p, ledger);
+    W += a.withholds.length; saved += a.saved; savedCarried += a.savedCarried;
+    recEvents += a.recoveredEvents; recTokens += a.recoveredTokens; recCarried += a.recoveredCarried;
+    unmatchedEvents += a.unmatchedEvents; unmatchedCarried += a.unmatchedCarried;
+    backfired += a.backfired; capsFired += a.caps.fired; induced += a.caps.induced;
+    for (const k of Object.keys(a.byKind)) byKind[k] = (byKind[k] || 0) + a.byKind[k];
+  }
+  /* A read of a saved output this audit could not tie to a withhold it counted -- an earlier session's out/
+     file, or a capped/over-ceiling output that carries no marker. Real token-reads, but not this session's
+     saving coming back, so it is reported apart from the net rather than silently docking it. */
+  const alsoBack = () => { if (unmatchedEvents) console.log('  Also pulled back (not tied to a withhold here): '
+    + unmatchedEvents + ' saved-output read(s) -- ~ ' + fmt(unmatchedCarried)
+    + ' token-reads, from an earlier session or a capped/over-ceiling output'); };
+
+  console.log('Backfire audit -- ' + sessions + ' session(s)');
+  if (!W) {
+    console.log('  No withholds in these session(s) -- nothing to audit (the guard trimmed nothing that carried its marker here).');
+    alsoBack();
+    if (capsFired) console.log('  Read caps fired: ' + capsFired + (induced ? ', ' + induced + ' later ranged read(s) followed a cap on the same file' : ''));
+    console.log('\n  A withhold is a trim, MCP trim or dedup the model saw. Turn a narrowing on and run a session, then this says whether it paid off.');
+    return;
+  }
+  const kinds = Object.entries(byKind).map(([k, n]) => n + ' ' + k).join(', ');
+  console.log('  Withholds: ' + W + ' (' + kinds + ') -- ~ ' + fmt(saved) + ' tokens kept out, ~ ' + fmt(savedCarried) + ' token-reads not carried');
+  const rate = Math.round(100 * backfired / W);
+  if (backfired) {
+    console.log('  Pulled back: ' + backfired + ' of ' + W + ' withheld outputs were read back (a saved out/ file, or `show`) -- backfire rate ' + rate + '%');
+    console.log('    ~ ' + fmt(recTokens) + ' tokens re-entered, ~ ' + fmt(recCarried) + ' token-reads carried back in');
+  } else {
+    console.log('  Pulled back: none of the ' + W + ' withholds was read back -- backfire rate 0%');
+  }
+  alsoBack();
+  const net = savedCarried - recCarried;
+  console.log('  Net: ~ ' + fmt(net) + ' token-reads ' + (net < 0 ? 'LOST' : 'saved') + ' after backfires   (' + fmt(savedCarried) + ' saved - ' + fmt(recCarried) + ' pulled back)');
+  const verdict = transcript.backfireVerdict(W, net, backfired);
+  const say = { nothing: 'nothing to audit', 'too few': 'too few withholds to call it (need a few)',
+    backfired: 'BACKFIRED -- the pull-backs cost more than the trims saved', 'net positive': 'net positive despite backfires',
+    clean: 'clean -- nothing was pulled back' }[verdict] || verdict;
+  console.log('  Verdict: ' + say);
+  if (capsFired) console.log('  Read caps (softer signal, reported apart): ' + capsFired + ' fired; ' + induced
+    + ' later ranged read(s) followed a cap on the same file -- a bounded re-read is partly what the cap asks for');
+  console.log('\n  A withhold backfires when the model retrieves what was withheld -- the two ways the guard creates it: reading the'
+    + '\n  saved out/ file, or `tokenbrake show`. This is the gate for turning a narrowing on: a narrowing whose net is'
+    + '\n  negative is spending tokens, not saving them. Token-reads only; --cost is where dollars live.');
+}
+
 function help() {
   console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
 
@@ -1184,6 +1263,9 @@ function help() {
       --cost [--model=<id>]           the session at list price, broken down by token type and model, with
                                       the guard's saving in dollars; --model reprices the same tokens at
                                       another model's rate (opus|sonnet|haiku|fable, or a full claude-* id)
+      --backfire                      the Backfire Auditor: what the guard withheld, how much the model then
+                                      pulled back (its saved out/ file, or 'show'), and the NET token-reads
+                                      saved. The gate a narrowing passes before its default moves. Tokens only
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);

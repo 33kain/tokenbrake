@@ -710,6 +710,95 @@ function recoveryReads(parsed) {
   return out;
 }
 
+/* Step 0 of the narrowing roadmap: the gate that decides whether a withhold saved tokens or backfired.
+   recoveryReads above is the raw signal -- every time the model came back to a file it had read -- and it
+   can only say "some of these" were the guard's doing. This attributes the cost to the guard exactly. A
+   WITHHOLD is a result the model saw carrying the guard's marker AND matching a ledger row (a trim, an MCP
+   trim, or a dedup pointer): the ledger gives the original and kept sizes, so its saving is exact. It
+   BACKFIRES only when the model pulls the withheld bytes back the two ways the guard itself created --
+   reading the out/<sid>-<tid>.txt file the guard saved (the trim/MCP marker names that path), or
+   `tokenbrake show <id>` (the dedup pointer names that id). Nothing else lives in out/ and no other `show`
+   exists, so a hit is the guard's own cost by construction, not an ordinary re-read.
+
+   The NET is the gross saving (trimSavings, the same figure the report and --cost rest on) minus what those
+   pull-backs carried, measured on the SAME basis (a footprint of size x (its own later requests + 1), so
+   entry and every re-read count on both sides). The verdict reads the net, not the count: ab10 established
+   that the number of trims does not predict the bill. Money is deliberately absent -- this is a token gate.
+   Read caps are reported apart, as a softer signal: a bounded re-read after a cap is partly the behaviour
+   the cap asks for, and trimSavings never counted a saving for them to net against. */
+const OUT_FILE = /(?:^|[\\/])tokenbrake[\\/]out[\\/]([^\\/]+?)\.txt$/;
+const SHOW_CMD = /(?:tokenbrake|cli\.js)\s+show\s+(\S+)/;
+function backfireVerdict(n, net, backfired, min) {
+  if (!n) return 'nothing';
+  if (n < (min || 3)) return 'too few';
+  if (net < 0) return 'backfired';
+  return backfired ? 'net positive' : 'clean';
+}
+function backfireAudit(parsed, ledgerRecs, opts) {
+  carry(parsed);
+  const ledger = ledgerRecs || [];
+  const idx = ledgerIndex(ledger, parsed.sessionId);
+  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+
+  /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND
+     a ledger row (the original and kept sizes). kind is read from the row -- a dedup row carries `dedup`, an
+     MCP trim carries `mcp`, everything else is a plain trim. */
+  const withholds = [];
+  for (const r of parsed.results) {
+    if (!r.marker) continue;
+    const l = offeredOf(r);
+    if (!l) continue;
+    const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
+    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
+    withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1), recovered: false });
+  }
+
+  /* A pull-back: a later result that read a saved output back into context. Two shapes, both the guard's own
+     doing -- the out/ file it wrote, or `tokenbrake show`. `foot` is the token-read footprint on the same
+     basis as savedCarried: what re-entered (tokens) plus what it was then carried through (carried). */
+  const recoveries = [];
+  for (const r of parsed.results) {
+    let ref = null, kind = null;
+    const mf = r.file && OUT_FILE.exec(String(r.file));
+    if (mf) { ref = mf[1]; kind = 'out-file'; }
+    else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]).replace(/\.txt$/, ''); kind = 'show'; } }
+    if (!kind) continue;
+    recoveries.push({ kind, ref, tokens: r.tokens || 0, foot: (r.tokens || 0) + (r.carried || 0), matched: false });
+  }
+
+  /* Attribute by id membership, the rule showOutput resolves a `show` argument by: the out/ file is named
+     <sid>-<tid> and a `show` id is a tool_use_id or a prefix of one, so a withhold is pulled back when its
+     id appears in a recovery's ref, or the ref is a prefix of the id. Only a MATCHED pull-back nets against
+     the saving: a read of a save this audit did not count as a withhold (an earlier session's out/ file, or
+     a capped or over-ceiling output that carries no marker) is a real cost but not THIS saving coming back,
+     so netting it here would let the rate say "nothing backfired" while the net was silently docked for it.
+     It is reported apart instead. */
+  const matches = (id, ref) => !!id && !!ref && (String(ref).includes(id) || String(id).startsWith(String(ref)));
+  for (const rec of recoveries) rec.matched = withholds.some((w) => matches(w.id, rec.ref));
+  for (const w of withholds) w.recovered = recoveries.some((rec) => matches(w.id, rec.ref));
+
+  const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
+  const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
+  const matched = recoveries.filter((x) => x.matched);
+  const recoveredTokens = matched.reduce((s, x) => s + x.tokens, 0);
+  const recoveredCarried = matched.reduce((s, x) => s + x.foot, 0);
+  const unmatched = recoveries.filter((x) => !x.matched);
+  const unmatchedCarried = unmatched.reduce((s, x) => s + x.foot, 0);
+  const backfired = withholds.filter((w) => w.recovered).length;
+  const net = savedCarried - recoveredCarried;
+  const rate = withholds.length ? backfired / withholds.length : 0;
+  const verdict = backfireVerdict(withholds.length, net, backfired, opts && opts.min);
+
+  const byKind = {};
+  for (const w of withholds) byKind[w.kind] = (byKind[w.kind] || 0) + 1;
+  const caps = readCaps(ledger, parsed.sessionId);
+  const cls = classifyRangedReads(parsed, ledger, { sessionId: parsed.sessionId });
+
+  return { withholds, recoveries, byKind, saved, savedCarried, recoveredEvents: matched.length,
+    recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
+    backfired, net, rate, verdict, caps: { fired: caps.n, induced: cls.induced.length } };
+}
+
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +
    cache reads + cache writes), so summing those is the total the session has actually processed, and the
    LAST request's figure is roughly what the context holds right now. cacheRead over the total is how much
@@ -1351,7 +1440,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, readFileOf, readTargets, dominantModel,
+module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets, dominantModel,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,

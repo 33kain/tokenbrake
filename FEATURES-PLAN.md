@@ -111,3 +111,30 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     truly needs a shared pure trim module (simulation calls the engine from `cli.js`); it also changes the
     single-file install (copy both files, drift-check both, pin both in `test.mjs`), so it is done right before
     simulation, not before.
+
+## The flowchart phase — narrow the request, not just the response
+
+The ten features above trim the *response* (PostToolUse). The next direction narrows the *request*
+(PreToolUse): a semantically-targeted narrow result has a lower recovery-read rate than a generic head/tail
+trim, so lower net carried tokens — but a wrong narrowing forces a costlier full re-run, so a narrowing ships
+only where the need is predictable and only after it is validated. Measured in **tokens** throughout, never
+money (that is a hard rule; the `$` in `report --cost`, `PRICES` and the older AB-TASK/README language is
+grandfathered, to be cleaned up later, not extended).
+
+- **Step 0 — Backfire Auditor. DONE.** The gate every narrowing passes before its default moves. It is not a
+  narrowing itself and changes nothing that enters context, so it ships on like Wave 1 (no A/B). `report
+  --backfire` (`transcript.backfireAudit`): counts what the guard **withheld** (a result carrying the marker
+  matched to a ledger row — a trim, MCP trim or dedup) against what the model then **pulled back** the two
+  ways the guard itself creates — reading the saved `out/<sid>-<tid>.txt` file, or `tokenbrake show <id>` —
+  and reports the backfire rate and the **net** (saved token-reads − pulled-back token-reads, same footprint
+  basis on both sides). A pull-back it cannot tie to a withhold counted here (an earlier session's `out/`
+  file, or a capped/over-ceiling output with no marker) is reported apart, never silently netted — the fix
+  for the first real-session run, where a 0% rate was docking the net for cross-session reads. Built on the
+  existing engine (`trimSavings`, `ledgerIndex`, `classifyRangedReads`, `recoveryReads`); tokens only; 9 new
+  checks. Every later narrowing follows the save-to-`out/` + marker pattern, so its backfires are `out/` reads
+  the same detector already catches — which is why this is Step 0.
+- **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Read-After-Edit
+  Delta, Grep-Anchored Reads, Dependency Surface Reader, Change-Aware Git View, API/JSON Field Projection;
+  plus Instruction Diet Compiler, In-Window Overlap Trimmer, Personalized Auto-Tuner (the report engine
+  already holds most of it), Deterministic Replay Simulator (rides the `trim.js` extraction), Binary-Blob
+  Elider.

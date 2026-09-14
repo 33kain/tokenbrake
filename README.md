@@ -221,6 +221,7 @@ npx tokenbrake report --reads             # every file you read whole -- the evi
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
 npx tokenbrake report --cost              # the session in dollars, by token type and model, plus the saving
 npx tokenbrake report --cost --model=sonnet   # reprice the same tokens as if it had run on another model
+npx tokenbrake report --backfire          # what the guard withheld vs. what the model pulled back -- the net
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -271,6 +272,19 @@ they no longer sit in) and, with `--model=<id>` (`opus`/`sonnet`/`haiku`/`fable`
 reprices the very same tokens at another model's rate — the what-would-this-have-cost-on-X question. A model
 the price table does not know is excluded rather than guessed; prices change, so treat it as list price, not a
 bill.
+
+`--backfire` is the honest counterweight to the saving line, and it is measured in **tokens only** — no
+dollars. A trim, MCP trim or dedup keeps content out of context, but a trim can also send the model back for
+what was cut, and a return trip that re-reads the whole saved output can cost more than the cut saved. This
+view counts what the guard **withheld** (each result the model saw carrying the marker, matched to a ledger
+row for its original and kept size) against what the model then **pulled back** — the two ways the guard
+itself makes that possible: reading the `out/` file it saved, or `tokenbrake show`. Those are the guard's own
+cost by construction, unlike a plain re-read, which the ranking counts but cannot attribute. It reports the
+**backfire rate** (how many withheld outputs were read back) and the **net** — token-reads saved minus
+token-reads carried back in, on the same footprint basis on both sides. A read of a saved output it can't tie
+to a withhold here (an earlier session's file, or a capped output that carries no marker) is reported apart,
+never silently netted. This is the gate a narrowing has to pass before its default moves: a narrowing whose
+net is negative is spending tokens, not saving them.
 
 ## Against Claude Code's compaction
 
