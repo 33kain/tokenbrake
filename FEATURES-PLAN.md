@@ -228,6 +228,19 @@ grandfathered, to be cleaned up later, not extended).
   withhold/pull-back machinery counts it (kind `gitview`) with no new audit code. `gitView` default false.
   Not on a failed command. 13 new checks. The **frequency** play (git is constant in dev sessions) to the blob
   elider's **context-bomb** play; A/B gates the default. Pure string work, no git invocation.
+  - **Review follow-ups (deferred, cross-cutting — not narrowing 4's own bugs):** (1) the
+    `(resp && typeof resp === 'object') ? { ...resp, stdout, stderr:'' } : body` shape is now inlined ~4× (dedup,
+    blob, gitview, shaped-passthrough) — a one-line `shellReplace(resp, body)` helper would DRY it across all
+    four. (2) With `blob`/`gitview` the withhold-kind ternary in `transcript.js` is now 4 deep and every new kind
+    costs a guard boolean + a ternary branch in lockstep; the fix is the guard writing an explicit `kind` on the
+    ledger row and the auditor reading it. But the ledger is an on-disk format read across versions and the
+    guard is a copied single file that can't import `transcript.js`, so the switch needs a legacy-boolean
+    fallback (more code during transition) and re-touches every prior kind — so it lands as its **own
+    separately-reviewed commit**, best before/alongside narrowing 5, not bundled into a default-OFF feature step.
+    (3) Known fail-safe imprecision (matches the `noTrim`/`alwaysCap` substring convention): `gitCollapse`
+    substrings can false-positive (`.map` inside `a.mapper.js`), and `GIT_DIFF` misses `git --no-pager diff` and
+    aliases — worst case is a real-source hunk collapsed but header-kept/`+/-`-summarized/saved (recoverable and
+    audit-visible), or simply no collapse; acceptable for a default-OFF, A/B-gated narrowing.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field

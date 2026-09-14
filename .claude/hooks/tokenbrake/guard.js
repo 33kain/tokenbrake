@@ -487,18 +487,22 @@ function collapseGitDiff(text, patterns) {
     const m = /^diff --git a\/(.+?) b\/(.+)$/m.exec(sec);
     const file = m ? m[2].trim() : null;
     if (!file || !matchesAny(patterns, file)) return sec;
-    let adds = 0, dels = 0;
-    for (const line of sec.split('\n')) {
-      if (line.startsWith('+') && !line.startsWith('+++')) adds++;
-      else if (line.startsWith('-') && !line.startsWith('---')) dels++;
+    let adds = 0, dels = 0;                                    // count +/- line-starts without allocating a split
+    for (let i = 0; i < sec.length; ) {
+      const c = sec.charCodeAt(i);
+      if (c === 43 && !sec.startsWith('+++', i)) adds++;        // '+' content line, not the +++ file header
+      else if (c === 45 && !sec.startsWith('---', i)) dels++;   // '-' content line, not the --- file header
+      const nl = sec.indexOf('\n', i);
+      if (nl === -1) break;
+      i = nl + 1;
     }
     if (adds + dels === 0) return sec;   // rename/mode change only -- no hunks to collapse
     collapsed++;
     const nl = sec.indexOf('\n');
     const firstLine = nl === -1 ? sec : sec.slice(0, nl);   // the `diff --git a/… b/…` header, kept
     return `${firstLine}\n[tokenbrake] +${adds}/-${dels} lines, diff collapsed (generated/lockfile path)\n`;
-  }).join('');
-  return { text: out, collapsed };
+  });
+  return collapsed ? { text: out.join(''), collapsed } : { text, collapsed: 0 };   // no join/copy when nothing collapsed
 }
 
 function handlePost(input, cfg) {
@@ -641,15 +645,17 @@ function handlePost(input, cfg) {
      to the normal trim below. Not on a failed command. */
   if (isShell && !failed && cfg.gitView && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''))) {
     const g = collapseGitDiff(text, cfg.gitCollapse);
-    if (g.collapsed && g.text.length < text.length) {
+    /* Act only when a collapse shrank the diff AND the collapsed body will fit the hook cap -- the margin leaves
+       room for the summary note + saved path, so the emitted body can't be truncated. A still-huge all-real-
+       source diff falls through to the normal trim below. Saving AFTER this gate (not before) is what keeps that
+       fall-through from writing the out/ file twice. */
+    if (g.collapsed && g.text.length < text.length && g.text.length <= HOOK_OUTPUT_CAP - 500) {
       const saved = saveOut(input, text);
       const body = `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
-      if (body.length <= HOOK_OUTPUT_CAP) {
-        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
-        const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
-        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
-        return;
-      }
+      log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+      const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
+      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
+      return;
     }
   }
 
