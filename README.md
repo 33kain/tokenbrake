@@ -456,6 +456,19 @@ a wrong guess costs one ranged re-read, not lost data; that re-read is a **delta
 `report --backfire` counts (`Read-After-Edit deltas: N fired; M sent the model back`). Off until an A/B moves
 it — the gate is the whole reason to measure before flipping.
 
+`reReadElide` (default `false`) is the sibling for the other common re-send: re-reading a file you already read
+this session. When you `Read` a file **whole**, the guard remembers its size and mtime (a per-session file
+under `reads/`); if you re-`Read` the same file **unbounded** while it is **unchanged** and the re-read is
+**recent** (fewer than `reReadRecency`, default 8, whole-reads since), it hands back only the first
+`reReadKeepLines` (default 5) plus a one-line note, instead of re-adding the whole file you likely still have.
+(It saves no artifact — the file is still on disk, so a wider read is one `offset`/`limit` away.) It
+only fires for files read whole (a capped first read means you don't have all of it), and any edit or external
+write changes the size or mtime so the equality check fails and the read-after-edit delta handles the edit case
+instead. Its one real risk is a **compaction** between the two reads — which the guard does not consult — that
+dropped the content; `reReadRecency` *mitigates* that (it limits elision to still-fresh reads, it is not a
+compaction bound), and a re-read that has to go back for the file anyway is a **backfire** `report --backfire`
+counts (`Re-read elisions: N fired; M sent the model back`). Off until an A/B moves it.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,
