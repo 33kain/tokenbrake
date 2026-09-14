@@ -2707,3 +2707,61 @@ Deliberately **not done:** more pairs. ab10 already showed that on a design wher
 size, extra pairs mostly measure the agent's mood. Quantifying `mcpTrim` would need a lower-variance design
 (Experiment-A style: measure the trim on a fixed result directly), which the mechanism tests in `test.mjs`
 already do for the rewrite itself.
+
+## Read-After-Edit Delta (narrowing 1) — the A/B protocol
+
+`readAfterEdit` narrows an **unbounded Read of a file the model just edited** to the changed region + context.
+It ships **OFF**; this A/B is the gate for the default, and it is read straight off `tokenbrake report
+--backfire` (the delta line — token-reads, no dollars), so unlike the arms above it does not depend on the
+usage page.
+
+**What the delta needs to fire, and where the code must live.** The guard a session runs is the committed
+copy of the checkout it started on, so the delta only exists in a session whose checkout carries this feature
+(this branch, or `main` once merged) — a config flip alone cannot add the knob to an older guard. Both arms
+differ **only** by a step-0 config write, exactly as the Opus round does.
+
+**Two questions, kept apart.**
+1. *Per-firing net* — when the verify re-read happens, does narrowing it help or send the model back? The task
+   below forces the re-read so this is measured cleanly and repeatably.
+2. *Firing rate* — how often the pattern happens on its own. The Claude Code harness tells the model not to
+   re-read a file it just edited, so on Opus the organic rate may be low; a run of ordinary edit work with the
+   delta on, reading only the `deltas fired` count, answers this. A low rate is a real finding, not a failure:
+   it bounds how much the delta can ever save on that model.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It edits **scratch copies**, so it
+is fully reversible and repeatable:
+
+```
+Edit-heavy task. Do every step with tools, in order. At the end write the final answer in step 6.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"readAfterEdit": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"readAfterEdit": true}'  > ~/.claude/tokenbrake.json
+1. Copy the repo's guard.js, cli.js and transcript.js into /tmp/abwork/ (as guard.js, cli.js, transcript.js). Work only on those copies; do not touch the repo's own files.
+2. Make each of these edits with the Edit tool, and AFTER each edit Read the whole file you just edited to confirm the change before the next step:
+   a. /tmp/abwork/guard.js: change the DEFAULTS value maxChars from 6000 to 7000.
+   b. /tmp/abwork/guard.js: change headLines from 40 to 48.
+   c. /tmp/abwork/guard.js: change tailLines from 40 to 48.
+   d. /tmp/abwork/cli.js: in the help text, change the word "trims" to "trim" in the first line.
+   e. /tmp/abwork/cli.js: change the clean default of 7 days to 14 in the help text.
+   f. /tmp/abwork/transcript.js: change CHARS_PER_TOKEN from 4 to 4 (a no-op edit is fine; still Read to verify).
+   g. /tmp/abwork/transcript.js: change the TRIM_CHARS constant from 6000 to 7000.
+3. Run `node /tmp/abwork/cli.js --help` (it will fail harmlessly; that is fine) and move on.
+4. Run `git status --short` in the repo and confirm it reports no changes to tracked files.
+5. Run `cat ~/.claude/tokenbrake.json`.
+6. Run `node cli.js report --backfire` in the repo and paste its full output verbatim, then the outputs of steps 4 and 5.
+
+Final answer: the number of edits you made, whether any re-read was narrowed (you will see a tokenbrake note in the read result), and the pasted outputs of steps 5 and 6.
+```
+
+**What the comparison reads.** From step 6, arm B's `report --backfire` line: `Read-After-Edit deltas: N
+fired; M sent the model back`. The read the delta narrowed on each verify is the *fired* count; a `sent the
+model back` is a backfire (the verify needed more than the region, or a later read of the file landed outside
+it). Arm A is the baseline: with the delta off, `deltas fired` is 0 and the same reads enter whole. Compare
+the two arms' `report` — context processed, tool results entered/carried — for the net; the delta pays off
+when arm B carries fewer read token-reads with `M` small against `N`. A human-run pair can also read the
+five-hour window per arm as the other rounds do; it is secondary here because the delta line is exact.
+
+**Decision rule, fixed before the run.** Flip the default to `readAfterEdit: true` only if, across the run,
+`M/N` (backfire rate) is low **and** arm B's carried read token-reads are meaningfully below arm A's. A high
+`M`, or no measurable carry difference, keeps it OFF and opt-in. As with `mcpTrim`, the burden of proof is on
+the flip.
