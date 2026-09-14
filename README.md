@@ -375,7 +375,9 @@ empty by default, so neither changes anything until you set it:
 
 - `noTrim` — an allowlist. A shell command or a read path matching any of these is left **whole**: the
   `git diff` you always want in full, a schema or a fixture a trimmed view would ruin. For an `mcp__*` result
-  it matches the tool name, so `"mcp__github__get_file_contents"` spares one MCP tool from `mcpTrim`.
+  only an **`mcp__`-shaped** entry applies — `"mcp__github__get_file_contents"` (or a prefix like
+  `"mcp__github"`) spares that MCP tool from `mcpTrim`, while a command entry like `"git"` stays scoped to
+  shell and never bleeds into a tool name such as `mcp__github__…`.
 - `alwaysCap` — the other direction. A read (or a `cat`/`sed` excerpt) whose path matches is capped at
   `readLimitLines` **even when it is under `readMaxBytes`**: a lockfile, a `*.min.js`, a generated bundle you
   never want whole.

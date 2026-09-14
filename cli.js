@@ -1024,7 +1024,11 @@ function doctor() {
   const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
   if (fs.existsSync(cfgPath)) {
     try { const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      if (c.enabled === false) problems.push({ sev: 'warn', msg: 'guard is disabled in config (enabled:false); it runs but changes nothing', fix: 'node cli.js preset balanced, or set enabled:true' });
+      if (c.enabled === false) {
+        problems.push({ sev: 'warn', msg: 'guard is disabled in config (enabled:false): it returns immediately and records nothing', fix: 'node cli.js preset balanced, or set enabled:true' });
+        const reEnabled = c.tools && typeof c.tools === 'object' ? Object.keys(c.tools).filter(t => c.tools[t] && c.tools[t].enabled === true) : [];
+        if (reEnabled.length) problems.push({ sev: 'warn', msg: `tools.{${reEnabled.join(', ')}}.enabled:true cannot re-enable a globally disabled guard -- the base enabled:false returns before per-tool config applies`, fix: 'set the base enabled:true and disable the tools you do not want instead' });
+      }
     } catch { problems.push({ sev: 'error', msg: `${cfgPath} is not valid JSON; the guard silently falls back to defaults`, fix: 'fix the JSON or delete the file' }); }
   }
 
