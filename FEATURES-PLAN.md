@@ -94,9 +94,9 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     9,145, full output saved). A side finding: the guard's *content* is re-read from disk on each hook spawn, so
     `init --project` + a live call verifies the accept side in-session — no fresh container needed. **A/B measured
     2026-09-14** (AB-TASK.md, "MCP tool-output trimming", Opus, two single pairs): `mcpTrim` on **helped a glance
-    workload** (−25% cost, −18.5% context) and **hurt a content-hungry one** (+46% cost, recovery reads) — both
-    within or near this repo's own identical-arm noise (ab10: ±30% cost / ±42% tokens), so only the *direction*
-    is quoted, no magnitude. **Default stays OFF** (the burden of proof is on the flip, not on staying off);
+    workload** and **hurt a content-hungry one** (recovery reads). The raw deltas (glance −25% cost / −18.5%
+    context; content-heavy +46% cost) are within this repo's own identical-arm noise (ab10: ±30% cost / ±42%
+    tokens) — read only the *direction*, not the magnitude. **Default stays OFF** (the burden of proof is on the flip, not on staying off);
     ships **opt-in, best per-tool** for glance-heavy MCP tools, pairs with `jsonShape`. The per-tool opt-in
     net-win is reasoned from the mechanism, not yet A/B-confirmed. **MCP (1) is closed.**
   - Remaining: dedup (6), then the `trim.js` extraction (deferred to Wave 3, right before simulation — it is
