@@ -2772,3 +2772,36 @@ five-hour window per arm as the other rounds do; it is secondary here because th
 `M/N` (backfire rate) is low **and** arm B's carried read token-reads are meaningfully below arm A's. A high
 `M`, or no measurable carry difference, keeps it OFF and opt-in. As with `mcpTrim`, the burden of proof is on
 the flip.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned cloud session on this branch)
+
+One ON-arm session ran the task above (`readAfterEdit: true`) autonomously on a checkout of this branch.
+`report --backfire`:
+
+```
+Read caps fired: 2
+Read-After-Edit deltas: 5 fired; 2 sent the model back for a wider read of the file
+```
+
+**5 fired, 2 backfired — a 40% backfire rate.** All five verify-reads were narrowed to the edited region; the
+split was by **file size**: the three reads of the small file (`guard.js`) were satisfied by the narrowed
+region (the edit sat in it) and did not send the model back, while the two reads of the large files
+(`cli.js`, `transcript.js`, near/over `readMaxBytes`) backfired — the model asked for the whole file again
+despite the edit being shown in the narrowed slice. A small slice of a large file leaves the model wanting
+the rest; a slice that is most of a small file does not.
+
+**Decision: default stays OFF.** The pre-registered rule flips only on a low backfire rate; 40% is not low.
+This is the gate working as intended — it caught a real backfire and stopped the flip. The delta ships opt-in.
+
+**Verified, not taken on trust.** The run's own prose claimed the size cap "delivered the first 300 lines
+instead of the narrowed window" on large files (i.e. the edit was not visible). That is wrong, and was
+reproduced against the guard directly: an unbounded read of a 2,000-line (~90 KB, over `readMaxBytes`) file
+edited at line 545 is narrowed to lines 525–565 — the delta returns before the size cap, whatever the file
+size, so the edit is shown. The backfires are genuine model behaviour on large files, not a cap-replacement
+bug.
+
+**Caveats.** n = 1 session, one model (Opus), and the verify-read was forced by the task — this measures the
+delta's effect *when the pattern occurs*, not its base rate, and this repo's A/Bs are noise-limited (ab10).
+Read the direction (small files help, large files backfire), not the 40%. The natural next iteration, if the
+delta is pursued: gate it to files below a size, or widen context on large files, since the backfire
+concentrated there — a change to measure, not a default to move now.
