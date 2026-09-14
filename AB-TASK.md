@@ -2837,3 +2837,51 @@ does not backfire, and the risky large files are excluded. But the flip's burden
 an edit, so it may rarely fire on its own) nor the real carried-token SAVINGS against an OFF arm was measured.
 So it ships as a **recommended opt-in** (`readAfterEdit: true`), not a moved default. Flipping would need an
 organic session (no forced re-reads) showing the delta fires and nets a saving on its own.
+
+## Binary-Blob Elider (narrowing 3) — the A/B protocol
+
+`blobElide` replaces **shell output that is one long encoded/minified run** — a base64 dump, a minified
+bundle, a one-line JSON — with a short head + a descriptor + a saved `out/` copy. It ships **OFF**; this A/B is
+the gate for the default, read straight off `tokenbrake report --backfire` (the `blob` byKind count and its
+backfires — token-reads, no dollars), so like narrowing 1 it does not depend on the usage page.
+
+**What it needs to fire, and where the code must live.** As with the delta: the guard a session runs is the
+committed copy of the checkout it started on, so `blobElide` only exists in a session whose checkout carries
+this feature (this branch, or `main` once merged); a config flip alone cannot add it to an older guard. Both
+arms differ **only** by a step-0 config write.
+
+**Two questions, kept apart.**
+1. *Per-firing net* — when a blob is elided, does the model go back and Read the saved file (a backfire counted
+   by `report --backfire`), or is the head + a targeted `grep`/`jq` of the original enough? Step 6 puts a value
+   past the kept head so the choice is forced and measured.
+2. *Firing rate* — how often blob-shaped output appears on its own. Blobs are rare per session but large when
+   they hit; a low organic rate is a real finding (it bounds the ceiling), not a failure.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It writes only under `/tmp`, so it
+is fully reversible and repeatable:
+
+```
+Blob-heavy task. Do every step with tools, in order. At the end write the final answer in step 7.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"blobElide": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"blobElide": true}'  > ~/.claude/tokenbrake.json
+1. Run  mkdir -p /tmp/blobwork
+2. Write /tmp/blobwork/bundle.min.js as ONE line of minified-looking JavaScript at least 8000 chars, no newlines:  node -e "require('fs').writeFileSync('/tmp/blobwork/bundle.min.js','!function(){'+'var x'+Array.from({length:900},(_,i)=>i+'=Math.random()*'+i).join(',')+';}();')"
+3. Write /tmp/blobwork/photo.b64 as one 10000-char base64-ish line:  node -e "require('fs').writeFileSync('/tmp/blobwork/photo.b64','data:image/png;base64,'+'ABCDEFGH'.repeat(1400))"
+4. Write /tmp/blobwork/config.json as a single-line JSON at least 6000 chars with the field placed near the END:  node -e "let o={pad:'x'.repeat(6000),targetValue:'ZZZ-9137'};require('fs').writeFileSync('/tmp/blobwork/config.json',JSON.stringify(o))"
+5. Run each, one at a time, and read the result:  cat /tmp/blobwork/bundle.min.js   then   cat /tmp/blobwork/photo.b64   then   cat /tmp/blobwork/config.json
+6. State the value of the "targetValue" field in config.json. Get it however you judge best.
+7. Run `node cli.js report --backfire` in the repo and paste its full output verbatim, then run `cat ~/.claude/tokenbrake.json` and paste it.
+
+Final answer: for each of the three cat commands, say whether tokenbrake elided it (you will see a "[tokenbrake] withheld ... blob-like output" note in the result); how you obtained the targetValue in step 6 and whether you re-read a saved file (or ran `tokenbrake show`) to get it; then the pasted outputs of step 7.
+```
+
+**What the comparison reads.** From step 7, arm B's `report --backfire`: the `Withholds` line's byKind should
+show `3 blob` (the three cats), and `Pulled back: N of 3 … backfire rate` says how many sent the model back to
+Read the saved file. A `grep`/`jq` of the *original* `/tmp` file in step 6 is NOT a pull-back (it does not read
+the `out/` file) — that is the cheap, sanctioned path and the good outcome. Arm A is the baseline: with
+`blobElide` off the three blobs enter whole (or are size-capped, not blob-elided), so `blob` withholds are 0.
+
+**Decision rule, fixed before the run.** Flip the default to `blobElide: true` only if the blob backfire rate
+is low **and** arm B carries meaningfully fewer read token-reads than arm A. A model that Reads the saved file
+back on most firings keeps it OFF/opt-in. Burden of proof is on the flip, as with every other narrowing.
