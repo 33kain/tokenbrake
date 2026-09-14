@@ -76,7 +76,7 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
   - JSON-aware trim (5) — DONE. `jsonShape` (default false) makes `trimText` keep a sample of the big array
     plus a count for a JSON result, instead of a char slice. Runs only in the trim path, so the full output
     is always saved. Ships off; A/B gates turning it on. Guard copy re-synced; 5 new checks.
-  - MCP trimming (1) — **code DONE, accept side verified live; only the A/B remains.** The shape was the blocker, and
+  - MCP trimming (1) — **CLOSED: code done, accept side verified live, A/B measured — default stays OFF (opt-in per-tool).** The shape was the blocker, and
     it was captured live on 2026-09-13 from `mcp__github__list_commits` in a Cowork session with the guard on:
     an `mcp__*` result arrives as a content-block array `[{type:'text',text},…]` — the whole result, in full —
     and the guard sees it *before* Claude Code's own "too large → saved to a file, 2 KB preview" step (ledger
@@ -92,9 +92,13 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     Full output saved to …/out/…txt`. So Claude Code *accepts* the content-block-array `updatedToolOutput` for
     an `mcp__*` tool; the silent-rejection risk is cleared and jsonShape composed (ledger `mcp:true`, `kept`
     9,145, full output saved). A side finding: the guard's *content* is re-read from disk on each hook spawn, so
-    `init --project` + a live call verifies the accept side in-session — no fresh container needed. **Remaining
-    before MCP is closed:** only the A/B per `AB-TASK.md` (arm A off vs arm B on) before the default moves off
-    false.
+    `init --project` + a live call verifies the accept side in-session — no fresh container needed. **A/B measured
+    2026-09-14** (AB-TASK.md, "MCP tool-output trimming", Opus, two single pairs): `mcpTrim` on **helped a glance
+    workload** and **hurt a content-hungry one** (recovery reads). The raw deltas (glance −25% cost / −18.5%
+    context; content-heavy +46% cost) are within this repo's own identical-arm noise (ab10: ±30% cost / ±42%
+    tokens) — read only the *direction*, not the magnitude. **Default stays OFF** (the burden of proof is on the flip, not on staying off);
+    ships **opt-in, best per-tool** for glance-heavy MCP tools, pairs with `jsonShape`. The per-tool opt-in
+    net-win is reasoned from the mechanism, not yet A/B-confirmed. **MCP (1) is closed.**
   - Remaining: dedup (6), then the `trim.js` extraction (deferred to Wave 3, right before simulation — it is
     the only consumer that truly needs a shared pure trim module; MCP and shaping did not). dedup needs
     cross-call state (the guard is one stateless process per call), so it adds a small per-session state file —
