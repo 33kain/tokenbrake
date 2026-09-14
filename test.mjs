@@ -2025,6 +2025,80 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('report byKind labels the blob withhold "blob"', ab.byKind.blob === 1, JSON.stringify(ab.byKind));
 }
 
+/* Change-Aware Git View (narrowing 4, off by default): in a `git diff`/`git show`, the hunks of generated
+   /lockfile paths are collapsed to a one-line +/- summary while real-source hunks are kept verbatim. A diff
+   with no generated files, a non-git command, and a failed command are all left alone. */
+{
+  console.log('\n-- change-aware git view (narrowing 4, off by default)');
+  const lockHunk = ['diff --git a/package-lock.json b/package-lock.json',
+    'index 1111111..2222222 100644', '--- a/package-lock.json', '+++ b/package-lock.json',
+    '@@ -1,80 +1,80 @@',
+    ...Array.from({ length: 80 }, (_, i) => `-    "pkg-${i}": "1.0.${i}",\n+    "pkg-${i}": "1.1.${i}",`)].join('\n');
+  const srcHunk = ['diff --git a/src/app.js b/src/app.js', 'index aaaaaaa..bbbbbbb 100644',
+    '--- a/src/app.js', '+++ b/src/app.js', '@@ -10,3 +10,3 @@ function main() {',
+    ' const a = 1;', '-const x = 1;', '+const x = 2;', ' const b = 3;'].join('\n');
+  const diff = lockHunk + '\n' + srcHunk + '\n';
+
+  const runGit = (text, cfgExtra, command = 'git diff', failed = false) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-git-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const input = { session_id: 'git', tool_use_id: 'toolu_git_' + Math.random().toString(36).slice(2, 8),
+      tool_name: 'Bash', tool_input: { command } };
+    if (failed) { input.hook_event_name = 'PostToolUseFailure'; input.error = 'Exit code 1\n' + text; }
+    else input.tool_response = bashResp(text);
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    const o = parse(r.stdout);
+    const out = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+    const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    rmSync(dir, { recursive: true, force: true });
+    return { out, outFiles };
+  };
+
+  t('off by default: a git diff is not collapsed', !/diff collapsed/.test(runGit(diff, null).out), 'off');
+
+  const on = runGit(diff, { gitView: true });
+  t('on: the lockfile hunk is collapsed to a +/- summary', /\+80\/-80 lines, diff collapsed/.test(on.out), on.out.slice(0, 200));
+  t('on: the real-source hunk is kept verbatim', on.out.includes('+const x = 2;'), 'src kept');
+  t('on: the collapsed diff is smaller than the original', on.out.length < diff.length, `${on.out.length} vs ${diff.length}`);
+  t('on: the full diff is saved to out/ for retrieval', on.outFiles.length === 1, JSON.stringify(on.outFiles));
+  t('on: the diff --git header for the lockfile is kept (file presence not dropped)', on.out.includes('diff --git a/package-lock.json b/package-lock.json'), 'header kept');
+
+  /* A large diff of only real-source files has nothing generated to collapse -- left whole. */
+  const bigSrc = Array.from({ length: 6 }, (_, i) =>
+    [`diff --git a/src/mod${i}.js b/src/mod${i}.js`, `index a${i}..b${i} 100644`, `--- a/src/mod${i}.js`, `+++ b/src/mod${i}.js`,
+     '@@ -1,20 +1,20 @@', ...Array.from({ length: 20 }, (_, j) => `-old line ${j} of module ${i}\n+new line ${j} of module ${i}`)].join('\n')).join('\n') + '\n';
+  t('a diff with no generated files is not collapsed', !/diff collapsed/.test(runGit(bigSrc, { gitView: true }).out), 'no-generated');
+
+  /* Only a git diff/show -- a non-git command carrying diff-like text is not touched. */
+  t('a non-git command with diff-like output is left alone', !/diff collapsed/.test(runGit(diff, { gitView: true }, 'cat changes.patch').out), 'non-git');
+
+  /* git show: the commit preamble before the first `diff --git` is preserved, generated hunk still collapsed. */
+  const show = 'commit deadbeef1234\nAuthor: A <a@example.com>\nDate: today\n\n    bump deps\n\n' + diff;
+  const onShow = runGit(show, { gitView: true }, 'git show HEAD');
+  t('git show keeps the commit preamble and still collapses the lockfile', onShow.out.includes('Author: A <a@example.com>') && /\+80\/-80 lines, diff collapsed/.test(onShow.out), onShow.out.slice(0, 120));
+
+  t('a failed git command is not collapsed (the error is wanted whole)', !/diff collapsed/.test(runGit(diff, { gitView: true }, 'git diff', true).out), 'failed');
+
+  /* Auditor: a gitview withhold is counted (kind "gitview") and a re-read of its saved out/ file is a backfire. */
+  const trg = await import('./transcript.js');
+  const TG = trg.default || trg;
+  const gsid = 'a11ce5ee-2222-3333-4444-555566667777';
+  const gstem = (id) => gsid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const GID = 'toolu_01GITVIEWWWWWWWWWW1';
+  const gOut = '/cfg/tokenbrake/out/' + gstem(GID) + '.txt';
+  const gitTx = { sessionId: gsid, cwd: '/w', requests: Array.from({ length: 4 }, () => ({ model: 'claude-opus-5' })), compactions: [],
+    results: [
+      { id: GID, name: 'Bash', file: null, what: 'git diff', marker: true, tokens: 50, afterReq: 0 },
+      { id: 'toolu_RG', name: 'Read', file: gOut, what: gOut, marker: false, tokens: 5000, afterReq: 1 },
+    ] };
+  const ag = TG.backfireAudit(gitTx, [{ ev: 'post', session: gsid, id: GID, tool: 'Bash', chars: 40000, kept: 300, gitview: true, saved: gOut }], { min: 1 });
+  t('a gitview withhold is counted with kind "gitview"', ag.withholds.length === 1 && ag.withholds[0].kind === 'gitview', JSON.stringify(ag.withholds.map(w => w.kind)));
+  t('a re-read of the gitview saved out/ file is a backfire', ag.backfired === 1 && ag.withholds[0].recovered, JSON.stringify({ b: ag.backfired }));
+  t('report byKind labels the gitview withhold "gitview"', ag.byKind.gitview === 1, JSON.stringify(ag.byKind));
+}
+
 /* ---- what the trim keeps and what it breaks -------------------------------
    From a review of an outside test plan (AB-TASK.md, "An outside test plan").
    Two of its four claims about this guard were checkable and they came out

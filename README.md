@@ -483,6 +483,16 @@ failed command is never elided (its error is wanted whole). It counts as a plain
 (labelled `blob`), so a later `Read` of the saved file registers as a backfire. Shell/excerpt output only for
 now (an MCP base64 result or a `Read` of a one-line minified file are follow-ups). Off until an A/B moves it.
 
+`gitView` (default `false`) is the change-aware view of a `git diff`/`git show`. The whole diff re-enters
+context on every request, and its noisiest part is usually **generated** — a lockfile, a `*.min.js`, a source
+map — that no one reads line by line. When such a diff is at least `gitViewMinChars` (default 2,000), the guard
+collapses the hunks of any file whose path matches `gitCollapse` (default: the common lockfiles plus `.min.js`
+/ `.min.css` / `.map`) to a one-line `+adds/-dels` summary, **keeps every real-source hunk verbatim** and the
+commit/preamble intact, and saves the full diff to `out/`. It only touches `git diff`/`git show` (not `git
+log`, not `git status`); a diff with no generated files, or `--stat`/`--name-only` output, collapses nothing
+and passes through. A failed command is never touched. It counts as a plain trim to `report --backfire`
+(labelled `gitview`), so a `Read` of the saved diff registers as a backfire. Off until an A/B moves it.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,

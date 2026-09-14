@@ -46,6 +46,9 @@ const DEFAULTS = {
   blobMaxLine: 2000,     // absolute floor: the longest line must be at least this many chars (prose, logs and pretty-printed JSON are far shorter) -- independent of blobMinChars so tuning the size gate down can't weaken it
   blobLineShare: 0.5,    // dominance: that longest line must also be at least this fraction of the output -- a single encoded/minified run, not wide multi-line data (CSV, tables)
   blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
+  gitView: false,        // OFF by default: in a `git diff`/`git show`, collapse the hunks of generated/lockfile paths to a one-line +/- summary, keeping real-source hunks; A/B before flipping
+  gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
+  gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed (substring match); only consulted when gitView is on
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -467,6 +470,37 @@ function maxLineLen(text) {
   return cur > max ? cur : max;
 }
 
+/* Change-Aware Git View (narrowing 4). A `git diff`/`git show` re-adds the whole diff on every request, and the
+   noisiest part is usually generated -- a lockfile, a *.min.js, a source map -- that no one reads line by line.
+   collapseGitDiff replaces the hunk body of files whose path matches `patterns` with a one-line +adds/-dels
+   summary, keeps every real-source hunk verbatim, and leaves the commit/preamble intact. It never drops a
+   file's presence (the `diff --git` header stays), only its hunks. Returns the rewritten text and the count
+   collapsed; the caller acts only when at least one collapsed and the result got smaller. Pure string work over
+   the diff already in hand -- no git invocation. A quoted/space path that the header regex misses is left
+   whole (safe). */
+const GIT_DIFF = /\bgit(?:\s+-C\s+\S+)?\s+(?:diff|show)\b/;
+function collapseGitDiff(text, patterns) {
+  const parts = text.split(/(?=^diff --git )/m);   // each file section begins "diff --git "; parts[0] is any preamble
+  let collapsed = 0;
+  const out = parts.map((sec) => {
+    if (!sec.startsWith('diff --git ')) return sec;
+    const m = /^diff --git a\/(.+?) b\/(.+)$/m.exec(sec);
+    const file = m ? m[2].trim() : null;
+    if (!file || !matchesAny(patterns, file)) return sec;
+    let adds = 0, dels = 0;
+    for (const line of sec.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++')) adds++;
+      else if (line.startsWith('-') && !line.startsWith('---')) dels++;
+    }
+    if (adds + dels === 0) return sec;   // rename/mode change only -- no hunks to collapse
+    collapsed++;
+    const nl = sec.indexOf('\n');
+    const firstLine = nl === -1 ? sec : sec.slice(0, nl);   // the `diff --git a/… b/…` header, kept
+    return `${firstLine}\n[tokenbrake] +${adds}/-${dels} lines, diff collapsed (generated/lockfile path)\n`;
+  }).join('');
+  return { text: out, collapsed };
+}
+
 function handlePost(input, cfg) {
   const tool = input.tool_name || '';
   const ti = input.tool_input || {};
@@ -595,6 +629,27 @@ function handlePost(input, cfg) {
       const updatedBlob = (resp && typeof resp === 'object') ? { ...resp, stdout: descriptor, stderr: '' } : descriptor;
       emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedBlob } });
       return;
+    }
+  }
+
+  /* Change-Aware Git View (narrowing 4): collapse the generated/lockfile hunks of a `git diff`/`git show` so the
+     whole diff stops re-entering context, keeping every real-source hunk. Off by default (gitView). Only a git
+     diff/show (not `git log`, not `git status`); a diff with no generated files, or `--stat`/`--name-only`
+     output (no `diff --git` hunks), collapses nothing and falls through. Saves the full diff to out/ and carries
+     the marker, so report --backfire counts it (kind 'gitview') and a re-read of the saved file as a pull-back.
+     Skipped if the collapsed body would still exceed the hook output cap -- a huge all-real-source diff is left
+     to the normal trim below. Not on a failed command. */
+  if (isShell && !failed && cfg.gitView && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''))) {
+    const g = collapseGitDiff(text, cfg.gitCollapse);
+    if (g.collapsed && g.text.length < text.length) {
+      const saved = saveOut(input, text);
+      const body = `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
+      if (body.length <= HOOK_OUTPUT_CAP) {
+        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+        const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
+        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
+        return;
+      }
     }
   }
 

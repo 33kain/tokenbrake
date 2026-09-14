@@ -757,8 +757,8 @@ function backfireAudit(parsed, ledgerRecs, opts) {
 
   /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND a
      ledger row that saved the withheld bytes to out/ (the original and kept sizes). kind is read from the row
-     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, a blob elision carries `blob`, everything else
-     is a plain trim. An EXCERPT
+     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, a blob elision carries `blob`, a git-diff
+     collapse carries `gitview`, everything else is a plain trim. An EXCERPT
      row (a `cat` of a large file capped like a Read: guard.js logs ev:'post', excerpt:true, saved:null) is
      NOT netted here: it saves nothing to out/, so it could only ever read as "clean" and would pad the saving
      side of the gate. It is a Read-cap-family event and belongs to the caps line / `report --caps`. `stem` is
@@ -773,7 +773,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     const l = offeredOf(r);
     if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
-    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : 'trim'));
+    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : (l.gitview ? 'gitview' : 'trim')));
     withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
       stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
   }

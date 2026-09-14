@@ -215,8 +215,22 @@ grandfathered, to be cleaned up later, not extended).
     write, and if `shapeFilters` also shaped the text between them the dedup record's `chars` no longer matches
     the overwritten file. All three OFF by default; a multi-feature-ON interaction, not the blob path's own bug,
     left for whenever these defaults start being combined.
+- **Narrowing 4 — Change-Aware Git View. DONE (ships OFF).** A `git diff`/`git show` re-adds the whole diff on
+  every request, and its noisiest part is usually generated — a lockfile, a `*.min.js`, a source map — that no
+  one reads line by line. `handlePost` (after the blob branch, before the size cap) runs `collapseGitDiff`:
+  split the diff on `diff --git ` boundaries, and for each file section whose `b/` path matches `gitCollapse`
+  (default lockfiles + `.min.js`/`.min.css`/`.map`, substring match via `matchesAny`), replace the hunk body
+  with a one-line `+adds/-dels` summary, keeping the `diff --git` header, every real-source hunk, and any
+  commit/preamble verbatim. Fires only on a `git diff`/`git show` command (`GIT_DIFF` regex — not `log`/
+  `status`) whose output is ≥ `gitViewMinChars` (2,000) and only when at least one file collapsed and the result
+  shrank; a huge all-real-source diff whose collapsed body would still exceed `HOOK_OUTPUT_CAP` is left to the
+  normal trim. Saves the full diff to `out/` and carries the marker, so — like the blob elider — the existing
+  withhold/pull-back machinery counts it (kind `gitview`) with no new audit code. `gitView` default false.
+  Not on a failed command. 13 new checks. The **frequency** play (git is constant in dev sessions) to the blob
+  elider's **context-bomb** play; A/B gates the default. Pure string work, no git invocation.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
-  following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,
-  API/JSON Field Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine
-  already holds most of it), Deterministic Replay Simulator (rides the `trim.js` extraction).
+  following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field
+  Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine already holds most of
+  it), Deterministic Replay Simulator (rides the `trim.js` extraction). The blob elider's two deferred
+  follow-ups (a `Read` of a one-line minified file; MCP base64 result blocks) also remain.
