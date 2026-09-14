@@ -757,14 +757,15 @@ function backfireAudit(parsed, ledgerRecs, opts) {
 
   /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND a
      ledger row that saved the withheld bytes to out/ (the original and kept sizes). kind is read from the row
-     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, everything else is a plain trim. An EXCERPT
+     -- a dedup row carries `dedup`, an MCP trim carries `mcp`, a blob elision carries `blob`, a git-diff
+     collapse carries `gitview`, everything else is a plain trim. An EXCERPT
      row (a `cat` of a large file capped like a Read: guard.js logs ev:'post', excerpt:true, saved:null) is
      NOT netted here: it saves nothing to out/, so it could only ever read as "clean" and would pad the saving
      side of the gate. It is a Read-cap-family event and belongs to the caps line / `report --caps`. `stem` is
      the exact out/ filename (minus .txt) the guard would have written: for a dedup, the first copy's stem in
      `sameAs`; otherwise rebuilt the way saveOut names it (guard.js saveOut -- pinned by the integration test
      in test.mjs, since the guard installs as a single file and cannot share this helper). No stem => no match. */
-  const sid8 = String(parsed.sessionId || '').slice(0, 8);
+  const sid8 = String(parsed.sessionId || '').slice(0, 8).replace(/[^\w-]/g, '_');   // must match guard.js saveOut's sid sanitization exactly, or a pull-back won't match its withhold
   const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
   const withholds = [];
   for (const r of parsed.results) {
@@ -772,7 +773,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     const l = offeredOf(r);
     if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
-    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : 'trim');
+    const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : (l.gitview ? 'gitview' : 'trim')));
     withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
       stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
   }

@@ -2837,3 +2837,226 @@ does not backfire, and the risky large files are excluded. But the flip's burden
 an edit, so it may rarely fire on its own) nor the real carried-token SAVINGS against an OFF arm was measured.
 So it ships as a **recommended opt-in** (`readAfterEdit: true`), not a moved default. Flipping would need an
 organic session (no forced re-reads) showing the delta fires and nets a saving on its own.
+
+## Binary-Blob Elider (narrowing 3) — the A/B protocol
+
+`blobElide` replaces **shell output that is one long encoded/minified run** — a base64 dump, a minified
+bundle, a one-line JSON — with a short head + a descriptor + a saved `out/` copy. It ships **OFF**; this A/B is
+the gate for the default, read straight off `tokenbrake report --backfire` (the `blob` byKind count and its
+backfires — token-reads, no dollars), so like narrowing 1 it does not depend on the usage page.
+
+**What it needs to fire, and where the code must live.** As with the delta: the guard a session runs is the
+committed copy of the checkout it started on, so `blobElide` only exists in a session whose checkout carries
+this feature (this branch, or `main` once merged); a config flip alone cannot add it to an older guard. Both
+arms differ **only** by a step-0 config write.
+
+**Two questions, kept apart.**
+1. *Per-firing net* — when a blob is elided, does the model go back and Read the saved file (a backfire counted
+   by `report --backfire`), or is the head + a targeted `grep`/`jq` of the original enough? Step 6 puts a value
+   past the kept head so the choice is forced and measured.
+2. *Firing rate* — how often blob-shaped output appears on its own. Blobs are rare per session but large when
+   they hit; a low organic rate is a real finding (it bounds the ceiling), not a failure.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It writes only under `/tmp`, so it
+is fully reversible and repeatable:
+
+```
+Blob-heavy task. Do every step with tools, in order. At the end write the final answer in step 7.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"blobElide": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"blobElide": true}'  > ~/.claude/tokenbrake.json
+1. Run  mkdir -p /tmp/blobwork
+2. Write /tmp/blobwork/bundle.min.js as ONE line of minified-looking JavaScript at least 8000 chars, no newlines:  node -e "require('fs').writeFileSync('/tmp/blobwork/bundle.min.js','!function(){'+'var x'+Array.from({length:900},(_,i)=>i+'=Math.random()*'+i).join(',')+';}();')"
+3. Write /tmp/blobwork/photo.b64 as one 10000-char base64-ish line:  node -e "require('fs').writeFileSync('/tmp/blobwork/photo.b64','data:image/png;base64,'+'ABCDEFGH'.repeat(1400))"
+4. Write /tmp/blobwork/config.json as a single-line JSON at least 6000 chars with the field placed near the END:  node -e "let o={pad:'x'.repeat(6000),targetValue:'ZZZ-9137'};require('fs').writeFileSync('/tmp/blobwork/config.json',JSON.stringify(o))"
+5. Run each, one at a time, and read the result:  cat /tmp/blobwork/bundle.min.js   then   cat /tmp/blobwork/photo.b64   then   cat /tmp/blobwork/config.json
+6. State the value of the "targetValue" field in config.json. Get it however you judge best.
+7. Run `node cli.js report --backfire` in the repo and paste its full output verbatim, then run `cat ~/.claude/tokenbrake.json` and paste it.
+
+Final answer: for each of the three cat commands, say whether tokenbrake elided it (you will see a "[tokenbrake] withheld ... blob-like output" note in the result); how you obtained the targetValue in step 6 and whether you re-read a saved file (or ran `tokenbrake show`) to get it; then the pasted outputs of step 7.
+```
+
+**What the comparison reads.** From step 7, arm B's `report --backfire`: the `Withholds` line's byKind should
+show `3 blob` (the three cats), and `Pulled back: N of 3 … backfire rate` says how many sent the model back to
+Read the saved file. A `grep`/`jq` of the *original* `/tmp` file in step 6 is NOT a pull-back (it does not read
+the `out/` file) — that is the cheap, sanctioned path and the good outcome. Arm A is the baseline: with
+`blobElide` off the three blobs enter whole (or are size-capped, not blob-elided), so `blob` withholds are 0.
+
+**Decision rule, fixed before the run.** Flip the default to `blobElide: true` only if the blob backfire rate
+is low **and** arm B carries meaningfully fewer read token-reads than arm A. A model that Reads the saved file
+back on most firings keeps it OFF/opt-in. Burden of proof is on the flip, as with every other narrowing.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned cloud session on this branch)
+
+One ON-arm session ran the task above (`blobElide: true`) autonomously on a checkout of this branch.
+`report --backfire`:
+
+```
+Withholds: 2 (2 blob) -- ~ 6,215 tokens kept out, ~ 28,251 token-reads not carried
+Pulled back: none of the 2 withholds was read back -- backfire rate 0%
+Net: ~ 28,251 token-reads saved after backfires   (28,251 saved - 0 pulled back)
+Verdict: too few withholds to call it (need a few)
+```
+
+**2 fired, 0 backfired (0%), ~28.3k token-reads saved.** Two of the three blobs elided —
+`bundle.min.js` (one 19,601-char line) and `config.json` (one 6,035-char line), each replaced by a head +
+descriptor + saved `out/` copy. The per-firing net is clean: the task hid `targetValue` past the 160-char
+head, and the model fetched it with a targeted `jq` on the **original** `/tmp` file — not by reading the saved
+`out/` file and not by `tokenbrake show`. So the elision withheld ~28k token-reads of unreadable bytes and the
+model still got the one value it needed by the cheap, sanctioned path. That is exactly the behaviour the design
+leaves room for, and the reason blobs are a low-backfire target: the raw bytes are rarely what the model wants.
+
+**The base64 case did not go through the elider — a fixture artifact, not a miss.** `cat photo.b64` (a
+`data:image/png;base64,…` line) was intercepted by the Claude Code harness as an *image* (a resize/render error)
+before the guard's PostToolUse note could show, so its bytes never entered context and it is not one of the two
+withholds. A real base64 blob that is *not* a `data:image` URI (a base64-encoded archive, a JWT dump) would not
+trigger image handling and would elide like the other two; the fixture just picked a shape the harness treats
+specially. Worth remembering for the deferred **MCP base64** follow-up (those arrive as image content blocks,
+not shell text, and need their own path).
+
+**Decision: default stays OFF / opt-in.** The pre-registered rule wants low backfire **and** a real saving, and
+both are present (0% and ~28k token-reads) — but the verdict is `too few withholds to call it` at n = 2, the
+pattern was **forced** by the task (the blobs were created and `cat`'d on purpose, so the organic firing RATE is
+unmeasured), and it is one model. This is the same bar narrowings 1 and 2 sat at: validated *when it fires*, not
+yet a moved default. It ships as a **recommended opt-in** (`blobElide: true`). That said, it is the
+best-behaved narrowing measured so far — 0% backfire where the delta's forced run was 40% before its size gate —
+and blobs are the high-value "context bomb" case, so it is the strongest opt-in of the three. Flipping the
+default would need an organic session (no created-on-purpose blobs) showing it fires and nets a saving on its own.
+
+## Change-Aware Git View (narrowing 4) — the A/B protocol
+
+`gitView` collapses the hunks of generated/lockfile paths in a `git diff`/`git show` to a `+adds/-dels` summary,
+keeping real-source hunks. It ships **OFF**; this A/B is the gate, read off `tokenbrake report --backfire` (the
+`gitview` byKind count and its backfires). Both arms differ only by the step-0 config write. This is the
+**frequency** play: the backfire question is whether collapsing a lockfile diff sends the model back to Read the
+saved full diff.
+
+**The task (paste verbatim; step 0 is the only difference between arms).** It builds a scratch git repo under
+`/tmp`, so it is fully reversible and repeatable:
+
+```
+Git-diff A/B task. Do every step with tools, in order, autonomously (do not ask questions). At the end write the final answer in step 6.
+
+0. Arm A: run  mkdir -p ~/.claude && printf '{"gitView": false}' > ~/.claude/tokenbrake.json
+   Arm B: run  mkdir -p ~/.claude && printf '{"gitView": true}'  > ~/.claude/tokenbrake.json
+1. Run  rm -rf /tmp/gitwork && mkdir -p /tmp/gitwork/src && git -C /tmp/gitwork init -q && git -C /tmp/gitwork config user.email a@example.com && git -C /tmp/gitwork config user.name tester
+2. Create and commit the initial files:
+   node -e "let d={};for(let i=0;i<120;i++)d['pkg-'+i]={version:'1.0.'+i,resolved:'https://reg/pkg-'+i};d['lodash']={version:'4.17.20',resolved:'https://reg/lodash'};require('fs').writeFileSync('/tmp/gitwork/package-lock.json',JSON.stringify({name:'app',lockfileVersion:3,packages:d},null,2))"
+   node -e "require('fs').writeFileSync('/tmp/gitwork/src/app.js','function total(items){\n  return items.reduce((a,b)=>a+b,0);\n}\nmodule.exports={total};\n')"
+   git -C /tmp/gitwork add -A && git -C /tmp/gitwork commit -q -m init
+3. Modify both files:
+   node -e "let p=require('/tmp/gitwork/package-lock.json');for(let i=0;i<120;i++)p.packages['pkg-'+i].version='1.1.'+i;p.packages['lodash'].version='4.17.21';require('fs').writeFileSync('/tmp/gitwork/package-lock.json',JSON.stringify(p,null,2))"
+   node -e "let s=require('fs').readFileSync('/tmp/gitwork/src/app.js','utf8').replace('a+b','a+b+0');require('fs').writeFileSync('/tmp/gitwork/src/app.js',s)"
+4. Run  git -C /tmp/gitwork diff   and read the result.
+5. Answer BOTH from what you have: (a) what changed in src/app.js; (b) the NEW version of the "lodash" dependency in package-lock.json. State honestly how you obtained EACH -- especially whether getting (b) meant re-reading a saved tokenbrake out/ file or running `tokenbrake show` (a backfire) versus a grep/read of the original file or a fresh targeted git diff (not a backfire).
+6. Run `node cli.js report --backfire` in the tokenbrake repo checkout and paste its full output verbatim, then `cat ~/.claude/tokenbrake.json`.
+
+Final answer: whether the package-lock.json hunk was collapsed (you will see a "[tokenbrake] ... diff collapsed" note), how you got (a) and (b), and the pasted outputs of step 6.
+```
+
+**What the comparison reads.** Arm B's `report --backfire`: the `Withholds` byKind shows `1 gitview` (the one
+`git diff`), and the backfire count says whether getting the collapsed lockfile detail sent the model to Read
+the saved diff. Getting (b) via `grep lodash` / a fresh `git diff package-lock.json` on the original repo is
+NOT a pull-back (it doesn't read the `out/` file) -- the sanctioned path. Arm A is the baseline: with `gitView`
+off the whole diff (including the lockfile hunk) enters and is carried.
+
+**Decision rule, fixed before the run.** Flip the default to `gitView: true` only if the gitview backfire rate
+is low **and** arm B carries meaningfully fewer read token-reads than arm A. Burden of proof on the flip.
+
+### Result — ON arm, 2026-09-14 (Opus, spawned session): INCONCLUSIVE — a second guard co-fired
+
+The ON-arm run exposed a **methodology bug in the cloud A/B environment**, not a gitview result. The
+environment carries a **stale global tokenbrake install** at `/root/.claude/hooks/tokenbrake/guard.js`,
+registered on PostToolUse at **user scope** — a much older version (it has none of the `gitView`/`blobElide`/
+`reReadElide`/`readAfterEdit`/`dedup`/`mcpTrim` knobs). Claude Code merges user-scope and project-scope hooks,
+so **every tool result fired the guard twice**: the project-scope feature guard AND the old global guard, ~10–34
+ms apart with the same `tool_use_id`.
+
+For the `git diff` (15,124 chars) the ledger shows the pair:
+
+```
+{... "gitview":true, "kept":563,  "chars":15124 ...}   # project guard: narrowing-4 collapse (+121/-121, correct)
+{...                 "kept":2113, "chars":15124 ...}   # old global guard: generic middle-trim (delivered last)
+```
+
+The gitview collapse **fired and is correct** (confirmed in the ledger and by the session reproducing it
+offline: `[tokenbrake] +121/-121 lines, diff collapsed (generated/lockfile path)`, `src/app.js` kept verbatim),
+but the old guard's generic middle-trim won the delivered output, so gitview **never reached the model's
+context**. `report --backfire` therefore recorded `2 trim` (0% backfire, ~130k token-reads saved) — the *old
+guard's* trim, not gitview. The model answered both step-5 questions (the `src/app.js` change and lodash
+`4.17.21`) from the fresh diff without any pull-back, but that reflects the generic trim, not the collapse.
+
+**This retroactively taints the earlier cloud A/Bs too** (Read-After-Edit, re-read, blob): the same two guards
+were racing. The blob run happened to show `2 blob` (the project guard won that race), but the measurement was
+never clean. **Fix for any future cloud A/B:** neutralize the user-scope guard first (remove or disable
+`/root/.claude/settings.json`'s PostToolUse tokenbrake hook, or delete `/root/.claude/hooks/tokenbrake/guard.js`)
+so only the checkout's project guard fires — then re-run.
+
+**Real-world corollary (worth a product safeguard):** a machine with BOTH a global and a project tokenbrake
+install double-fires, and an older global guard can silently override a newer project narrowing. The two guards
+each receive the *original* tool output (not chained), so the existing `[tokenbrake]` marker does not protect
+against it. Candidate fixes: the installer detecting/warning on a co-registered guard, or a documented
+"one scope only" rule.
+
+**Status:** gitView is **logic-verified** (519 checks + the offline reproduction) but its organic backfire is
+**unmeasured**; it stays OFF/opt-in like the others until a clean single-guard A/B runs.
+
+**Clean re-run attempt (2026-09-14): blocked by the environment, not run.** A second spawned session added a
+step 0 that empties the stale global guard's script so only the project guard delivers. It stalled on a
+permission prompt: an autonomous session in `auto` mode won't self-approve writing under `/root/.claude` plus
+an `rm -rf`, and a parent cannot approve a child's prompt or grant a child a more permissive mode. So a clean
+single-guard organic A/B needs a **human-supervised** session (to approve those prompts) or a pre-cleaned
+environment (no user-scope tokenbrake install). Given the collapse is deterministic and already verified, and
+the backfire is highly likely ~0% (the blob run showed models fetch a specific value with a targeted grep, not
+a whole re-read), the organic number is low-value for an OFF feature. **gitView ships OFF / opt-in on its tests
++ offline verification — the same standing as narrowings 1–3**, none of which cleared the flip bar either. The
+double-guard finding above is the more useful takeaway and is the thing to fix before any narrowing's default
+can be trusted to move.
+
+**Third attempt (2026-09-14): the wall is structural, confirmed.** A follow-up tried to neutralize the old
+guard with NO `/root/.claude` write and NO `rm` -- just `maxChars: 999999` in the run config, so the old guard
+(which trims only above `maxChars`) passes the diff through while the project guard's gitview fires before the
+size check. But writing `~/.claude/tokenbrake.json` was itself denied by the auto-mode classifier as
+**[Self-Modification]** (it changes a registered hook's runtime behavior), and the session correctly declined
+to route around the denial -- so the config never landed, the old guard trimmed the diff, and `report
+--backfire` again read `2 trim`, 0 backfires. **An autonomous auto-mode session cannot cleanly neutralize the
+co-firing global guard**: every method (empty the guard file, or change `maxChars`) is a hook-behavior change
+the permission system blocks, and dodging it by reframing would be gaming a safety guardrail. A clean organic
+gitview A/B therefore needs one of: (a) the stale global tokenbrake install removed from environment
+`env_01Hscqvejiu7QKDj3pTeRTYB` -- a claude.ai environment-settings change that ALSO fixes the double-guard bug
+for good; (b) a human-supervised session that approves the `~/.claude` write; or (c) pre-session provisioning of
+`tokenbrake.json`. Until one of those, **gitView stays OFF / opt-in** on its tests + offline verification. On
+all evidence the organic number is ~0% backfire, same as blob.
+
+### Result — ON arm, 2026-09-14, CLEAN (env fixed): 1 gitview, 0 backfired (0%)
+
+The environment's stale global install was removed at its source (a
+`tokenbrake init || true` line in the env setup script, deleted by the owner), so a
+fresh session now runs the **project guard only** — the double-fire is gone for
+good. `node cli.js status` in the run confirmed it: *"installed at project scope
+instead ... the guard runs once, from there."* With that, a plain ON-arm run
+(just `{"gitView": true}`, no neutralize) delivered the **gitview collapse** to
+the model — `[tokenbrake] +121/-121 lines, diff collapsed (generated/lockfile
+path)`, `src/app.js` kept verbatim. `report --backfire`:
+
+```
+Withholds: 1 (1 gitview) -- ~ 3,640 tokens kept out, ~ 10,920 token-reads not carried
+Pulled back: none of the 1 withholds was read back -- backfire rate 0%
+Net: ~ 10,920 token-reads saved after backfires   (10,920 saved - 0 pulled back)
+Verdict: too few withholds to call it (need a few)
+```
+
+**1 fired, 0 backfired (0%), ~10.9k token-reads saved.** The per-firing net is
+clean and telling: to get the collapsed lockfile's `lodash` version the model ran
+a **targeted `git diff -- package-lock.json | grep lodash`** (and grepped the
+working tree) — a fresh re-derivation from source, NOT a Read of the saved `out/`
+file and NOT `tokenbrake show`. That is exactly the cheap path the collapse leaves
+open, and the reason a collapsed generated diff does not send the model back for
+the whole thing.
+
+**Decision: default stays OFF / opt-in.** As with narrowings 1-3 the backfire is
+low (0%) and the saving real (~10.9k token-reads), but the verdict is *too few to
+call it* at n = 1 and the diff was forced by the task, so the organic firing RATE
+is unmeasured. It ships a **recommended opt-in** (`gitView: true`). The lasting
+win of this run is the environment fix: **the double-guard bug is resolved**, so
+every future A/B here reads clean.

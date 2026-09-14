@@ -185,9 +185,70 @@ grandfathered, to be cleaned up later, not extended).
     (not rewritten) input (`shapeVerdict`) — this OVER-counts, the *safe* direction for a gate, left as-is.
     (c) `priorRead` full-scans the per-session `reads/` JSONL on every unbounded Read while `reReadElide` is on
     (O(n²) over a read-heavy session); pre-existing scan pattern, OFF by default, folds into (2) above.
+- **Narrowing 3 — Binary-Blob Elider. DONE (ships OFF).** Shell output that is one long encoded/minified run
+  (a base64 dump, a minified bundle, a one-line JSON) is unreadable to the model as bytes yet re-enters context
+  every request until compaction. `handlePost` (after shaping, before the size cap and the excerpt handling)
+  replaces it with the first `blobKeepChars` (160) + a descriptor + a saved `out/` copy. The trigger is content,
+  not size: `text.length >= blobMinChars` (4,000) AND the **single longest line** is both `>= blobMaxLine`
+  (2,000, an absolute floor kept independent of `blobMinChars` so tuning the size gate down can't weaken it) AND
+  `>= blobLineShare` (0.5) of the whole (the dominance test). So it fires on a blob whether over or under
+  `maxChars`, catching an excerpt under `readMaxBytes`
+  (passed whole today) and cutting an over-`maxChars` blob to a descriptor instead of the `maxChars`-of-garbage
+  the char-slice keeps. The longest-line-share test discriminates a single encoded/minified run from
+  wide-but-structured data (CSV, tables — many wide lines, none dominant) and from prose/logs/pretty JSON (short
+  lines); a failed command is never elided. `blobElide` default false. **No
+  narrowing-3 audit code:** the row is `ev:'post'` with `blob:true` + marker + saved `out/`, so the existing
+  withhold/pull-back machinery counts it (labelled `blob` in `report --backfire` byKind) and a re-read of the
+  saved file as a backfire. `maxLineLen` is a no-alloc longest-line scan. 12 new checks. A/B gates the default.
+  - **Deferred follow-ups (recorded, not built):** (1) a **`Read` of a one-line minified file** — the highest
+    single-firing waste — cannot be narrowed the way the other Read narrowings are: `updatedInput.limit` is a
+    *line* count, so `limit:1` still delivers the whole giant line. A `Read` result *does* reach `handlePost`
+    (the PostToolUse matcher is `*`), but as a no-op — every branch is gated on `isShell`/`isMcp` — so closing
+    this means intercepting Read there, which needs `Read`'s PostToolUse response shape verified first (the
+    "verify the shape before you build on it" lesson), else a silent no-op. (2) **MCP base64 results** — the MCP
+    branch returns before the blob check; eliding a base64 image block there means going through
+    `mcpBody`/`rebuild`, its own change. (3) When either lands, the shared `saveOut → descriptor → shaped
+    `updatedToolOutput` → emit` scaffold (now in the dedup/excerpt/trim/blob branches) is worth one helper, and
+    the guard writing an explicit `kind` on the ledger row would retire the auditor's flag-chain kind ternary.
+    All waited on rather than bundled here. (4) With `dedup` AND `blobElide` both on, a first-seen blob is saved
+    to `out/` twice (dedup's first-copy save, then the blob save to the same tool_use_id path) — a redundant
+    write, and if `shapeFilters` also shaped the text between them the dedup record's `chars` no longer matches
+    the overwritten file. All three OFF by default; a multi-feature-ON interaction, not the blob path's own bug,
+    left for whenever these defaults start being combined.
+- **Narrowing 4 — Change-Aware Git View. DONE (ships OFF).** A `git diff`/`git show` re-adds the whole diff on
+  every request, and its noisiest part is usually generated — a lockfile, a `*.min.js`, a source map — that no
+  one reads line by line. `handlePost` (after the blob branch, before the size cap) runs `collapseGitDiff`:
+  split the diff on `diff --git ` boundaries, and for each file section whose `b/` path matches `gitCollapse`
+  (default lockfiles + `.min.js`/`.min.css`/`.map`, substring match via `matchesAny`), replace the hunk body
+  with a one-line `+adds/-dels` summary, keeping the `diff --git` header, every real-source hunk, and any
+  commit/preamble verbatim. Fires only on a `git diff`/`git show` command (`GIT_DIFF` regex — not `log`/
+  `status`) whose output is ≥ `gitViewMinChars` (2,000) and only when at least one file collapsed and the result
+  shrank; a huge all-real-source diff whose collapsed body would still exceed `HOOK_OUTPUT_CAP` is left to the
+  normal trim. Saves the full diff to `out/` and carries the marker, so — like the blob elider — the existing
+  withhold/pull-back machinery counts it (kind `gitview`) with no new audit code. `gitView` default false.
+  Not on a failed command. 13 new checks. The **frequency** play (git is constant in dev sessions) to the blob
+  elider's **context-bomb** play; A/B gates the default. Pure string work, no git invocation.
+  - **Review follow-ups (deferred, cross-cutting — not narrowing 4's own bugs):** (1) the
+    `(resp && typeof resp === 'object') ? { ...resp, stdout, stderr:'' } : body` shape is now inlined ~4× (dedup,
+    blob, gitview, shaped-passthrough) — a one-line `shellReplace(resp, body)` helper would DRY it across all
+    four. (2) With `blob`/`gitview` the withhold-kind ternary in `transcript.js` is now 4 deep and every new kind
+    costs a guard boolean + a ternary branch in lockstep; the fix is the guard writing an explicit `kind` on the
+    ledger row and the auditor reading it. But the ledger is an on-disk format read across versions and the
+    guard is a copied single file that can't import `transcript.js`, so the switch needs a legacy-boolean
+    fallback (more code during transition) and re-touches every prior kind — so it lands as its **own
+    separately-reviewed commit**, best before/alongside narrowing 5, not bundled into a default-OFF feature step.
+    (3) Known fail-safe coverage gaps left after the /code-review fixes (each fails safe — no wrong collapse,
+    at worst no benefit): `GIT_DIFF` misses non-default invocations (`git --no-pager diff`, aliases); the
+    `diff --git a/… b/…` header regex misses non-default prefixes (`diff.mnemonicPrefix`/`diff.noprefix`);
+    combined/merge diffs (`diff --cc` from `git show <merge>`) are not split, so their generated hunks aren't
+    collapsed; and under `shapeFilters`+`gitView` both on, the saved `out/` copy is the shape-collapsed text
+    (shapeFilter essentially never alters a real diff, so this is contrived). All acceptable for a default-OFF,
+    A/B-gated narrowing; a later pass can broaden the matchers if the A/B shows the gaps matter.
+    ( The `gitCollapse` `.map`-in-`a.mapper.js` substring false-positive raised in review was FIXED here — the
+    match is now a path SUFFIX, not a substring. )
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
-  following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,
-  API/JSON Field Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine
-  already holds most of it), Deterministic Replay Simulator (rides the `trim.js` extraction), Binary-Blob
-  Elider.
+  following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field
+  Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine already holds most of
+  it), Deterministic Replay Simulator (rides the `trim.js` extraction). The blob elider's two deferred
+  follow-ups (a `Read` of a one-line minified file; MCP base64 result blocks) also remain.

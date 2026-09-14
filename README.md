@@ -469,6 +469,30 @@ dropped the content; `reReadRecency` *mitigates* that (it limits elision to stil
 compaction bound), and a re-read that has to go back for the file anyway is a **backfire** `report --backfire`
 counts (`Re-read elisions: N fired; M sent the model back`). Off until an A/B moves it.
 
+`blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
+minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,
+yet it re-enters context on every request until compaction. When a shell result is at least `blobMinChars`
+(default 4,000) and its **single longest line** is both at least `blobMaxLine` chars (default 2,000 — the
+absolute floor) and at least `blobLineShare` of the whole (default 0.5 — the dominance test), the guard replaces
+it with the first `blobKeepChars` (default 160) — enough to see what it was — plus a one-line descriptor, and
+saves the full output to `out/` so you can
+`Read` it back if you truly need the bytes. The longest-line-share test is the discriminator: prose, logs and
+pretty-printed JSON keep short lines, and wide-but-structured data (a CSV, a table) has many wide lines with
+none dominant, so all of those pass through untouched; only a single dominant encoded/minified run is elided. A
+failed command is never elided (its error is wanted whole). It counts as a plain trim to `report --backfire`
+(labelled `blob`), so a later `Read` of the saved file registers as a backfire. Shell/excerpt output only for
+now (an MCP base64 result or a `Read` of a one-line minified file are follow-ups). Off until an A/B moves it.
+
+`gitView` (default `false`) is the change-aware view of a `git diff`/`git show`. The whole diff re-enters
+context on every request, and its noisiest part is usually **generated** — a lockfile, a `*.min.js`, a source
+map — that no one reads line by line. When such a diff is at least `gitViewMinChars` (default 2,000), the guard
+collapses the hunks of any file whose path matches `gitCollapse` (default: the common lockfiles plus `.min.js`
+/ `.min.css` / `.map`) to a one-line `+adds/-dels` summary, **keeps every real-source hunk verbatim** and the
+commit/preamble intact, and saves the full diff to `out/`. It only touches `git diff`/`git show` (not `git
+log`, not `git status`); a diff with no generated files, or `--stat`/`--name-only` output, collapses nothing
+and passes through. A failed command is never touched. It counts as a plain trim to `report --backfire`
+(labelled `gitview`), so a `Read` of the saved diff registers as a backfire. Off until an A/B moves it.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,

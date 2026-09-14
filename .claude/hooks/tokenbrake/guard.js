@@ -41,6 +41,14 @@ const DEFAULTS = {
   reReadElide: false,    // OFF by default: a re-read of a file already read WHOLE this session, unchanged and recent, is narrowed to its first few lines plus a note; A/B before flipping
   reReadRecency: 8,      // only elide if fewer than this many whole-file reads happened since; a frequency limiter -- the guard does not consult compaction, so this just keeps elision to still-fresh reads
   reReadKeepLines: 5,    // lines kept before the pointer when a re-read is elided
+  blobElide: false,      // OFF by default: replace blob-like shell output (a base64 dump, a minified bundle, a one-line JSON) with a short descriptor + a saved copy; A/B before flipping
+  blobMinChars: 4000,    // don't treat output smaller than this as a blob worth eliding
+  blobMaxLine: 2000,     // absolute floor: the longest line must be at least this many chars (prose, logs and pretty-printed JSON are far shorter) -- independent of blobMinChars so tuning the size gate down can't weaken it
+  blobLineShare: 0.5,    // dominance: that longest line must also be at least this fraction of the output -- a single encoded/minified run, not wide multi-line data (CSV, tables)
+  blobKeepChars: 160,    // chars of the head kept in the descriptor so the model can still see what it was
+  gitView: false,        // OFF by default: in a `git diff`/`git show`, collapse the hunks of generated/lockfile paths to a one-line +/- summary, keeping real-source hunks; A/B before flipping
+  gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
+  gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
@@ -111,10 +119,11 @@ function toolConfig(cfg, tool) {
    a schema you always want in full. `alwaysCap` is the other direction: cap a read (or a `cat` excerpt) at
    readLimitLines even when it is under readMaxBytes -- a lockfile, a *.min.js, a generated bundle you never
    want whole. Both default to empty, so neither changes anything until set. */
-function matchesAny(patterns, str) {
+function matchesAny(patterns, str, test) {
   if (!Array.isArray(patterns) || !patterns.length || !str) return false;
   str = String(str);
-  for (const p of patterns) if (p && str.includes(String(p))) return true;
+  test = test || ((s, p) => s.includes(p));   // default: substring (noTrim/alwaysCap); gitCollapse passes a suffix test
+  for (const p of patterns) if (p && test(str, String(p))) return true;
   return false;
 }
 
@@ -147,7 +156,7 @@ function saveOut(input, text) {
   try {
     const outDir = path.join(TB_DIR, 'out');
     fs.mkdirSync(outDir, { recursive: true });
-    const sid = String(input.session_id || 'session').slice(0, 8);
+    const sid = String(input.session_id || 'session').slice(0, 8).replace(/[^\w-]/g, '_');   // sanitize like tid: a crafted session_id must not put `/` or `..` in the out/ filename
     const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
     const saved = path.join(outDir, `${sid}-${tid}.txt`);
     fs.writeFileSync(saved, text);
@@ -451,6 +460,52 @@ function trimText(text, cfg, savedPath) {
   return out;
 }
 
+/* Length of the longest line, without allocating a split. Blob detection (narrowing 3) uses it as the tell
+   that separates an encoded/minified run -- a base64 dump, a bundled/minified file, a one-line JSON -- from
+   prose, logs and pretty-printed JSON, whose lines stay short however large the whole gets. */
+function maxLineLen(text) {
+  let max = 0, cur = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) { if (cur > max) max = cur; cur = 0; } else cur++;
+  }
+  return cur > max ? cur : max;
+}
+
+/* Change-Aware Git View (narrowing 4). A `git diff`/`git show` re-adds the whole diff on every request, and the
+   noisiest part is usually generated -- a lockfile, a *.min.js, a source map -- that no one reads line by line.
+   collapseGitDiff replaces the hunk body of files whose path matches `patterns` with a one-line +adds/-dels
+   summary, keeps every real-source hunk verbatim, and leaves the commit/preamble intact. It never drops a
+   file's presence (the `diff --git` header stays), only its hunks. Returns the rewritten text and the count
+   collapsed; the caller acts only when at least one collapsed and the result got smaller. Pure string work over
+   the diff already in hand -- no git invocation. A quoted/space path that the header regex misses is left
+   whole (safe). */
+const GIT_DIFF = /\bgit(?:\s+-C\s+\S+)?\s+(?:diff|show)\b/;
+function collapseGitDiff(text, patterns) {
+  const parts = text.split(/(?=^diff --git )/m);   // each file section begins "diff --git "; parts[0] is any preamble
+  let collapsed = 0;
+  const out = parts.map((sec) => {
+    if (!sec.startsWith('diff --git ')) return sec;
+    const m = /^diff --git a\/(.+?) b\/(.+)$/m.exec(sec);
+    const file = m ? m[2].trim() : null;
+    if (!file || !matchesAny(patterns, file, (s, p) => s.endsWith(p))) return sec;   // suffix: `.map` must not match `a.mapper.js`
+    let adds = 0, dels = 0;                                    // count +/- line-starts without allocating a split
+    for (let i = 0; i < sec.length; ) {
+      const c = sec.charCodeAt(i);
+      if (c === 43 && !sec.startsWith('+++', i)) adds++;        // '+' content line, not the +++ file header
+      else if (c === 45 && !sec.startsWith('---', i)) dels++;   // '-' content line, not the --- file header
+      const nl = sec.indexOf('\n', i);
+      if (nl === -1) break;
+      i = nl + 1;
+    }
+    if (adds + dels === 0) return sec;   // rename/mode change only -- no hunks to collapse
+    collapsed++;
+    const nl = sec.indexOf('\n');
+    const firstLine = nl === -1 ? sec : sec.slice(0, nl);   // the `diff --git a/… b/…` header, kept
+    return `${firstLine}\n[tokenbrake] +${adds}/-${dels} lines, diff collapsed (generated/lockfile path)\n`;
+  });
+  return collapsed ? { text: out.join(''), collapsed } : { text, collapsed: 0 };   // no join/copy when nothing collapsed
+}
+
 function handlePost(input, cfg) {
   const tool = input.tool_name || '';
   const ti = input.tool_input || {};
@@ -550,6 +605,63 @@ function handlePost(input, cfg) {
   if (isShell && cfg.shapeFilters && text.length >= cfg.shapeMinChars) {
     const s2 = shapeFilter(text);
     if (s2.length < text.length) { rec.shapedFrom = text.length; rec.shapedTo = s2.length; text = s2; shaped = true; }
+  }
+
+  /* Binary-Blob Elider (narrowing 3): shell output that is an encoded or minified run -- a base64 dump, a
+     minified bundle, a giant one-line JSON -- is unreadable to the model as bytes, yet it re-enters context on
+     every request until compaction. Replace it with a short head plus a descriptor and a saved copy, so the
+     model can see what it was and Read the file back if it truly needs the bytes. Fires whether or not the
+     output is over maxChars: an excerpt under readMaxBytes and a below-threshold blob both pass whole otherwise,
+     and even an over-maxChars blob keeps maxChars of garbage under the char-slice above -- the descriptor keeps
+     a few. Off by default (blobElide); noTrim already returned above. The tell is one very long line that is
+     most of the output: blobMaxLine is the absolute floor (an encoded/minified line runs to thousands of chars;
+     prose, logs and pretty JSON stay short) and blobLineShare the dominance test (that longest line is at least
+     that fraction of the whole). Two independent floors on purpose -- share alone, coupled to blobMinChars,
+     would let a tuned-down size gate elide a merely-long line; wide-but-structured data (CSV, tables) has many
+     wide lines, none dominant, and is left alone by the share test. Not on a failed command -- an error is
+     wanted whole and rarely a blob. Logged as ev:'post' with blob:true; a plain
+     trim to the backfire audit (marker + saved out/), so report --backfire counts it and a re-read of the saved
+     file as a pull-back with no new machinery. */
+  if (isShell && !failed && cfg.blobElide && text.length >= cfg.blobMinChars) {
+    const ml = maxLineLen(text);
+    if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
+      const saved = saveOut(input, text);
+      const keep = Math.min(cfg.blobKeepChars, HOOK_OUTPUT_CAP - 500);   // leave room for the descriptor/path so the marker+note can't be truncated off
+      const head = text.slice(0, keep);
+      const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
+      const descriptor = `${head}${text.length > keep ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
+      log({ ...rec, chars: text.length, blob: true, kept: descriptor.length, saved });   // chars = the (possibly shaped) text we actually withheld, not the pre-shape rec.chars
+      const updatedBlob = (resp && typeof resp === 'object') ? { ...resp, stdout: descriptor, stderr: '' } : descriptor;
+      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedBlob } });
+      return;
+    }
+  }
+
+  /* Change-Aware Git View (narrowing 4): collapse the generated/lockfile hunks of a `git diff`/`git show` so the
+     whole diff stops re-entering context, keeping every real-source hunk. Off by default (gitView). Only a git
+     diff/show (not `git log`, not `git status`); a diff with no generated files, or `--stat`/`--name-only`
+     output (no `diff --git` hunks), collapses nothing and falls through. Saves the full diff to out/ and carries
+     the marker, so report --backfire counts it (kind 'gitview') and a re-read of the saved file as a pull-back.
+     Skipped if the collapsed body would still exceed the hook output cap -- a huge all-real-source diff is left
+     to the normal trim below. Not on a failed command. */
+  if (isShell && !failed && cfg.gitView && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''))) {
+    const g = collapseGitDiff(text, cfg.gitCollapse);
+    if (g.collapsed && g.text.length < text.length) {
+      const saved = saveOut(input, text);
+      const body = `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
+      /* Act only when the FULL emitted body (collapse + the summary note that names the saved path) is actually
+         smaller than the original AND fits the hook cap. A tiny generated hunk in an otherwise large real-source
+         diff can shrink `g.text` yet leave `body` bigger than the diff once the note is added -- emitting that
+         would grow context and log kept > chars, poisoning the A/B. When it does not pay off (or a huge
+         all-real-source diff would still overflow the cap), fall through to the normal trim below; that path
+         re-saves the same out/ file (idempotent, same tool_use_id) -- accepted for this uncommon case. */
+      if (body.length < text.length && body.length <= HOOK_OUTPUT_CAP) {
+        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+        const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
+        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
+        return;
+      }
+    }
   }
 
   if (!isShell || text.length <= cfg.maxChars) {

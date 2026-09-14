@@ -69,6 +69,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const ledger = readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
   const rec = ledger[ledger.length - 1];
   t('ledger row records chars, kept and saved', rec.ev === 'post' && rec.tool === 'Bash' && rec.chars === noisy.length && rec.kept === u.stdout.length && rec.saved === saved);
+
+  /* A crafted session_id must not put path characters in the out/ filename: the first 8 chars are sanitized
+     like the tool_use_id, so `../../..` can never escape out/ (before the fix, path.join would climb out). */
+  const evil = guard('post', { session_id: '../../../etc/pwn', tool_use_id: 'toolu_01EVILEVILEVIL', tool_name: 'Bash',
+    tool_input: { command: 'x' }, tool_response: bashResp(noisy) });
+  const eu = parse(evil.stdout);
+  const esaved = eu && eu.hookSpecificOutput && eu.hookSpecificOutput.updatedToolOutput
+    && (String(eu.hookSpecificOutput.updatedToolOutput.stdout || '').match(/Full output saved to (\S+\.txt)/) || [])[1];
+  const outDir = join(CFG, 'tokenbrake', 'out');
+  t('a crafted session_id is sanitized in the saved path (cannot escape out/)',
+    !!esaved && esaved.startsWith(outDir + '/') && /^[\w-]+\.txt$/.test(esaved.slice(outDir.length + 1)), esaved || 'no saved path');
 }
 
 {
@@ -1545,7 +1556,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
   const sid = 'a1b2c3d4-e5f6-7890-abcd-ef0123456789';                                 // realistic: > 8 chars
-  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it
+  const stem = (id) => sid.slice(0, 8).replace(/[^\w-]/g, '_') + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');   // as saveOut names it (sid sanitized too)
   const outPath = (id) => '/cfg/tokenbrake/out/' + stem(id) + '.txt';
   const reqs = (n) => Array.from({ length: n }, () => ({ model: 'claude-opus-5' }));
   const A = 'toolu_01AAAAAAAAAAAAAAAAA1', B = 'toolu_01BBBBBBBBBBBBBBBBB2', C = 'toolu_01CCCCCCCCCCCCCCCCC3';
@@ -1930,6 +1941,192 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const onCr = run(cr, { shapeFilters: true });
   t('a carriage-return redraw keeps its last frame only',
     onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
+}
+
+/* Binary-Blob Elider (narrowing 3, off by default): shell output that is one long encoded/minified run --
+   base64, a minified bundle, a one-line JSON -- is unreadable as bytes yet re-enters context every request.
+   Replace it with a head + a descriptor + a saved copy (a plain trim to the backfire audit). Wide structured
+   data (many wide lines, none dominant), a single long line inside normal output, short output, a failed
+   command and the default-off path are all left alone. */
+{
+  console.log('\n-- binary-blob elider (narrowing 3, off by default)');
+  const blobLine = 'const DATA="' + 'A1b2C3d4'.repeat(700) + '";';   // one ~5.6k-char line, no newlines
+  const runBlob = (text, cfgExtra, command = 'cat bundle.min.js', failed = false) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-blob-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const input = { session_id: 'blob', tool_use_id: 'toolu_blob_' + Math.random().toString(36).slice(2, 8),
+      tool_name: 'Bash', tool_input: { command } };
+    if (failed) { input.hook_event_name = 'PostToolUseFailure'; input.error = 'Exit code 1\n' + text; }
+    else input.tool_response = bashResp(text);
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    const o = parse(r.stdout);
+    const out = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+    const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    const ledgerPath = join(dir, 'tokenbrake', 'ledger.jsonl');
+    const blobRow = existsSync(ledgerPath)
+      ? readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean).map(l => parse(l)).reverse().find(r => r && r.blob)
+      : null;
+    rmSync(dir, { recursive: true, force: true });
+    return { out, outFiles, blobRow };
+  };
+
+  t('off by default: a blob is not elided', !/blob-like output/.test(runBlob(blobLine, null).out), 'off');
+
+  const on = runBlob(blobLine, { blobElide: true });
+  t('on: a one-line blob is elided to a descriptor', /\[tokenbrake\] withheld ~\d+ KB of blob-like output/.test(on.out), on.out.slice(-140));
+  t('on: the descriptor is far smaller than the blob', on.out.length < blobLine.length * 0.2, `${on.out.length} vs ${blobLine.length}`);
+  t('on: the full output is saved to out/ for retrieval', on.outFiles.length === 1, JSON.stringify(on.outFiles));
+  t('on: a head is kept so the model can see what it was', on.out.startsWith('const DATA="A1b2'), on.out.slice(0, 24));
+
+  /* Wide but structured: many wide lines, none dominant -- the share guard leaves it whole. */
+  const wide = Array.from({ length: 20 }, (_, i) => 'row' + i + ',' + 'x,'.repeat(1200)).join('\n');
+  t('a wide multi-line table is left alone (longest line is not most of the output)',
+    !/blob-like output/.test(runBlob(wide, { blobElide: true }).out), 'wide');
+
+  /* One long line inside otherwise normal output is not the whole output -- the share guard again. */
+  const embedded = Array.from({ length: 200 }, (_, i) => 'log line number ' + i + ' with ordinary content').join('\n') + '\n' + 'z'.repeat(2500);
+  t('a single long line inside a normal log does not elide the log',
+    !/blob-like output/.test(runBlob(embedded, { blobElide: true }).out), 'embedded');
+
+  t('under blobMinChars nothing is elided', !/blob-like output/.test(runBlob('x'.repeat(2500), { blobElide: true }).out), 'small');
+
+  t('a failed command carrying a blob is not elided (the error is wanted whole)',
+    !/blob-like output/.test(runBlob(blobLine, { blobElide: true }, 'cat bundle.min.js', true).out), 'failed');
+
+  /* blobMaxLine is an ABSOLUTE floor, independent of blobMinChars: a small output dominated by a merely-long
+     line is not a blob even when the size gate is tuned down, so tuning blobMinChars can't silently weaken it. */
+  const modest = 'y'.repeat(900) + '\n' + 'z'.repeat(60);   // one 900-char line, dominant, but under blobMaxLine (2000)
+  t('a dominant but sub-blobMaxLine line is not elided even with blobMinChars tuned down',
+    !/blob-like output/.test(runBlob(modest, { blobElide: true, blobMinChars: 800 }).out), 'floor');
+
+  /* Accounting under shapeFilters: shaping collapses the progress lines first, the blob line then dominates,
+     so the blob fires on the SHAPED text -- and the row's chars must be the shaped size it actually withheld,
+     not the pre-shape original, or report/backfire over-credit the saving. */
+  const shapedBlob = Array.from({ length: 300 }, (_, i) => `\x1b[32m[${'='.repeat(20)}] ${(i % 100) + 1}% downloading\x1b[0m`).join('\n') + '\n' + 'Q'.repeat(5000);
+  const sb = runBlob(shapedBlob, { blobElide: true, shapeFilters: true });
+  t('shapeFilters + blobElide: the blob fires on the shaped output', /blob-like output/.test(sb.out), sb.out.slice(-100));
+  t('the blob row records the shaped size it withheld, not the pre-shape original',
+    sb.blobRow && sb.blobRow.chars < shapedBlob.length * 0.6, JSON.stringify(sb.blobRow && { chars: sb.blobRow.chars, orig: shapedBlob.length }));
+
+  /* The descriptor is clamped under HOOK_OUTPUT_CAP even with a large blobKeepChars, so the marker and the
+     recovery note (both at the tail) are never truncated off by Claude Code's 10,000-char hook-output cap. */
+  const bigKeep = runBlob('B'.repeat(60000), { blobElide: true, blobKeepChars: 50000 });
+  t('a large blobKeepChars still leaves the marker + note intact (descriptor under the hook cap)',
+    bigKeep.out.length <= 9500 && /blob-like output/.test(bigKeep.out) && /Read it if you need the raw bytes/.test(bigKeep.out),
+    `len=${bigKeep.out.length}`);
+
+  /* Auditor: a blob withhold is counted (kind "blob") and a re-read of its saved out/ file is a backfire,
+     through the existing withhold/pull-back machinery -- no narrowing-3-specific audit code. */
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const sid = 'b10bf00d-1111-2222-3333-444455556666';
+  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const BID = 'toolu_01BLOBBBBBBBBBBBBB1';
+  const outFile = '/cfg/tokenbrake/out/' + stem(BID) + '.txt';
+  const blobTx = { sessionId: sid, cwd: '/w', requests: Array.from({ length: 4 }, () => ({ model: 'claude-opus-5' })), compactions: [],
+    results: [
+      { id: BID, name: 'Bash', file: null, what: 'cat bundle.min.js', marker: true, tokens: 40, afterReq: 0 },
+      { id: 'toolu_RB', name: 'Read', file: outFile, what: outFile, marker: false, tokens: 6000, afterReq: 1 },
+    ] };
+  const ab = T.backfireAudit(blobTx, [{ ev: 'post', session: sid, id: BID, tool: 'Bash', chars: 30000, kept: 200, blob: true, saved: outFile }], { min: 1 });
+  t('a blob withhold is counted with kind "blob"', ab.withholds.length === 1 && ab.withholds[0].kind === 'blob', JSON.stringify(ab.withholds.map(w => w.kind)));
+  t('a re-read of the blob\'s saved out/ file is a backfire', ab.backfired === 1 && ab.withholds[0].recovered, JSON.stringify({ b: ab.backfired }));
+  t('report byKind labels the blob withhold "blob"', ab.byKind.blob === 1, JSON.stringify(ab.byKind));
+}
+
+/* Change-Aware Git View (narrowing 4, off by default): in a `git diff`/`git show`, the hunks of generated
+   /lockfile paths are collapsed to a one-line +/- summary while real-source hunks are kept verbatim. A diff
+   with no generated files, a non-git command, and a failed command are all left alone. */
+{
+  console.log('\n-- change-aware git view (narrowing 4, off by default)');
+  const lockHunk = ['diff --git a/package-lock.json b/package-lock.json',
+    'index 1111111..2222222 100644', '--- a/package-lock.json', '+++ b/package-lock.json',
+    '@@ -1,80 +1,80 @@',
+    ...Array.from({ length: 80 }, (_, i) => `-    "pkg-${i}": "1.0.${i}",\n+    "pkg-${i}": "1.1.${i}",`)].join('\n');
+  const srcHunk = ['diff --git a/src/app.js b/src/app.js', 'index aaaaaaa..bbbbbbb 100644',
+    '--- a/src/app.js', '+++ b/src/app.js', '@@ -10,3 +10,3 @@ function main() {',
+    ' const a = 1;', '-const x = 1;', '+const x = 2;', ' const b = 3;'].join('\n');
+  const diff = lockHunk + '\n' + srcHunk + '\n';
+
+  const runGit = (text, cfgExtra, command = 'git diff', failed = false) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-git-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const input = { session_id: 'git', tool_use_id: 'toolu_git_' + Math.random().toString(36).slice(2, 8),
+      tool_name: 'Bash', tool_input: { command } };
+    if (failed) { input.hook_event_name = 'PostToolUseFailure'; input.error = 'Exit code 1\n' + text; }
+    else input.tool_response = bashResp(text);
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    const o = parse(r.stdout);
+    const out = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput
+      ? (o.hookSpecificOutput.updatedToolOutput.stdout ?? o.hookSpecificOutput.updatedToolOutput) : '';
+    const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    rmSync(dir, { recursive: true, force: true });
+    return { out, outFiles };
+  };
+
+  t('off by default: a git diff is not collapsed', !/diff collapsed/.test(runGit(diff, null).out), 'off');
+
+  const on = runGit(diff, { gitView: true });
+  t('on: the lockfile hunk is collapsed to a +/- summary', /\+80\/-80 lines, diff collapsed/.test(on.out), on.out.slice(0, 200));
+  t('on: the real-source hunk is kept verbatim', on.out.includes('+const x = 2;'), 'src kept');
+  t('on: the collapsed diff is smaller than the original', on.out.length < diff.length, `${on.out.length} vs ${diff.length}`);
+  t('on: the full diff is saved to out/ for retrieval', on.outFiles.length === 1, JSON.stringify(on.outFiles));
+  t('on: the diff --git header for the lockfile is kept (file presence not dropped)', on.out.includes('diff --git a/package-lock.json b/package-lock.json'), 'header kept');
+
+  /* A large diff of only real-source files has nothing generated to collapse -- left whole. */
+  const bigSrc = Array.from({ length: 6 }, (_, i) =>
+    [`diff --git a/src/mod${i}.js b/src/mod${i}.js`, `index a${i}..b${i} 100644`, `--- a/src/mod${i}.js`, `+++ b/src/mod${i}.js`,
+     '@@ -1,20 +1,20 @@', ...Array.from({ length: 20 }, (_, j) => `-old line ${j} of module ${i}\n+new line ${j} of module ${i}`)].join('\n')).join('\n') + '\n';
+  t('a diff with no generated files is not collapsed', !/diff collapsed/.test(runGit(bigSrc, { gitView: true }).out), 'no-generated');
+
+  /* Suffix match, not substring: a real-source file whose name merely CONTAINS a pattern (`.map` inside
+     `a.mapper.js`) must not be collapsed -- the "real-source hunks kept verbatim" invariant. */
+  const mapperDiff = ['diff --git a/src/a.mapper.js b/src/a.mapper.js', 'index e1..e2 100644',
+    '--- a/src/a.mapper.js', '+++ b/src/a.mapper.js', '@@ -1,80 +1,80 @@',
+    ...Array.from({ length: 80 }, (_, j) => `-const mapping${j} = old;\n+const mapping${j} = new;`)].join('\n') + '\n';
+  t('a real-source file whose name contains a pattern substring (.map in a.mapper.js) is NOT collapsed',
+    !/diff collapsed/.test(runGit(mapperDiff, { gitView: true }).out), 'suffix');
+
+  /* Never emit MORE than the original: a tiny generated hunk in a big real-source diff shrinks g.text a little,
+     but adding the summary note would make the body larger than the diff -- so it is not emitted (falls through). */
+  const bigReal = ['diff --git a/src/big.js b/src/big.js', 'index c1..c2 100644', '--- a/src/big.js', '+++ b/src/big.js',
+    '@@ -1,60 +1,60 @@', ...Array.from({ length: 60 }, (_, j) => `-old source line ${j} here\n+new source line ${j} here`)].join('\n');
+  const tinyLock = ['diff --git a/package-lock.json b/package-lock.json', 'index d1..d2 100644',
+    '--- a/package-lock.json', '+++ b/package-lock.json', '@@ -1,1 +1,1 @@', '-  "version": "1.0.0"', '+  "version": "1.0.1"'].join('\n');
+  const tinyLockBigSrc = bigReal + '\n' + tinyLock + '\n';
+  const tl = runGit(tinyLockBigSrc, { gitView: true }).out;
+  t('a collapse that would not shrink the delivered body is not emitted (never larger than the original)',
+    !/diff collapsed/.test(tl) && tl.length <= tinyLockBigSrc.length, `len=${tl.length} vs ${tinyLockBigSrc.length}`);
+
+  /* Only a git diff/show -- a non-git command carrying diff-like text is not touched. */
+  t('a non-git command with diff-like output is left alone', !/diff collapsed/.test(runGit(diff, { gitView: true }, 'cat changes.patch').out), 'non-git');
+
+  /* git show: the commit preamble before the first `diff --git` is preserved, generated hunk still collapsed. */
+  const show = 'commit deadbeef1234\nAuthor: A <a@example.com>\nDate: today\n\n    bump deps\n\n' + diff;
+  const onShow = runGit(show, { gitView: true }, 'git show HEAD');
+  t('git show keeps the commit preamble and still collapses the lockfile', onShow.out.includes('Author: A <a@example.com>') && /\+80\/-80 lines, diff collapsed/.test(onShow.out), onShow.out.slice(0, 120));
+
+  t('a failed git command is not collapsed (the error is wanted whole)', !/diff collapsed/.test(runGit(diff, { gitView: true }, 'git diff', true).out), 'failed');
+
+  /* Auditor: a gitview withhold is counted (kind "gitview") and a re-read of its saved out/ file is a backfire. */
+  const trg = await import('./transcript.js');
+  const TG = trg.default || trg;
+  const gsid = 'a11ce5ee-2222-3333-4444-555566667777';
+  const gstem = (id) => gsid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const GID = 'toolu_01GITVIEWWWWWWWWWW1';
+  const gOut = '/cfg/tokenbrake/out/' + gstem(GID) + '.txt';
+  const gitTx = { sessionId: gsid, cwd: '/w', requests: Array.from({ length: 4 }, () => ({ model: 'claude-opus-5' })), compactions: [],
+    results: [
+      { id: GID, name: 'Bash', file: null, what: 'git diff', marker: true, tokens: 50, afterReq: 0 },
+      { id: 'toolu_RG', name: 'Read', file: gOut, what: gOut, marker: false, tokens: 5000, afterReq: 1 },
+    ] };
+  const ag = TG.backfireAudit(gitTx, [{ ev: 'post', session: gsid, id: GID, tool: 'Bash', chars: 40000, kept: 300, gitview: true, saved: gOut }], { min: 1 });
+  t('a gitview withhold is counted with kind "gitview"', ag.withholds.length === 1 && ag.withholds[0].kind === 'gitview', JSON.stringify(ag.withholds.map(w => w.kind)));
+  t('a re-read of the gitview saved out/ file is a backfire', ag.backfired === 1 && ag.withholds[0].recovered, JSON.stringify({ b: ag.backfired }));
+  t('report byKind labels the gitview withhold "gitview"', ag.byKind.gitview === 1, JSON.stringify(ag.byKind));
 }
 
 /* ---- what the trim keeps and what it breaks -------------------------------
