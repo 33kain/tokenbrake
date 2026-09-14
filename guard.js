@@ -594,6 +594,7 @@ function handleReadPre(input, cfg) {
   let st;
   try { st = fs.statSync(fp); } catch { return; }
   if (!st.isFile()) return;
+  const nLines = countLines(fp, st.size);   // computed once; the delta and the size cap below both read it
 
   /* Read-After-Edit Delta (narrowing 1): the model edited this file this session and is now reading it whole
      -- almost always to verify the edit, which the harness's own guidance calls unnecessary. Narrow the read
@@ -603,19 +604,29 @@ function handleReadPre(input, cfg) {
      window it injected, so the Backfire Auditor can tell a delta from a size cap and measure whether it sent
      the model back for a wider read. The note states only what the guard knows -- that these lines were edited
      -- not that the model already holds the rest, which it cannot know (a blind edit, a format-on-save, or
-     another tool may have changed the file). */
-  if (cfg.readAfterEdit) {
-    const ranges = editLookup(input.session_id, path.resolve(fp)).flatMap(e => e.ranges).filter(r => Array.isArray(r) && r.length === 2);
-    const lineCount = ranges.length ? countLines(fp, st.size) : null;
-    if (lineCount != null) {
+     another tool may have changed the file).
+
+     Uses the MOST RECENT edit record for this file, not the union of the whole session: the latest edit is the
+     one this read most likely verifies, its lines are in the current numbering, and it bounds the spread.
+     Three guards keep the injected window sound: the edit must fall within the file (editFrom <= nLines + 1 --
+     else a truncation or an odd structuredPatch newStart would push offset past EOF and limit negative); the
+     window must not exceed the size cap it overrides (limit <= readLimitLines -- else scattered edits could
+     deliver more than the cap would); and it must hide something (limit < nLines). `to` is left unclamped so a
+     last-line edit on a file with no trailing newline (where nLines counts one short) still shows. */
+  if (cfg.readAfterEdit && nLines != null) {
+    const recs = editLookup(input.session_id, path.resolve(fp));
+    const latest = recs.reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
+    const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);
+    if (ranges.length) {
       const ctx = cfg.editContextLines;
-      const from = Math.max(1, Math.min(...ranges.map(r => r[0])) - ctx);
-      const to = Math.min(lineCount, Math.max(...ranges.map(r => r[1])) + ctx);
+      const editFrom = Math.min(...ranges.map(r => r[0])), editTo = Math.max(...ranges.map(r => r[1]));
+      const from = Math.max(1, editFrom - ctx);
+      const to = editTo + ctx;
       const limit = to - from + 1;
-      if (limit < lineCount) {   // only narrow if it actually hides something
-        log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, offset: from, limit });
+      if (editFrom <= nLines + 1 && limit <= cfg.readLimitLines && limit < nLines) {
+        log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, offset: from, limit });
         emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, offset: from, limit },
-          additionalContext: `${path.basename(fp)}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${to} of ${lineCount}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.` } });
+          additionalContext: `${path.basename(fp)}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${Math.min(to, nLines)} of ${nLines}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.` } });
         return;
       }
     }
@@ -635,11 +646,11 @@ function handleReadPre(input, cfg) {
      as before. Its value is that the trigger's own evidence stops being an inference. */
   if (!persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
     if (cfg.logAllTools) log({ ev: 'read-whole', session: input.session_id, tool: 'Read', what: fp,
-      bytes: st.size, lines: countLines(fp, st.size) });
+      bytes: st.size, lines: nLines });
     return;
   }
   const limit = persisted ? cfg.persistedLimitLines : cfg.readLimitLines;
-  const lineCount = countLines(fp, st.size);
+  const lineCount = nLines;
 
   log({ ev: 'read-cap', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: lineCount, limit, persisted });
 

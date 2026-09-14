@@ -1713,8 +1713,38 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_response: { structuredPatch: [{ oldStart: 50, oldLines: 3, newStart: 50, newLines: 4 }] } });
   const patchEdits = readFileSync(join(dir3, 'tokenbrake', 'edits', sess + '.jsonl'), 'utf8');
   t('structuredPatch drives the range where locating new_string cannot (replace_all / repeated / absent text)', /"ranges":\[\[50,53\]\]/.test(patchEdits), patchEdits.trim());
-
   rmSync(dir, { recursive: true, force: true }); rmSync(dir2, { recursive: true, force: true }); rmSync(dir3, { recursive: true, force: true });
+
+  /* A window wider than readLimitLines is NOT injected -- the delta must never deliver more than the size cap
+     it overrides (a scattered/large edit span would). */
+  const dirCap = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-cap-'));
+  const fileCap = join(dirCap, 'big.js'); writeFileSync(fileCap, lines.join('\n') + '\n');
+  writeFileSync(join(dirCap, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true, readLimitLines: 10 }));
+  spawnIn(dirCap, 'post', { session_id: sess, tool_use_id: 'toolu_c1', tool_name: 'Edit', tool_input: { file_path: fileCap, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: fileCap } });
+  const capUi = (parse(spawnIn(dirCap, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileCap } }).stdout) || {}).hookSpecificOutput;
+  t('a delta window wider than readLimitLines is not injected (never delivers more than the cap)', !(capUi && capUi.updatedInput && capUi.updatedInput.offset), JSON.stringify(capUi));
+  rmSync(dirCap, { recursive: true, force: true });
+
+  /* An edit recorded past EOF (a truncation, or an odd structuredPatch newStart from untrusted tool output)
+     must not inject a negative limit or a past-EOF offset -- it declines instead. */
+  const dirEof = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-eof-'));
+  const fileEof = join(dirEof, 'big.js'); writeFileSync(fileEof, lines.join('\n') + '\n');   // 200 lines
+  writeFileSync(join(dirEof, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirEof, 'post', { session_id: sess, tool_use_id: 'toolu_x1', tool_name: 'Edit', tool_input: { file_path: fileEof, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 9999, newLines: 1 }] } });
+  const eofUi = (parse(spawnIn(dirEof, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileEof } }).stdout) || {}).hookSpecificOutput;
+  t('an edit recorded past EOF never injects a negative limit / past-EOF offset', !(eofUi && eofUi.updatedInput && eofUi.updatedInput.offset), JSON.stringify(eofUi));
+  rmSync(dirEof, { recursive: true, force: true });
+
+  /* A last-line edit on a file with NO trailing newline (where countLines is one short) is still shown --
+     `to` is left unclamped so the edited line stays inside the injected window. */
+  const dirNl = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-nl-'));
+  const fileNl = join(dirNl, 'big.js'); writeFileSync(fileNl, lines.slice(0, 50).join('\n'));   // 50 lines, no trailing newline
+  writeFileSync(join(dirNl, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  spawnIn(dirNl, 'post', { session_id: sess, tool_use_id: 'toolu_n1', tool_name: 'Edit', tool_input: { file_path: fileNl, old_string: 'a', new_string: 'b' }, tool_response: { structuredPatch: [{ newStart: 50, newLines: 1 }] } });
+  const nlUi = ((parse(spawnIn(dirNl, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: fileNl } }).stdout) || {}).hookSpecificOutput || {}).updatedInput;
+  t('a last-line edit on a no-trailing-newline file is still inside the injected window',
+    nlUi && nlUi.offset === 30 && (nlUi.offset + nlUi.limit - 1) >= 50, JSON.stringify(nlUi));
+  rmSync(dirNl, { recursive: true, force: true });
 
   /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
   const tr = await import('./transcript.js');
@@ -1725,6 +1755,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a later read outside the delta window is a delta backfire', T.backfireAudit(mk(150, 2000), deltaLedger).deltas.backfired === 1, 'outside');
   t('a later read inside the delta window is not a backfire', T.backfireAudit(mk(90, 2000), deltaLedger).deltas.backfired === 0, 'inside');
   t('a read before the delta fired is not a backfire', T.backfireAudit(mk(150, 500), deltaLedger).deltas.backfired === 0, 'before');
+  const whole = (at) => ({ sessionId: 'ds', cwd: '/w', requests: [{}, {}], compactions: [],
+    results: [{ id: 'r', name: 'Bash', file: '/w/big.js', readFrom: null, whole: true, at, tokens: 100, afterReq: 0 }] });
+  t('a whole-file re-read after the delta (cat / unbounded Read) is a delta backfire', T.backfireAudit(whole(2000), deltaLedger).deltas.backfired === 1, 'whole-after');
+  t('a whole-file read at/before the delta (its own narrowed read) is not counted', T.backfireAudit(whole(900), deltaLedger).deltas.backfired === 0, 'whole-own');
 }
 
 /* ---- shape filters, off by default ---------------------------------------

@@ -852,10 +852,12 @@ function readDeltas(ledgerRecs, parsed) {
     const key = normReadPath(r.what, cwd), t = Number(r.t) || null;
     const from = Number(r.offset) || 1, to = from + (Number(r.limit) || 0) - 1;
     const hit = (parsed.results || []).some((res) => {
-      if (res.readFrom == null || !res.file || normReadPath(res.file, cwd) !== key) return false;
+      if (!res.file || normReadPath(res.file, cwd) !== key) return false;
       const when = res.askedAt != null ? res.askedAt : res.at;
-      if (t != null && when != null && when <= t) return false;   // must come after the delta fired
-      return res.readFrom < from || res.readFrom > to;            // a read outside the region the delta showed
+      if (t != null && when != null && when <= t) return false;   // must come after the delta fired; excludes the
+      if (res.whole) return true;                                 //   delta's own narrowed read, so a whole-file
+      if (res.readFrom == null) return false;                     //   re-read (cat / unbounded Read) counts, but a
+      return res.readFrom < from || res.readFrom > to;            //   ranged read outside the shown region does too
     });
     if (hit) backfired++;
   }
