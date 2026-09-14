@@ -1168,7 +1168,7 @@ function auditReport() {
 
   let W = 0, saved = 0, savedCarried = 0, recTokens = 0, recCarried = 0, backfired = 0, sessions = 0;
   let unmatchedEvents = 0, unmatchedCarried = 0;
-  const byKind = {}; let capsFired = 0, induced = 0;
+  const byKind = {}; let capsFired = 0, induced = 0, deltasFired = 0, deltasBackfired = 0;
   for (const file of files) {
     let p; try { p = transcript.parseTranscript(file); } catch { continue; }
     sessions++;
@@ -1177,8 +1177,11 @@ function auditReport() {
     recTokens += a.recoveredTokens; recCarried += a.recoveredCarried;
     unmatchedEvents += a.unmatchedEvents; unmatchedCarried += a.unmatchedCarried;
     backfired += a.backfired; capsFired += a.caps.fired; induced += a.caps.induced;
+    deltasFired += a.deltas.fired; deltasBackfired += a.deltas.backfired;
     for (const k of Object.keys(a.byKind)) byKind[k] = (byKind[k] || 0) + a.byKind[k];
   }
+  const deltaLine = () => { if (deltasFired) console.log('  Read-After-Edit deltas: ' + deltasFired + ' fired; '
+    + deltasBackfired + ' sent the model back for a wider read of the file (a delta that hid what it wanted)'); };
   /* A read of a saved output this audit could not tie to a withhold it counted -- an earlier session's out/
      file, or a capped/over-ceiling output that carries no marker. Real token-reads, but not this session's
      saving coming back, so it is reported apart from the net rather than silently docking it. */
@@ -1191,6 +1194,7 @@ function auditReport() {
     console.log('  No withholds in these session(s) -- nothing to audit (the guard trimmed nothing that carried its marker here).');
     alsoBack();
     if (capsFired) console.log('  Read caps fired: ' + capsFired + (induced ? ', ' + induced + ' later ranged read(s) followed a cap on the same file' : ''));
+    deltaLine();
     console.log('\n  A withhold is a trim, MCP trim or dedup the model saw. Turn a narrowing on and run a session, then this says whether it paid off.');
     return;
   }
@@ -1214,6 +1218,7 @@ function auditReport() {
   console.log('  Verdict: ' + say);
   if (capsFired) console.log('  Read caps (softer signal, reported apart): ' + capsFired + ' fired; ' + induced
     + ' later ranged read(s) followed a cap on the same file -- a bounded re-read is partly what the cap asks for');
+  deltaLine();
   console.log('\n  A withhold backfires when the model retrieves what was withheld -- the two ways the guard creates it: reading the'
     + '\n  saved out/ file, or `tokenbrake show`. This is the gate for turning a narrowing on: a narrowing whose net is'
     + '\n  negative is spending tokens, not saving them. Token-reads only; --cost is where dollars live.');

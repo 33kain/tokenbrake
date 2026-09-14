@@ -827,10 +827,41 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   for (const w of withholds) byKind[w.kind] = (byKind[w.kind] || 0) + 1;
   const caps = readCaps(ledger, parsed.sessionId);
   const cls = classifyRangedReads(parsed, ledger, { sessionId: parsed.sessionId });
+  const deltas = readDeltas(ledger, parsed);
 
   return { withholds, byKind, saved, savedCarried, recoveredEvents: matched.length,
     recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
-    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length } };
+    backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas };
+}
+
+/* Read-After-Edit deltas (narrowing 1) and whether each sent the model back for more. A delta narrows an
+   unbounded Read of a just-edited file to the changed region; the guard logs it as ev:'read-delta' with the
+   window (offset, limit) it injected. It BACKFIRED when the model then read the SAME file again at a line
+   OUTSIDE that window -- the delta hid what it actually wanted. The narrowed read itself starts inside the
+   window, which is why the window is recorded: it lets a real "went back for more" read be told apart from the
+   delta's own read (the reason this is not folded into the read-cap/induced machinery, where the delta read
+   would count as its own backfire). A distinct ev also keeps read-delta rows out of the readMaxBytes evidence
+   in --caps/--reads/--where, which is about the size cap, not this. */
+function readDeltas(ledgerRecs, parsed) {
+  const cwd = parsed && parsed.cwd;
+  const rows = [];
+  for (const r of ledgerRecs || []) {
+    if (!r || r.ev !== 'read-delta') continue;
+    if (parsed && parsed.sessionId && r.session && r.session !== parsed.sessionId) continue;
+    const from = Number(r.offset) || 1;
+    rows.push({ key: normReadPath(r.what, cwd), t: Number(r.t) || null, from, to: from + (Number(r.limit) || 0) - 1 });
+  }
+  let backfired = 0;
+  for (const d of rows) {
+    const hit = (parsed.results || []).some((res) => {
+      if (res.readFrom == null || !res.file || normReadPath(res.file, cwd) !== d.key) return false;
+      const when = res.askedAt != null ? res.askedAt : res.at;
+      if (d.t != null && when != null && when <= d.t) return false;   // must come after the delta fired
+      return res.readFrom < d.from || res.readFrom > d.to;            // a read outside the region the delta showed
+    });
+    if (hit) backfired++;
+  }
+  return { fired: rows.length, backfired };
 }
 
 /* Usage, summed once per request. The API reports the whole context on every request (uncached input +

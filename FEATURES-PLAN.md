@@ -133,8 +133,22 @@ grandfathered, to be cleaned up later, not extended).
   existing engine (`trimSavings`, `ledgerIndex`, `classifyRangedReads`, `recoveryReads`); tokens only; 9 new
   checks. Every later narrowing follows the save-to-`out/` + marker pattern, so its backfires are `out/` reads
   the same detector already catches — which is why this is Step 0.
-- **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Read-After-Edit
-  Delta, Grep-Anchored Reads, Dependency Surface Reader, Change-Aware Git View, API/JSON Field Projection;
-  plus Instruction Diet Compiler, In-Window Overlap Trimmer, Personalized Auto-Tuner (the report engine
-  already holds most of it), Deterministic Replay Simulator (rides the `trim.js` extraction), Binary-Blob
-  Elider.
+- **Narrowing 1 — Read-After-Edit Delta. DONE (ships OFF).** Chosen first because it is the lowest-backfire
+  bet on the board: it withholds a *re-send of content the model already has* (it just edited the file), and
+  the harness's own system prompt calls the verify re-read unnecessary — so the withheld bytes' need is
+  predictably low. `readAfterEdit` (default false): `handlePost` records each `Edit`/`MultiEdit`'s changed
+  line range to a per-session `edits/<session>.jsonl` (mirroring the dedup state pattern; `new_string` located
+  uniquely in the post-edit file); `handleReadPre` narrows a later **unbounded** Read of that file to the
+  changed region + `editContextLines` (20) via `updatedInput` offset/limit — the same proven mechanism the
+  Read cap uses, not a PostToolUse rewrite of the Read result (unknown schema, silent-rejection risk). Takes
+  precedence over the size cap (shows the actual edit, not the first N lines). Logged as its own
+  `ev:'read-delta'` with the injected window, and `backfireAudit` counts a **delta backfire** when the model
+  later reads the file outside that window — a distinct ev on purpose, so the delta's own narrowed read is not
+  mistaken for its own backfire and so read-delta rows stay out of the readMaxBytes evidence. Guard copy
+  re-synced; 8 new checks incl. an end-to-end guard spawn. A/B via `report --backfire` gates the default.
+- **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
+  Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
+  following Read usually wants *more*, not the same window), Dependency Surface Reader, Change-Aware Git View,
+  API/JSON Field Projection; plus Instruction Diet Compiler, In-Window Overlap Trimmer, Personalized
+  Auto-Tuner (the report engine already holds most of it), Deterministic Replay Simulator (rides the
+  `trim.js` extraction), Binary-Blob Elider.

@@ -1664,6 +1664,55 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(dir, { recursive: true, force: true });
 }
 
+/* Read-After-Edit Delta (narrowing 1, off by default): after an Edit, an unbounded Read of the same file is
+   narrowed to the changed region + context; the rest is unchanged from what the model already has. The file
+   stays on disk, so a wrong guess costs one wider read, which report --backfire measures as a delta backfire. */
+{
+  console.log('\n-- read-after-edit delta (narrowing 1, off by default)');
+  const lines = Array.from({ length: 200 }, (_, i) => i === 99 ? 'const UNIQUE_EDIT_MARKER = 1;' : ('const x' + i + ' = ' + i + ';'));
+  const sess = 'rae-1';
+  const editInput = (file) => ({ session_id: sess, tool_use_id: 'toolu_e1', tool_name: 'Edit',
+    tool_input: { file_path: file, old_string: 'const x99 = 99;', new_string: 'const UNIQUE_EDIT_MARKER = 1;' }, tool_response: { filePath: file } });
+
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-'));
+  const file = join(dir, 'big.js');
+  writeFileSync(file, lines.join('\n') + '\n');
+  writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ readAfterEdit: true }));
+  const spawnIn = (d, mode, input) => spawnSync(process.execPath, ['./guard.js', mode],
+    { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: d } });
+
+  spawnIn(dir, 'post', editInput(file));
+  const editsFile = join(dir, 'tokenbrake', 'edits', sess + '.jsonl');
+  t('an Edit records the changed line range when readAfterEdit is on',
+    existsSync(editsFile) && /"ranges":\[\[100,100\]\]/.test(readFileSync(editsFile, 'utf8')), existsSync(editsFile) ? readFileSync(editsFile, 'utf8').trim() : 'no edits file');
+  const on = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file } }).stdout);
+  const ui = on && on.hookSpecificOutput && on.hookSpecificOutput.updatedInput;
+  t('an unbounded read of the edited file is narrowed to the changed region + context', ui && ui.offset === 80 && ui.limit === 41, JSON.stringify(ui));
+  t('the narrowing explains itself and points to a wider read', /changed region \(lines 80-120 of 200\)/.test((on.hookSpecificOutput || {}).additionalContext || ''), ((on || {}).hookSpecificOutput || {}).additionalContext || '');
+  const led = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8');
+  t('the delta is logged as its own ev:read-delta with the window', /"ev":"read-delta"/.test(led) && /"offset":80/.test(led) && /"limit":41/.test(led), led.split('\n').filter(Boolean).pop());
+  const bounded = parse(spawnIn(dir, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file, offset: 5, limit: 10 } }).stdout);
+  t('a bounded read of an edited file is left alone', bounded === null || !bounded.hookSpecificOutput, JSON.stringify(bounded));
+
+  const dir2 = mkdtempSync(join(tmpdir(), 'tokenbrake-rae-off-'));
+  const file2 = join(dir2, 'big.js'); writeFileSync(file2, lines.join('\n') + '\n');
+  spawnIn(dir2, 'post', editInput(file2));   // no config -> readAfterEdit defaults off
+  t('no edit is recorded when readAfterEdit is off (default)', !existsSync(join(dir2, 'tokenbrake', 'edits', sess + '.jsonl')), 'off');
+  const off = parse(spawnIn(dir2, 'read-pre', { session_id: sess, tool_name: 'Read', tool_input: { file_path: file2 } }).stdout);
+  t('an unbounded read is not narrowed when readAfterEdit is off', off === null || !(off.hookSpecificOutput && off.hookSpecificOutput.updatedInput && off.hookSpecificOutput.updatedInput.offset), JSON.stringify(off));
+  rmSync(dir, { recursive: true, force: true }); rmSync(dir2, { recursive: true, force: true });
+
+  /* Auditor side: a delta backfires when the model later reads the file OUTSIDE the window the delta showed. */
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const deltaLedger = [{ ev: 'read-delta', session: 'ds', what: '/w/big.js', offset: 80, limit: 41, t: 1000 }];
+  const mk = (readFrom, at) => ({ sessionId: 'ds', cwd: '/w', requests: [{}, {}], compactions: [],
+    results: [{ id: 'r', name: 'Read', file: '/w/big.js', readFrom, at, tokens: 100, afterReq: 0 }] });
+  t('a later read outside the delta window is a delta backfire', T.backfireAudit(mk(150, 2000), deltaLedger).deltas.backfired === 1, 'outside');
+  t('a later read inside the delta window is not a backfire', T.backfireAudit(mk(90, 2000), deltaLedger).deltas.backfired === 0, 'inside');
+  t('a read before the delta fired is not a backfire', T.backfireAudit(mk(150, 500), deltaLedger).deltas.backfired === 0, 'before');
+}
+
 /* ---- shape filters, off by default ---------------------------------------
    The trim only acts above maxChars and spends that budget on whatever is there, which on an install log
    is progress redraws: measured, 400 such lines kept 65 of them and 144 ANSI escapes and left the final

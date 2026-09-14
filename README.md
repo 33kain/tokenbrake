@@ -444,6 +444,16 @@ under `dedup/`, and every step fails open. It honors `noTrim`. Like a trim, the 
 for the full copy (a recovery read), so it is off until an A/B moves it — best per-tool for a tool you call
 repeatedly with identical results.
 
+`readAfterEdit` (default `false`) narrows the request instead of the response. Right after you `Edit` a file,
+the model often re-`Read`s the whole thing to check the change landed — a re-read the harness itself calls
+unnecessary, and one that re-sends a file you already have. With this on, the guard remembers which lines each
+`Edit`/`MultiEdit` changed (a per-session append-only file under `edits/`), and when an **unbounded** `Read`
+of that file follows, it injects an `offset`/`limit` so the read returns only the changed region plus
+`editContextLines` (20) of context — with a note saying so and how to read wider. The file is still on disk, so
+a wrong guess costs one ranged re-read, not lost data; that re-read is a **delta backfire**, which
+`report --backfire` counts (`Read-After-Edit deltas: N fired; M sent the model back`). Off until an A/B moves
+it — the gate is the whole reason to measure before flipping.
+
 ## Presets
 
 Instead of editing the knobs by hand, apply a named profile — it merges into `~/.claude/tokenbrake.json`,
