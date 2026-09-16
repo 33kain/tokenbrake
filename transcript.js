@@ -1381,6 +1381,7 @@ function editThenRead(parsed) {
   const edited = new Set();
   let n = 0, carried = 0;
   for (const r of parsed.results) {
+    if (r.isError) continue;   // a failed edit changed nothing; a failed read delivered nothing
     if (r.name === 'Edit' || r.name === 'MultiEdit') { const k = normReadPath(r.file, cwd); if (k) edited.add(k); continue; }
     if (r.name === 'Read' && r.whole && r.file) {
       const k = normReadPath(r.file, cwd);
@@ -1417,7 +1418,7 @@ function reReadOpportunity(parsed) {
   const seen = new Set();
   let n = 0, carried = 0;
   for (const r of parsed.results) {
-    if (r.name !== 'Read' || !r.whole || !r.file) continue;
+    if (r.name !== 'Read' || !r.whole || !r.file || r.isError) continue;   // a failed read delivered nothing to re-elide
     const k = normReadPath(r.file, cwd);
     if (!k) continue;
     if (seen.has(k)) { n++; carried += r.carried || 0; } else seen.add(k);
@@ -1433,7 +1434,7 @@ function autotune(parsedSessions, ledger, cfg) {
   const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried
   const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0 });
     e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; };
-  let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, savedCarried = 0, withholds = 0;
+  let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
 
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
@@ -1449,7 +1450,7 @@ function autotune(parsedSessions, ledger, cfg) {
     for (const w of a.withholds) bump(w.kind, w);
     deltaFired += a.deltas.fired; deltaBack += a.deltas.backfired;
     reReadFired += a.reReads.fired; reReadBack += a.reReads.backfired;
-    netCarried += a.net; savedCarried += a.savedCarried; withholds += a.withholds.length;
+    netCarried += a.net; withholds += a.withholds.length;
 
     const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
     const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
@@ -1485,7 +1486,7 @@ function autotune(parsedSessions, ledger, cfg) {
     if (measured && measured.fired > 0) {
       if (measured.backfired > 0) return isOn ? 'review' : 'leave-off';
       if (measured.fired >= MIN_FIRE) return isOn ? 'keep' : 'turn-on';
-      return 'try';
+      return isOn ? 'keep' : 'try';   // clean but too few to be sure: keep it if already on, else worth a try
     }
     if (opp && (opp.n >= OPP_MIN_N || (opp.carried || 0) >= OPP_MIN_CARRIED)) return isOn ? 'keep' : 'try';
     return isOn ? 'keep' : 'measure';
@@ -1527,7 +1528,7 @@ function autotune(parsedSessions, ledger, cfg) {
 
   return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
-    netCarried, savedCarried, withholds, features, readCap, summary,
+    netCarried, withholds, features, readCap, summary,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 

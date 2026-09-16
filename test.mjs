@@ -2723,6 +2723,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const fewClean = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
     results: [R({ id: IDs[0], what: 'cat bundle.min.js', marker: true, tokens: 500, afterReq: 0 })] };
   t('one clean fire is too few to assert -- recommends try, not turn-on', fBlob(T.autotune([fewClean], [blobLedger(IDs[0])], { blobElide: false })).status === 'try');
+  t('the same few-fire clean record, already ON, is keep -- not a redundant "try/set it on"', fBlob(T.autotune([fewClean], [blobLedger(IDs[0])], { blobElide: true })).status === 'keep');
 
   // ---- OPPORTUNITY decisions (no fires) ----
   /* carry() recomputes r.carried from r.tokens (tokens x turns carried), so drive the opportunity's carried
@@ -2790,6 +2791,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     R({ name: 'Read', file: '/w/b.js', whole: true }),               // first whole read of b.js, not a repeat
   ]));
   t('reReadOpportunity counts a whole re-read of an already-whole-read file, not bounded reads', rr.n === 1 && rr.carried === 9, JSON.stringify(rr));
+  t('reReadOpportunity ignores a failed re-read (a read that delivered nothing)', T.reReadOpportunity(P([
+    R({ name: 'Read', file: '/w/a.js', whole: true }),
+    R({ name: 'Read', file: '/w/a.js', whole: true, isError: true }),
+  ])).n === 0);
+  t('editThenRead ignores a failed verify read', T.editThenRead(P([
+    R({ name: 'Edit', file: '/w/a.js' }),
+    R({ name: 'Read', file: '/w/a.js', whole: true, isError: true }),
+  ])).n === 0);
 
   // ---- read-cap health ----
   const postRow = { ev: 'post', session: sid, id: 'x', tool: 'Bash', chars: 100 };

@@ -1305,7 +1305,7 @@ function tuneReport() {
   console.log('Auto-tune -- ' + t.sessions + ' session(s) pooled, ' + t.guarded + ' with the guard, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
   if (t.thin) console.log('  Few guarded sessions -- a weak base; treat these as provisional and run more sessions to firm them up.');
-  if (!t.withholds) console.log('  Nothing withheld yet in these sessions -- every context-narrowing feature below is off.');
+  if (!t.withholds) console.log('  Nothing withheld yet in these sessions (no context-narrowing feature has fired here).');
   else if (t.netCarried >= 0) console.log('  Net so far: ~ ' + fmt(t.netCarried) + ' token-reads saved across the features already on, after any pull-backs (backfire audit).');
   else console.log('  Net so far: ~ ' + fmt(-t.netCarried) + ' token-reads LOST across the features already on -- pull-backs cost more than was saved. See tokenbrake report --backfire.');
 
@@ -1341,7 +1341,7 @@ function tuneReport() {
 
   const rc = t.readCap;
   const capLine = rc.verdict === 'firing' ? 'firing -- capped ' + rc.fired + ' read(s) in these sessions'
-    : rc.verdict === 'missing' ? 'MISSING -- ' + rc.over + ' read(s) went over readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes) uncapped while the guard was running; check the read-pre hook is installed'
+    : rc.verdict === 'missing' ? 'check -- ' + rc.over + ' read(s) went over readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes) uncapped in a guarded session. If the guard was installed for the whole session (not added mid-run), the read-pre hook may be missing -- report --reads has the detail'
     : 'dormant -- no read reached readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes), so the cap had nothing to act on';
   console.log('\n  Read cap (always on): ' + capLine + '.');
   console.log('    For the exact readLimitLines/readMaxBytes values, the evidence is in: tokenbrake report --reads (and --where).');
