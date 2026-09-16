@@ -1337,9 +1337,14 @@ const OPP_MIN_CARRIED = 2000;    // or withhold at least this many carried token
    long line that dominates the output; with only chars and lines, the faithful proxy is `lines <= 2` (a base64
    dump, a one-line JSON, a minified bundle -- one line, two with a trailing newline) AND chars over the size
    floor. Then the longest line is at least chars/2, which clears both blobMaxLine and the dominance share once
-   chars >= 2*blobMaxLine. This UNDER-counts: a blob that is one giant line among many short ones (lines > 2) is
-   missed -- a lower bound, the safe direction for a "worth trying". Failed commands are excluded (the guard
-   leaves an error whole). */
+   chars >= 2*blobMaxLine. This UNDER-counts, and has one big BLIND SPOT worth stating: a blob OVER maxChars has
+   already been char-sliced by the always-on trim before blobElide would ever see it, so it arrives multi-line
+   with the trim marker and fails the lines<=2 test -- exactly the large blobs blobElide helps most are
+   invisible here, and their original shape is destroyed (not recoverable from the transcript or the ledger). So
+   this sees only the untapped blobs the trim left whole (one-liners between blobMinChars and maxChars); a low
+   count is NOT evidence blobElide would not help, which is why the tuner never turns a low blob count into a
+   "leave off" (only a measured backfire does that). Failed commands are excluded (the guard leaves an error
+   whole). */
 function blobOpportunity(parsed, cfg) {
   const floor = Math.max(Number(cfg.blobMinChars) || 4000, 2 * (Number(cfg.blobMaxLine) || 2000));
   let n = 0, carried = 0;
@@ -1401,6 +1406,25 @@ function gitOpportunity(parsed, cfg) {
   return { n, carried };
 }
 
+/* Read-After-Read opportunity: a WHOLE-file read of a file already read WHOLE earlier this session -- the
+   population reReadElide narrows (guard.js only elides whole re-reads). Deliberately NOT repeatReads, which
+   keys on path+range (so it counts a bounded `sed` re-read the elision never touches) and is windowed by
+   compaction (so it drops a post-compaction whole re-read the elision WOULD narrow, since the guard does not
+   consult compaction). An UPPER bound: the elision also requires the file unchanged and the re-read recent,
+   neither checkable from the transcript, so it is shown as "up to N". */
+function reReadOpportunity(parsed) {
+  const cwd = parsed.cwd;
+  const seen = new Set();
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (r.name !== 'Read' || !r.whole || !r.file) continue;
+    const k = normReadPath(r.file, cwd);
+    if (!k) continue;
+    if (seen.has(k)) { n++; carried += r.carried || 0; } else seen.add(k);
+  }
+  return { n, carried };
+}
+
 function autotune(parsedSessions, ledger, cfg) {
   cfg = cfg || {};
   const led = ledger || [];
@@ -1409,7 +1433,7 @@ function autotune(parsedSessions, ledger, cfg) {
   const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried
   const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0 });
     e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; };
-  let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0;
+  let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, savedCarried = 0, withholds = 0;
 
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
@@ -1425,17 +1449,21 @@ function autotune(parsedSessions, ledger, cfg) {
     for (const w of a.withholds) bump(w.kind, w);
     deltaFired += a.deltas.fired; deltaBack += a.deltas.backfired;
     reReadFired += a.reReads.fired; reReadBack += a.reReads.backfired;
-    netCarried += a.net;
+    netCarried += a.net; savedCarried += a.savedCarried; withholds += a.withholds.length;
 
     const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
     const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
     const eo = editThenRead(p); edits.n += eo.n; edits.carried += eo.carried;
-    const ro = repeatReads(p); reReadOpp.n += ro.repeats; reReadOpp.carried += ro.carried;
+    const ro = reReadOpportunity(p); reReadOpp.n += ro.n; reReadOpp.carried += ro.carried;
     const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried;
 
     const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
     capFired += u.capped;
-    capOver += u.over;   // reads over readMaxBytes the cap did not act on (unboundedReads owns the predicate)
+    /* Only a GUARDED session's uncapped over-threshold read is a "missing" signal: in an unguarded session
+       (teleported, or read before install) the read went whole because the guard was not there, not because the
+       cap failed -- counting it would manufacture a phantom config defect (report --reads buckets it the same
+       way, per-session). So gate on g.ran, not the global guarded count. */
+    if (g.ran) capOver += u.over;
     reachSessions.push({ parsed: p, trimmed: trimmedResults(p, led), ran: g.ran });
   }
 
@@ -1446,9 +1474,13 @@ function autotune(parsedSessions, ledger, cfg) {
 
   /* One decision, applied to every feature. Measured beats opportunity: a feature that fired is judged on what
      happened, never on an estimate. A measured backfire is disqualifying whatever the count (ab10: the count of
-     withholds does not predict the bill, so one real pull-back is evidence). A clean measured record earns
-     "turn it on" only past the confidence floor; below it, "try". With no firings, opportunity earns at most a
-     "try", never a "turn it on". */
+     withholds does not predict the bill, so one real pull-back is evidence) -- and it is the ONLY thing that
+     earns a definitive "leave off". A clean measured record earns "turn it on" only past the confidence floor;
+     below it, "try". With no firings, material opportunity earns at most a "try" (never a "turn it on":
+     backfire is behavioural and must be measured), and NO material opportunity earns "measure" -- not "leave
+     off", because the off-state estimators have blind spots (blobElide's biggest wins in particular are
+     invisible off-state: the always-on trim char-slices a large blob before blobElide would ever see it), so
+     the honest verdict is "no signal from the off state, turn it on for a session and measure". */
   const decide = (isOn, measured, opp) => {
     if (measured && measured.fired > 0) {
       if (measured.backfired > 0) return isOn ? 'review' : 'leave-off';
@@ -1456,7 +1488,7 @@ function autotune(parsedSessions, ledger, cfg) {
       return 'try';
     }
     if (opp && (opp.n >= OPP_MIN_N || (opp.carried || 0) >= OPP_MIN_CARRIED)) return isOn ? 'keep' : 'try';
-    return 'leave-off';
+    return isOn ? 'keep' : 'measure';
   };
   /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
      re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead and
@@ -1471,30 +1503,31 @@ function autotune(parsedSessions, ledger, cfg) {
     feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), gitOpp, 'upper'),
     feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp, 'near'),
     feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
-    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'near'),
+    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'upper'),
     feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits, 'upper'),
   ];
 
   /* The Read cap is always on and has its own tuning views (report --reads/--where); the tuner only reads its
      HEALTH here. dormant: no read reached readMaxBytes, so the cap has nothing to act on. firing: it capped
      reads. missing: reads went over readMaxBytes uncapped in a session the guard was running -- the cap had its
-     chance and did not take it (a config or coverage problem worth flagging), which is only meaningful when a
-     guard was present, hence the `guarded` guard. */
-  const capVerdict = (capOver > 0 && guarded) ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
+     chance and did not take it (a config or coverage problem worth flagging). capOver already counts only
+     guarded sessions (see the loop), so it alone carries the "guard was present" condition. */
+  const capVerdict = capOver > 0 ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
   const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict };
 
-  const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], keep: [] };
+  const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [] };
   for (const f of features) {
     if (f.status === 'turn-on') summary.turnOn.push(f.label);
     else if (f.status === 'try') summary.tryThese.push(f.label);
     else if (f.status === 'review') summary.review.push(f.label);
+    else if (f.status === 'measure') summary.measure.push(f.label);
     else if (f.status === 'keep') summary.keep.push(f.label);
     else summary.leaveOff.push(f.label);
   }
 
   return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
-    netCarried, features, readCap, summary,
+    netCarried, savedCarried, withholds, features, readCap, summary,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 
@@ -1748,4 +1781,4 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
   capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
-  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };
+  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };

@@ -1254,6 +1254,10 @@ function tuneReport() {
     if (only) { if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; } }
     else if (/tokenbrake-bench/i.test(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
+    /* A transcript missing its own sessionId (a partial/corrupt export) would otherwise make autotune's ledger
+       joins skip their session filter and attribute EVERY session's ledger rows to this one. The filename is
+       the session id, so recover it -- the same fallback readsReport uses. */
+    if (!p.sessionId) p.sessionId = f.session;
     parsed.push(p);
   }
   if (!parsed.length) { console.log('No usable session(s) to tune from' + (want ? ' for --session=' + want : '') + (only ? ' under --cwd=' + only : '') + '.'); return; }
@@ -1262,10 +1266,11 @@ function tuneReport() {
   console.log('Auto-tune -- ' + t.sessions + ' session(s) pooled, ' + t.guarded + ' with the guard, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
   if (t.thin) console.log('  Few guarded sessions -- a weak base; treat these as provisional and run more sessions to firm them up.');
-  if (t.netCarried) console.log('  Saving so far: ~ ' + fmt(t.netCarried) + ' net token-reads across the features already on (backfire audit).');
-  else console.log('  Nothing withheld yet in these sessions -- every context-narrowing feature below is off.');
+  if (!t.withholds) console.log('  Nothing withheld yet in these sessions -- every context-narrowing feature below is off.');
+  else if (t.netCarried >= 0) console.log('  Net so far: ~ ' + fmt(t.netCarried) + ' token-reads saved across the features already on, after any pull-backs (backfire audit).');
+  else console.log('  Net so far: ~ ' + fmt(-t.netCarried) + ' token-reads LOST across the features already on -- pull-backs cost more than was saved. See tokenbrake report --backfire.');
 
-  const mark = { 'turn-on': '[ON] ', 'keep': '[on] ', 'try': '[try]', 'review': '[!!] ', 'leave-off': '[ - ]' };
+  const mark = { 'turn-on': '[ON] ', 'keep': '[on] ', 'try': '[try]', 'review': '[!!] ', 'measure': '[ ? ]', 'leave-off': '[ - ]' };
   const evidence = (f) => {
     const m = f.measured, isRead = m && m.savedCarried == null;
     if (m && m.fired > 0) {
@@ -1277,7 +1282,7 @@ function tuneReport() {
         + (f.status === 'review' ? '  -- it backfired; reconsider leaving it on' : '');
     }
     const o = f.opportunity;
-    if (!o || !o.n) return 'not fired, and no opportunity seen in these sessions';
+    if (!o || !o.n) return 'not fired, and no off-state signal seen here -- turn it on for a session to measure (a feature\'s wins can be invisible until it runs)';
     const bound = f.bound === 'upper' ? 'up to ' : '~ ';   // upper-bound estimators say "up to"; the under-counting ones "~"
     const what = f.key === 'gitView' ? ' large git diff/show result(s) (gitView acts only on those touching a lockfile/minified path)'
       : f.key === 'blobElide' ? ' blob-like shell result(s)'
@@ -1289,6 +1294,7 @@ function tuneReport() {
   console.log('\n  Off-by-default features:');
   for (const f of t.features) {
     const set = (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
+      : f.status === 'measure' ? '   Set "' + f.knob + '": true to measure it'
       : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
     console.log('    ' + (mark[f.status] || '     ') + ' ' + f.label + ' (' + f.knob + ')' + set);
     console.log('        ' + evidence(f));
@@ -1311,12 +1317,14 @@ function tuneReport() {
   if (s.turnOn.length) parts.push('Turn on: ' + s.turnOn.join(', '));
   if (s.tryThese.length) parts.push('Try: ' + s.tryThese.join(', '));
   if (s.review.length) parts.push('Reconsider: ' + s.review.join(', '));
-  if (s.leaveOff.length) parts.push('Leave off: ' + s.leaveOff.join(', '));
+  if (s.measure.length) parts.push('Measure (no off-state signal): ' + s.measure.join(', '));
+  if (s.leaveOff.length) parts.push('Leave off (backfired): ' + s.leaveOff.join(', '));
   console.log('\n  ' + (parts.length ? parts.join('.  ') + '.' : 'Nothing to change on this evidence.'));
   if (skipped.length) { console.log('\n  Skipped:'); for (const [id, why] of skipped.slice(0, 12)) console.log('    ' + id + '...  ' + why); if (skipped.length > 12) console.log('    (+ ' + (skipped.length - 12) + ' more)'); }
   console.log('\n  A "turn on" is a MEASURED, clean record. A "try" is an ESTIMATE from what the model read -- built to under-count,');
-  console.log('  so turn the feature on and run `tokenbrake report --backfire` to confirm before trusting it. Recommendations only:');
-  console.log('  nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens, never dollars.');
+  console.log('  so turn the feature on and run `tokenbrake report --backfire` to confirm before trusting it. "Measure" means the');
+  console.log('  off state shows no signal either way (some wins are invisible until the feature runs); only a measured backfire is');
+  console.log('  a real "leave off". Recommendations only: nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens, never dollars.');
 }
 
 function help() {

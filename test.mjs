@@ -2732,7 +2732,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const bigOpp = T.autotune([blobby(4, 6000, 25)], [], { blobElide: false });
   t('material opportunity (>= floor fires) with no measured record recommends try',
     fBlob(bigOpp).status === 'try' && !fBlob(bigOpp).measured && fBlob(bigOpp).opportunity.n === 4, JSON.stringify(fBlob(bigOpp).opportunity));
-  t('tiny opportunity (1 fire, little carried) recommends leave-off', fBlob(T.autotune([blobby(1, 6000, 25)], [], { blobElide: false })).status === 'leave-off');
+  /* No fire and below-floor opportunity is NOT a confident "leave off" -- the off-state estimators have blind
+     spots (a big blob is char-sliced by the always-on trim before blobElide would see it), so the honest verdict
+     is "measure it". Only a MEASURED backfire earns "leave off". */
+  const tiny = T.autotune([blobby(1, 6000, 25)], [], { blobElide: false });
+  t('below-floor opportunity with no fire recommends measure, not leave-off', fBlob(tiny).status === 'measure' && tiny.summary.measure.includes('Binary-Blob Elider') && !tiny.summary.leaveOff.length, fBlob(tiny).status);
+  t('leave-off is reserved for a measured backfire', fBlob(T.autotune([backfiredBlob()], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
   t('one fire but heavy carried opportunity clears the floor -> try', fBlob(T.autotune([blobby(1, 6000, 5000)], [], { blobElide: false })).status === 'try');
 
   const mixed = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
@@ -2778,6 +2783,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   ]));
   t('editThenRead counts a whole read of a file edited earlier this session', eo.n === 1 && eo.carried === 8, JSON.stringify(eo));
 
+  const rr = T.reReadOpportunity(P([
+    R({ name: 'Read', file: '/w/a.js', whole: true }),               // first whole read of a.js
+    R({ name: 'Read', file: '/w/a.js', whole: true, carried: 9 }),   // whole RE-read of a.js -> counts (what reReadElide narrows)
+    R({ name: 'Bash', what: "sed -n '1,80p' a.js", chars: 500 }),    // a bounded read, which the elision never touches
+    R({ name: 'Read', file: '/w/b.js', whole: true }),               // first whole read of b.js, not a repeat
+  ]));
+  t('reReadOpportunity counts a whole re-read of an already-whole-read file, not bounded reads', rr.n === 1 && rr.carried === 9, JSON.stringify(rr));
+
   // ---- read-cap health ----
   const postRow = { ev: 'post', session: sid, id: 'x', tool: 'Bash', chars: 100 };
   const dormant = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [],
@@ -2787,6 +2800,25 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     results: [R({ name: 'Read', file: '/w/huge.js', whole: true, chars: 70000, lines: 1000,
       shape: { bytes: 70000, lines: 1000, numbered: false, from: null, to: null } })] }], [postRow], { readMaxBytes: 60000 });
   t('read cap reads missing when an over-threshold read went uncapped with the guard running', missing.readCap.verdict === 'missing', JSON.stringify(missing.readCap));
+  /* An over-threshold uncapped read in an UNGUARDED session (no ledger row, no marker) is NOT a missing cap --
+     the guard was not there. Pooled with a clean guarded session, it must not raise a phantom alarm. */
+  const unguardedBig = { sessionId: 'noguard', cwd: '/w', requests: reqs(3), compactions: [],
+    results: [R({ name: 'Read', file: '/w/huge.js', whole: true, chars: 70000, lines: 1000,
+      shape: { bytes: 70000, lines: 1000, numbered: false, from: null, to: null } })] };
+  const mixedCap = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [],
+    results: [R({ name: 'Bash', what: 'ls', chars: 100 })] }, unguardedBig], [postRow], { readMaxBytes: 60000 });
+  t('an over-threshold read in an UNGUARDED session raises no phantom cap-missing', mixedCap.readCap.verdict !== 'missing' && mixedCap.readCap.over === 0, JSON.stringify(mixedCap.readCap));
+
+  // ---- netCarried honesty (a loss is not a saving; nothing-withheld is distinct from a zero net) ----
+  const lossTx = { sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
+    results: [R({ id: IDs[0], what: 'cat log', marker: true, tokens: 100, afterReq: 0 }),
+      R({ id: 'toolu_P', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 9000, afterReq: 1 })] };
+  const loss = T.autotune([lossTx], [{ ev: 'post', session: sid, id: IDs[0], tool: 'Bash', chars: 5000, kept: 4000, blob: true, saved: outOf(IDs[0]) }], { blobElide: true });
+  t('a net loss reports negative netCarried with withholds > 0 (the render calls it a loss, not a saving)', loss.withholds > 0 && loss.netCarried < 0, JSON.stringify({ w: loss.withholds, net: loss.netCarried }));
+  const cleanTune = T.autotune([cleanBlob()], cleanLedger, { blobElide: true });
+  t('a clean measured session reports withholds > 0 and a positive net', cleanTune.withholds === 3 && cleanTune.netCarried > 0, JSON.stringify({ w: cleanTune.withholds, net: cleanTune.netCarried }));
+  const noneTune = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [], results: [R({ name: 'Bash', what: 'ls', chars: 100 })] }], [postRow], {});
+  t('a session that withheld nothing reports withholds === 0 (distinct from a zero net)', noneTune.withholds === 0, JSON.stringify({ w: noneTune.withholds }));
 
   // ---- TUNE_DEFAULTS pinned to guard.js DEFAULTS (guard.js cannot be require()d: it runs on load) ----
   const guardSrc = readFileSync('./guard.js', 'utf8');
@@ -2812,6 +2844,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli tune with no transcripts exits 0 and says so (fails open)', rTune.status === 0 && /No transcripts found/.test(rTune.stdout), (rTune.stdout || rTune.stderr || '').slice(0, 80));
   const rHelp = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env: e2 });
   t('help lists the tune command', /tokenbrake tune/.test(rHelp.stdout));
+
+  /* F5 (sessionId backfill): a transcript with no sessionId field of its own must not make autotune attribute
+     ANOTHER session's ledger rows to it. Here a foreign read-delta row exists; tuneReport recovers the session
+     from the filename before autotune, so the foreign row is filtered out and nothing reads as "fired". Without
+     the backfill, auditNarrowing's session filter is skipped and the foreign delta leaks in as a firing. */
+  const txDir = join(cfg2, 'projects', 'realproj'); mkdirSync(txDir, { recursive: true });
+  const txLines = [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', timestamp: '2026-01-01T00:00:00Z', cwd: '/work/realproj', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_A', name: 'Bash', input: { command: 'ls' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_A', content: 'ok' }] } }),
+  ].join('\n');
+  writeFileSync(join(txDir, 'realsessF5.jsonl'), txLines);
+  mkdirSync(join(cfg2, 'tokenbrake'), { recursive: true });
+  writeFileSync(join(cfg2, 'tokenbrake', 'ledger.jsonl'), JSON.stringify({ ev: 'read-delta', session: 'FOREIGN-SESSION', what: '/work/realproj/x.js', offset: 1, limit: 20, t: 1 }) + '\n');
+  const rF5 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e2 });
+  t('tune backfills sessionId from the filename, so a foreign session\'s ledger rows do not leak in as firings',
+    rF5.status === 0 && !/fired \d+x/.test(rF5.stdout), (rF5.stdout.match(/fired \d+x/) || ['(none)'])[0]);
   rmSync(cfg2, { recursive: true, force: true });
 }
 
