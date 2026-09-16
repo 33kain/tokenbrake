@@ -12,7 +12,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 
 const fails = [];
 const t = (name, cond, extra = '') => {
@@ -79,7 +79,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     && (String(eu.hookSpecificOutput.updatedToolOutput.stdout || '').match(/Full output saved to (\S+\.txt)/) || [])[1];
   const outDir = join(CFG, 'tokenbrake', 'out');
   t('a crafted session_id is sanitized in the saved path (cannot escape out/)',
-    !!esaved && esaved.startsWith(outDir + '/') && /^[\w-]+\.txt$/.test(esaved.slice(outDir.length + 1)), esaved || 'no saved path');
+    !!esaved && esaved.startsWith(outDir + sep) && /^[\w-]+\.txt$/.test(esaved.slice(outDir.length + 1)), esaved || 'no saved path');
 }
 
 {
