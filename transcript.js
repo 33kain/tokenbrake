@@ -1334,23 +1334,27 @@ const OPP_MIN_CARRIED = 2000;    // or withhold at least this many carried token
 
 /* Blob-elider opportunity on a session it did NOT run in: shell results the guard's blob gate WOULD fire on,
    estimated from the two facts parseTranscript keeps (chars, lines), not the body it drops. A blob is one very
-   long line that dominates the output; with only chars and lines, the faithful proxy is `lines <= 2` (a base64
-   dump, a one-line JSON, a minified bundle -- one line, two with a trailing newline) AND chars over the size
-   floor. Then the longest line is at least chars/2, which clears both blobMaxLine and the dominance share once
-   chars >= 2*blobMaxLine. This UNDER-counts, and has one big BLIND SPOT worth stating: a blob OVER maxChars has
-   already been char-sliced by the always-on trim before blobElide would ever see it, so it arrives multi-line
-   with the trim marker and fails the lines<=2 test -- exactly the large blobs blobElide helps most are
-   invisible here, and their original shape is destroyed (not recoverable from the transcript or the ledger). So
-   this sees only the untapped blobs the trim left whole (one-liners between blobMinChars and maxChars); a low
-   count is NOT evidence blobElide would not help, which is why the tuner never turns a low blob count into a
-   "leave off" (only a measured backfire does that). Failed commands are excluded (the guard leaves an error
-   whole). */
+   long line that dominates the output. With only chars and lines, the TRUE lower bound is a SINGLE-line result
+   (`lines === 1`) over the floor: its one line IS the whole output, so its longest line = chars, which clears
+   blobMaxLine (chars >= blobMaxLine via the floor) and is 100% of the output -- so it satisfies the dominance
+   share for ANY blobLineShare, and this estimate does not depend on that knob's value (which is why blobLineShare
+   is not among the mirrored TUNE_DEFAULTS). Deliberately conservative: it skips a two-line result even though a
+   blob with a trailing newline is two lines, because chars+lines alone cannot tell that (dominant) case from two
+   real long lines (not dominant, which the guard would NOT elide) -- so it never over-counts.
+
+   It also has one big BLIND SPOT worth stating: a blob OVER maxChars has already been char-sliced by the
+   always-on trim before blobElide would ever see it, so it arrives multi-line with the trim marker and is not a
+   single line here -- exactly the large blobs blobElide helps most are invisible, and their original shape is
+   destroyed (not recoverable from the transcript or the ledger). So this sees only the untapped blobs the trim
+   left whole (one-liners between the floor and maxChars); a low count is NOT evidence blobElide would not help,
+   which is why the tuner never turns a low blob count into a "leave off" (only a measured backfire does that).
+   Failed commands are excluded (the guard leaves an error whole). */
 function blobOpportunity(parsed, cfg) {
-  const floor = Math.max(Number(cfg.blobMinChars) || 4000, 2 * (Number(cfg.blobMaxLine) || 2000));
+  const floor = Math.max(Number(cfg.blobMinChars) || 4000, Number(cfg.blobMaxLine) || 2000);
   let n = 0, carried = 0;
   for (const r of parsed.results) {
     if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
-    if (r.isError || r.lines > 2 || r.chars < floor) continue;
+    if (r.isError || r.lines !== 1 || r.chars < floor) continue;
     n++; carried += r.carried || 0;
   }
   return { n, carried };
@@ -1439,9 +1443,15 @@ function autotune(parsedSessions, ledger, cfg) {
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
   let capOver = 0, capFired = 0, guarded = 0;
-  const readMaxBytes = Number(cfg.readMaxBytes) || 60000;
+  /* Respect an explicit readMaxBytes including 0 (which the guard takes literally as "cap everything"); only a
+     genuinely absent value falls back to the shipped default. */
+  const readMaxBytes = cfg.readMaxBytes == null ? 60000 : Number(cfg.readMaxBytes);
 
   for (const p of sessions) {
+    /* Self-protect: a transcript parsed with no sessionId of its own would make every ledger join below skip its
+       session filter and attribute ALL sessions' rows to this one. The transcript filename is the session id, so
+       recover it here -- so any caller, not just tuneReport, is safe. carry(p) already mutates p, so this does too. */
+    if (!p.sessionId && p.file) p.sessionId = path.basename(String(p.file), '.jsonl');
     carry(p);
     const g = guardRan(p, led, p.sessionId);
     if (g.ran) guarded++;

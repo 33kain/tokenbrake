@@ -1254,11 +1254,7 @@ function tuneReport() {
     if (only) { if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; } }
     else if (/tokenbrake-bench/i.test(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
-    /* A transcript missing its own sessionId (a partial/corrupt export) would otherwise make autotune's ledger
-       joins skip their session filter and attribute EVERY session's ledger rows to this one. The filename is
-       the session id, so recover it -- the same fallback readsReport uses. */
-    if (!p.sessionId) p.sessionId = f.session;
-    parsed.push(p);
+    parsed.push(p);   // autotune backfills a missing p.sessionId from the transcript filename itself
   }
   if (!parsed.length) { console.log('No usable session(s) to tune from' + (want ? ' for --session=' + want : '') + (only ? ' under --cwd=' + only : '') + '.'); return; }
 
@@ -1282,21 +1278,27 @@ function tuneReport() {
       console.log('  enable those yourself for a session first (`tokenbrake tune` shows them), then re-run --write. Nothing written.');
       return;
     }
-    const current = readJson(cfgPath, {});   // the RAW file: the merge base, so defaults are not baked in
-    const changes = [];
-    for (const f of plan) {
-      const to = f.status === 'turn-on';       // turn-on -> true, review -> false
-      if (f.on !== to) changes.push({ f, from: f.on, to });   // f.on is autotune's effective state (the single authority)
+    /* Read the RAW file (not the defaults-merged cfg) as the merge base, so a default is never baked in. A
+       MISSING file starts fresh; a MALFORMED file is NOT overwritten -- readJson would swallow the parse error
+       and hand back {}, and writing that would wipe every real setting the merge exists to preserve. Abort and
+       let the person fix it instead. */
+    let current;
+    try { current = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
+    catch (e) {
+      if (e && e.code === 'ENOENT') current = {};
+      else { console.log('  ' + cfgPath + ' is not valid JSON -- fix or remove it before --write, so its other settings are not lost. Nothing written.'); return; }
     }
-    if (!changes.length) { console.log('  Config already matches the measured recommendation -- nothing written.'); return; }
+    /* Every plan feature is a real flip: decide() returns 'turn-on' only when the feature is off (-> true) and
+       'review' only when it is on (-> false), so f.on always differs from the target -- there is no
+       "already matches" case (a matching feature is 'keep'/'leave-off' and never reaches the plan). */
     const next = { ...current };
-    for (const c of changes) next[c.f.knob] = c.to;
+    for (const f of plan) next[f.knob] = (f.status === 'turn-on');
     writeJson(cfgPath, next);
-    console.log('  Applied ' + changes.length + ' change(s) to ' + cfgPath + ' (every other key preserved):');
-    for (const c of changes) {
-      const m = c.f.measured;   // always present with fired > 0: plan is turn-on/review, which decide() gives only to a measured feature
+    console.log('  Applied ' + plan.length + ' change(s) to ' + cfgPath + ' (every other key preserved):');
+    for (const f of plan) {
+      const to = f.status === 'turn-on', m = f.measured;   // m always present with fired > 0: decide() gives turn-on/review only to a measured feature
       const ev = m.savedCarried == null ? m.fired + ' fired, ' + m.backfired + ' sent the model back' : m.fired + ' fired, ' + m.backfired + ' pulled back';
-      console.log('    "' + c.f.knob + '": ' + c.from + ' -> ' + c.to + '   (' + (c.to ? 'measured clean' : 'measured backfire') + ': ' + ev + ')');
+      console.log('    "' + f.knob + '": ' + f.on + ' -> ' + to + '   (' + (to ? 'measured clean' : 'measured backfire') + ': ' + ev + ')');
     }
     console.log('  Revert any line by editing ' + cfgPath + '. Re-run `tokenbrake tune` after more sessions to re-check. Tokens, never dollars.');
     return;

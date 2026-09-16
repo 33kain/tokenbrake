@@ -254,7 +254,7 @@ grandfathered, to be cleaned up later, not extended).
   kept strictly apart: **measured** (the backfire audit's real fired/backfired/saved for a feature that ran —
   the *only* thing that earns a "turn on"; a measured backfire → "leave off"/"reconsider") and **opportunity**
   (a coarse, deliberately UNDER-counting estimate for a feature that is off — `blobOpportunity`/`mcpOpportunity`/
-  `editThenRead`/`gitOpportunity` + `repeatReads`, from the facts `parseTranscript` keeps — which earns at most a
+  `editThenRead`/`gitOpportunity`/`reReadOpportunity`, from the facts `parseTranscript` keeps — which earns at most a
   "try it and measure", never a "turn on", the Read-cap trigger's rule). Also reports the Read cap's health
   (firing/dormant/missing) and trim reach (`reachPooled`). `TUNE_DEFAULTS` mirrors the guard's DEFAULTS (guard.js
   can't be `require`d) and is **pinned to guard.js by a test**. 18 new checks. Tokens/cache, never dollars.
@@ -268,14 +268,16 @@ grandfathered, to be cleaned up later, not extended).
     shipped default: it never flips on an estimate, only on the user's own measured backfire audit.
   - **Deferred follow-ups (recorded, not built):** (1) **`dedup` opportunity** has no
     stored signal (dedup hashes result bodies, which `parseTranscript` drops), so it shows "turn on to measure"
-    until it fires — recovering it would mean surfacing a body hash in the parse, its own change. (3) **shapeFilters
+    until it fires — recovering it would mean surfacing a body hash in the parse, its own change. (2) **shapeFilters
     / jsonShape** are trim sub-modes with no distinct ledger `kind`, so `tune` does not give them first-class
     verdicts (they ride the `trim` kind); the explicit-`kind` ledger field (narrowing-4 follow-up) would let it.
-    (4) `editThenRead`/`gitOpportunity` are coarser than the others (an upper bound and an edit→read heuristic);
-    once `--write` lands, tightening them against the real deltas/gitview firings is the natural next measurement.
+    (3) The opportunity estimators sit at different tightnesses — `blobOpportunity`/`mcpOpportunity` are exact
+    lower bounds, `editThenRead`/`gitOpportunity`/`reReadOpportunity` are coarser upper bounds — and `blobOpportunity`
+    is blind to blobs the always-on trim already char-sliced (their shape is destroyed); tightening them against
+    the real deltas/gitview/blob firings once features run on more sessions is the natural next measurement.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field
   Projection; plus Instruction Diet Compiler, Deterministic Replay Simulator (rides the `trim.js` extraction).
-  (The Personalized Auto-Tuner shipped — see above; `tune --write` is its one deferred follow-up.) The blob elider's two deferred
+  (The Personalized Auto-Tuner shipped — see above, `tune --write` included.) The blob elider's two deferred
   follow-ups (a `Read` of a one-line minified file; MCP base64 result blocks) also remain.

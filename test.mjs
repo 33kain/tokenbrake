@@ -2750,14 +2750,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   // ---- opportunity estimators (units) ----
   const P = (results) => ({ cwd: '/w', results });
   const bo = T.blobOpportunity(P([
-    R({ name: 'Bash', chars: 5000, lines: 1, carried: 10 }),     // a blob: 1 line, over the floor
-    R({ name: 'Bash', chars: 5000, lines: 3 }),                  // too many lines
+    R({ name: 'Bash', chars: 5000, lines: 1, carried: 10 }),     // a blob: exactly 1 line (100% dominant), over the floor
+    R({ name: 'Bash', chars: 5000, lines: 2 }),                  // 2 lines -> can't prove dominance from chars+lines, excluded (true lower bound)
     R({ name: 'Bash', chars: 5000, lines: 400 }),                // a log, not a blob
     R({ name: 'Bash', chars: 5000, lines: 1, isError: true }),   // failed -> the guard leaves it whole
     R({ name: 'Bash', chars: 2000, lines: 1 }),                  // under the size floor
     R({ name: 'Read', chars: 9000, lines: 1 }),                  // not shell
   ]), { blobMinChars: 4000, blobMaxLine: 2000 });
-  t('blobOpportunity counts only a 1-2 line shell result over the size floor', bo.n === 1 && bo.carried === 10, JSON.stringify(bo));
+  t('blobOpportunity counts only a single-line shell result over the floor (exact lower bound, excludes 2-line)', bo.n === 1 && bo.carried === 10, JSON.stringify(bo));
 
   const mo = T.mcpOpportunity(P([
     R({ name: 'mcp__github__x', chars: 7000, carried: 5 }),       // big MCP -> counts
@@ -2889,8 +2889,15 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   writeFileSync(join(cfg3, 'tokenbrake', 'ledger.jsonl'),
     ['toolu_B1', 'toolu_B2', 'toolu_B3'].map((id) => JSON.stringify({ ev: 'post', session: 'tunewrite01', id, tool: 'Bash', chars: 30000, kept: 200, blob: true })).join('\n') + '\n');
   const cfg3Path = join(cfg3, 'tokenbrake.json');
-  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));   // a pre-existing key that must survive the merge
 
+  /* A MALFORMED config must abort, not be overwritten -- or --write would wipe every real setting it claims to
+     preserve. (blobElide is a measured turn-on here, so the plan is non-empty and the file read is reached.) */
+  const malformed = '{ "maxChars": 5000, oops }';
+  writeFileSync(cfg3Path, malformed);
+  const rwBad = cli3(['tune', '--write']);
+  t('tune --write aborts on a malformed config instead of wiping it', rwBad.status === 0 && /not valid JSON/.test(rwBad.stdout) && readFileSync(cfg3Path, 'utf8') === malformed, rwBad.stdout.split('\n').find(l => /valid JSON/.test(l)) || '(no abort)');
+
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));   // a pre-existing key that must survive the merge
   const rw = cli3(['tune', '--write']);
   const after = JSON.parse(readFileSync(cfg3Path, 'utf8'));
   t('tune --write turns ON a feature with a clean measured record', rw.status === 0 && after.blobElide === true, JSON.stringify(after));
