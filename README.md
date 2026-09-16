@@ -513,13 +513,21 @@ strictly apart:
 ```
 npx tokenbrake tune                 # pool your recent real sessions (benchmark sessions skipped)
 npx tokenbrake tune --cwd=<text>    # restrict the pool to one project; --session=<prefix> for one session
+npx tokenbrake tune --write         # apply the MEASURED recommendation to tokenbrake.json (see below)
 ```
 
-It prints, per feature, that verdict and the **exact knob to set** — then leaves it to you. `tune` **recommends
-only; it never writes your config**, because turning a feature on changes what the guard withholds next session,
-and that stays your explicit act. It also reports the Read cap's health (firing / dormant / missing — the exact
-value still comes from `report --reads` and `--where`) and how much of your carried tokens sit where the trim
-can act. Tokens and cache, never dollars — `--cost` is where dollars live.
+It prints, per feature, that verdict and the **exact knob to set**. Plain `tune` is a preview — it changes
+nothing. It also reports the Read cap's health (firing / dormant / missing — the exact value still comes from
+`report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache,
+never dollars — `--cost` is where dollars live.
+
+**`tune --write`** applies the recommendation to `~/.claude/tokenbrake.json`, and only ever acts on **measured**
+evidence — never an estimate. It turns **on** a feature with a clean measured record (a `turn on`) and turns
+**off** one that measurably backfired (a `reconsider`); `try` and `measure` verdicts are opportunity estimates,
+so it leaves those for you to enable and measure yourself first. It merges (every other key is preserved, like
+`preset`), prints exactly what it changed and the measured reason, and leaves reverting to you. The reason the
+apply is gated on measured evidence is the same reason the whole project ships every context-narrowing feature
+off: whether a withhold pays off or backfires is behavioural, and only a real session measures it.
 
 ## Presets
 

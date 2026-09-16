@@ -2861,6 +2861,50 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('tune backfills sessionId from the filename, so a foreign session\'s ledger rows do not leak in as firings',
     rF5.status === 0 && !/fired \d+x/.test(rF5.stdout), (rF5.stdout.match(/fired \d+x/) || ['(none)'])[0]);
   rmSync(cfg2, { recursive: true, force: true });
+
+  /* --write: applies MEASURED recommendations to tokenbrake.json (merge, not replace), and NEVER an estimate. */
+  const cfg3 = mkdtempSync(join(tmpdir(), 'tokenbrake-tunew-'));
+  const e3 = { ...process.env, CLAUDE_CONFIG_DIR: cfg3 };
+  const cli3 = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e3 });
+  const w3 = join(cfg3, 'projects', 'tw'); mkdirSync(w3, { recursive: true });
+  const bigDiff = 'diff --git a/x b/x\n' + 'x'.repeat(3000);   // a git-diff result -> gitView OPPORTUNITY (no marker), never measured
+  const uses = ['toolu_B1', 'toolu_B2', 'toolu_B3'].map((id) => ({ type: 'tool_use', id, name: 'Bash', input: { command: 'cat bundle.min.js' } }));
+  uses.push({ type: 'tool_use', id: 'toolu_G1', name: 'Bash', input: { command: 'git diff' } });
+  const res = ['toolu_B1', 'toolu_B2', 'toolu_B3'].map((id) => ({ type: 'tool_result', tool_use_id: id, content: '[tokenbrake] withheld blob-like output' }));
+  res.push({ type: 'tool_result', tool_use_id: 'toolu_G1', content: bigDiff });
+  writeFileSync(join(w3, 'tunewrite01.jsonl'), [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: 'tunewrite01', timestamp: '2026-01-01T00:00:00Z', cwd: '/work/tw', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: uses } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: res } }),
+  ].join('\n'));
+  mkdirSync(join(cfg3, 'tokenbrake'), { recursive: true });
+  writeFileSync(join(cfg3, 'tokenbrake', 'ledger.jsonl'),
+    ['toolu_B1', 'toolu_B2', 'toolu_B3'].map((id) => JSON.stringify({ ev: 'post', session: 'tunewrite01', id, tool: 'Bash', chars: 30000, kept: 200, blob: true })).join('\n') + '\n');
+  const cfg3Path = join(cfg3, 'tokenbrake.json');
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));   // a pre-existing key that must survive the merge
+
+  const rw = cli3(['tune', '--write']);
+  const after = JSON.parse(readFileSync(cfg3Path, 'utf8'));
+  t('tune --write turns ON a feature with a clean measured record', rw.status === 0 && after.blobElide === true, JSON.stringify(after));
+  t('tune --write does NOT write an estimate-only feature (gitView is a try/measure, not measured)', after.gitView === undefined, JSON.stringify(after));
+  t('tune --write merges, preserving other keys', after.maxChars === 5000, JSON.stringify(after));
+  t('tune --write reports what it applied with the measured reason', /Applied 1 change/.test(rw.stdout) && /"blobElide": false -> true/.test(rw.stdout) && /measured clean/.test(rw.stdout), rw.stdout.split('\n').filter(l => /blobElide|Applied/.test(l)).join(' | '));
+
+  const rw2 = cli3(['tune', '--write']);   // blobElide now on + clean -> 'keep', not in the plan
+  t('a second --write is a no-op once the config matches the measured recommendation', rw2.status === 0 && /No MEASURED change|already matches/.test(rw2.stdout), rw2.stdout.split('\n').slice(0, 3).join(' | '));
+
+  /* --write on a session that only has opportunity (no measured record) writes nothing. */
+  const cfg4 = mkdtempSync(join(tmpdir(), 'tokenbrake-tunew2-'));
+  const e4 = { ...process.env, CLAUDE_CONFIG_DIR: cfg4 };
+  const w4 = join(cfg4, 'projects', 'tw2'); mkdirSync(w4, { recursive: true });
+  writeFileSync(join(w4, 'oppo01.jsonl'), [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: 'oppo01', timestamp: '2026-01-01T00:00:00Z', cwd: '/work/tw2', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_G', name: 'Bash', input: { command: 'git diff' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_G', content: bigDiff }] } }),
+  ].join('\n'));
+  const rw3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune', '--write'], { encoding: 'utf8', env: e4 });
+  t('tune --write writes nothing when there is only opportunity, no measured record', rw3.status === 0 && /No MEASURED change/.test(rw3.stdout) && !existsSync(join(cfg4, 'tokenbrake.json')), rw3.stdout.split('\n')[1] || '');
+
+  rmSync(cfg3, { recursive: true, force: true });
+  rmSync(cfg4, { recursive: true, force: true });
 }
 
 rmSync(CFG, { recursive: true, force: true });
