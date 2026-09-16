@@ -522,12 +522,15 @@ nothing. It also reports the Read cap's health (firing / dormant / missing — t
 never dollars — `--cost` is where dollars live.
 
 **`tune --write`** applies the recommendation to `~/.claude/tokenbrake.json`, and only ever acts on **measured**
-evidence — never an estimate. It turns **on** a feature with a clean measured record (a `turn on`) and turns
-**off** one that measurably backfired (a `reconsider`); `try` and `measure` verdicts are opportunity estimates,
-so it leaves those for you to enable and measure yourself first. It merges (every other key is preserved, like
-`preset`), prints exactly what it changed and the measured reason, and leaves reverting to you. The reason the
-apply is gated on measured evidence is the same reason the whole project ships every context-narrowing feature
-off: whether a withhold pays off or backfires is behavioural, and only a real session measures it.
+evidence — never an estimate. It turns **on** the features with a clean measured record (a `turn on`). It does
+**not** turn anything off: a feature that measurably backfired is surfaced as `reconsider` for you to disable
+deliberately (the backfire audit's net is pooled, not per-feature, so `--write` can't tell a feature that
+backfired once but is strongly net-positive from one that is net-negative — and reverting a net-positive feature
+would cost tokens); `try` and `measure` verdicts are opportunity estimates, left for you to enable and measure
+yourself first. It merges (every other key is preserved, like `preset`, and it aborts rather than overwrite a
+malformed config), and prints exactly what it turned on and the measured reason. The apply is gated on measured
+evidence for the same reason the whole project ships every context-narrowing feature off: whether a withhold
+pays off or backfires is behavioural, and only a real session measures it.
 
 ## Presets
 

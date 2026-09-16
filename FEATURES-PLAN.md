@@ -258,14 +258,15 @@ grandfathered, to be cleaned up later, not extended).
   "try it and measure", never a "turn on", the Read-cap trigger's rule). Also reports the Read cap's health
   (firing/dormant/missing) and trim reach (`reachPooled`). `TUNE_DEFAULTS` mirrors the guard's DEFAULTS (guard.js
   can't be `require`d) and is **pinned to guard.js by a test**. 18 new checks. Tokens/cache, never dollars.
-  - **`tune --write` — DONE.** Applies the recommendation to `tokenbrake.json`, gated on MEASURED evidence only:
-    turns ON a feature with a clean measured record (a `turn-on`), turns OFF one that measurably backfired (a
-    `review`); `try`/`measure` are estimates and are never written. Merges (every other key preserved, like
-    `preset`), reads the raw file to compute the from→to per knob, writes only what changed, and prints each
-    change with its measured reason. Knob names come from the fixed feature list (never transcript content),
-    values are booleans -- no injection into the written config. Ran its own `/simplify → /code-review →
-    /security-review` loop (cli.js only). This is the informed, per-user analogue of the A/B that gates a
-    shipped default: it never flips on an estimate, only on the user's own measured backfire audit.
+  - **`tune --write` — DONE.** Turns ON the features with a clean MEASURED record (a `turn-on`); never on an
+    estimate. It does NOT auto-disable a backfired feature -- the audit's net is pooled, not per-feature, so it
+    cannot tell a backfired-but-net-positive feature from a net-negative one, and reverting the former would cost
+    tokens; a backfire is surfaced as `reconsider` for the person to turn off by hand. Merges (every other key
+    preserved, like `preset`), aborts rather than overwrite a malformed config, writes booleans on the fixed
+    feature-list knob names (no injection into the written config), and prints each turn-on with its measured
+    reason. Ran its own `/simplify → /code-review → /security-review` loop (cli.js only). This is the informed,
+    per-user analogue of the A/B that gates a shipped default: it never flips on an estimate, only on the user's
+    own measured backfire audit.
   - **Deferred follow-ups (recorded, not built):** (1) **`dedup` opportunity** has no
     stored signal (dedup hashes result bodies, which `parseTranscript` drops), so it shows "turn on to measure"
     until it fires — recovering it would mean surfacing a body hash in the parse, its own change. (2) **shapeFilters

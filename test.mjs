@@ -2903,10 +2903,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('tune --write turns ON a feature with a clean measured record', rw.status === 0 && after.blobElide === true, JSON.stringify(after));
   t('tune --write does NOT write an estimate-only feature (gitView is a try/measure, not measured)', after.gitView === undefined, JSON.stringify(after));
   t('tune --write merges, preserving other keys', after.maxChars === 5000, JSON.stringify(after));
-  t('tune --write reports what it applied with the measured reason', /Applied 1 change/.test(rw.stdout) && /"blobElide": false -> true/.test(rw.stdout) && /measured clean/.test(rw.stdout), rw.stdout.split('\n').filter(l => /blobElide|Applied/.test(l)).join(' | '));
+  t('tune --write reports what it turned on with the measured reason', /Turned ON 1 feature/.test(rw.stdout) && /"blobElide": false -> true/.test(rw.stdout) && /measured clean/.test(rw.stdout), rw.stdout.split('\n').filter(l => /blobElide|Turned ON/.test(l)).join(' | '));
 
-  const rw2 = cli3(['tune', '--write']);   // blobElide now on + clean -> 'keep', not in the plan
-  t('a second --write is a no-op once the config matches the measured recommendation', rw2.status === 0 && /No MEASURED change|already matches/.test(rw2.stdout), rw2.stdout.split('\n').slice(0, 3).join(' | '));
+  const rw2 = cli3(['tune', '--write']);   // blobElide now on + clean -> 'keep', not in the turn-on plan
+  t('a second --write is a no-op once the clean feature is already on', rw2.status === 0 && /No feature has a clean MEASURED record to turn on/.test(rw2.stdout), rw2.stdout.split('\n').slice(0, 3).join(' | '));
 
   /* --write on a session that only has opportunity (no measured record) writes nothing. */
   const cfg4 = mkdtempSync(join(tmpdir(), 'tokenbrake-tunew2-'));
@@ -2917,7 +2917,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_G', content: bigDiff }] } }),
   ].join('\n'));
   const rw3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune', '--write'], { encoding: 'utf8', env: e4 });
-  t('tune --write writes nothing when there is only opportunity, no measured record', rw3.status === 0 && /No MEASURED change/.test(rw3.stdout) && !existsSync(join(cfg4, 'tokenbrake.json')), rw3.stdout.split('\n')[1] || '');
+  t('tune --write writes nothing when there is only opportunity, no measured record', rw3.status === 0 && /No feature has a clean MEASURED record to turn on/.test(rw3.stdout) && !existsSync(join(cfg4, 'tokenbrake.json')), rw3.stdout.split('\n')[1] || '');
 
   rmSync(cfg3, { recursive: true, force: true });
   rmSync(cfg4, { recursive: true, force: true });

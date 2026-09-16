@@ -1084,9 +1084,11 @@ function unboundedReads(parsed, ledgerRecs, opts) {
   const sized = reads.filter((r) => !r.ceiling);
   /* Reads over `readMaxBytes` (from opts) the cap did NOT act on -- the guard had its chance and missed, the
      "missing" signal report --reads and the auto-tuner both read. One predicate, here where the reads are
-     classified, rather than the same filter copied into each caller. 0 when no readMaxBytes is passed. */
-  const overMax = Number(o.readMaxBytes) || 0;
-  const over = overMax ? reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > overMax).length : 0;
+     classified, rather than the same filter copied into each caller. An ABSENT readMaxBytes disables the signal
+     (over: 0); an explicit 0 is honored (the guard takes 0 literally as "cap everything", so any uncapped read
+     is over it) -- distinguished so a caller passing 0 is not silently treated as "no threshold". */
+  const overMax = o.readMaxBytes == null ? null : Number(o.readMaxBytes);
+  const over = overMax == null ? 0 : reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > overMax).length;
   return { reads, sized, over, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
     files: new Set(reads.map((r) => normReadPath(r.file, parsed.cwd))).size,
     capped: reads.filter((x) => x.capped).length, recordedOriginal, recordedRewritten,
@@ -1362,7 +1364,11 @@ function blobOpportunity(parsed, cfg) {
 
 /* MCP-trim opportunity: mcp__* results the model received whole and over maxChars, which is exactly what
    mcpTrim would route through the trim. A result already carrying the guard's marker is excluded -- it was
-   trimmed, so it is not an untapped opportunity. */
+   trimmed, so it is not an untapped opportunity. One BLIND SPOT (like blobOpportunity's): an MCP result Claude
+   Code judged too large is persisted by the host and only a ~2KB preview lands in the transcript, so its r.chars
+   reads under maxChars and it is missed here -- exactly the oversized MCP results mcpTrim most targets. So a low
+   count is not proof mcpTrim would not help; it under-counts (the safe direction), and the real number comes
+   from turning mcpTrim on for a session. */
 function mcpOpportunity(parsed, cfg) {
   const max = Number(cfg.maxChars) || 6000;
   let n = 0, carried = 0;
@@ -1395,17 +1401,20 @@ function editThenRead(parsed) {
   return { n, carried };
 }
 
-/* Git-view opportunity: a `git diff`/`git show` result over gitViewMinChars. This is an UPPER bound, unlike the
-   others -- the guard collapses only the hunks of generated/lockfile paths, and with the body dropped this
-   cannot see whether such a path is in the diff. So it counts every large diff and the render labels it "up to";
-   the real number comes from turning gitView on for a session. GIT_CMD mirrors guard.js GIT_DIFF. */
+/* Git-view opportunity: an UNTRIMMED `git diff`/`git show` result over gitViewMinChars. This is an UPPER bound,
+   unlike the exact-lower-bound estimators -- the guard collapses only the hunks of generated/lockfile paths, and
+   with the body dropped this cannot see whether such a path is in the diff. So it counts every large diff and
+   the render labels it "up to"; the real number comes from turning gitView on for a session. A result already
+   carrying the guard's marker is excluded (as mcpOpportunity does): the always-on trim already char-sliced it,
+   so its carried in the transcript is the shrunken value, not the diff's -- counting it would double-count what
+   the trim already saved and size it wrong. GIT_CMD mirrors guard.js GIT_DIFF. */
 const GIT_CMD = /\bgit(?:\s+-C\s+\S+)?\s+(?:diff|show)\b/;
 function gitOpportunity(parsed, cfg) {
   const min = Number(cfg.gitViewMinChars) || 2000;
   let n = 0, carried = 0;
   for (const r of parsed.results) {
     if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
-    if (r.isError || r.chars < min || !GIT_CMD.test(String(r.what || ''))) continue;
+    if (r.isError || r.marker || r.chars < min || !GIT_CMD.test(String(r.what || ''))) continue;
     n++; carried += r.carried || 0;
   }
   return { n, carried };
@@ -1475,7 +1484,8 @@ function autotune(parsedSessions, ledger, cfg) {
        cap failed -- counting it would manufacture a phantom config defect (report --reads buckets it the same
        way, per-session). So gate on g.ran, not the global guarded count. */
     if (g.ran) capOver += u.over;
-    reachSessions.push({ parsed: p, trimmed: trimmedResults(p, led), ran: g.ran });
+    // reachPooled only uses the guarded sessions (filtered below), so skip the trimmedResults scan for the rest
+    reachSessions.push({ parsed: p, trimmed: g.ran ? trimmedResults(p, led) : null, ran: g.ran });
   }
 
   const on = (k) => !!cfg[k];
@@ -1502,8 +1512,9 @@ function autotune(parsedSessions, ledger, cfg) {
     return isOn ? 'keep' : 'measure';
   };
   /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
-     re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead and
-     gitOpportunity, shown as "up to N"), 'near' for the deliberately under-counting ones (shown as "~ N"). */
+     re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead,
+     gitOpportunity and reReadOpportunity, shown as "up to N"), 'near' for the exact lower-bound ones
+     (blobOpportunity, mcpOpportunity, shown as "~ N"). */
   const feat = (key, label, knob, measured, opp, bound) => {
     const isOn = on(knob);
     return { key, label, knob, on: isOn, bound, measured, opportunity: opp || null, status: decide(isOn, measured, opp) };

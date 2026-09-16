@@ -1261,21 +1261,24 @@ function tuneReport() {
   const t = transcript.autotune(parsed, ledger, cfg);
 
   /* `--write`: apply the recommendation to tokenbrake.json. This is the one part of the tuner that changes what
-     the guard withholds next session, so it acts ONLY on MEASURED evidence -- never on an estimate:
-       - a 'turn-on' feature (a clean measured record, currently off) is switched ON;
-       - a 'review' feature (a measured backfire, currently on) is switched OFF (a safety revert).
-     'try'/'measure' are opportunity estimates, so --write leaves them for the person to enable and measure
-     themselves. Knob names come from the fixed feature list (never from transcript content), the values are
-     booleans, and every other key in the file is preserved (merge, not replace) -- the same contract as
-     `preset`. The plain `tokenbrake tune` is the preview; this is the deliberate apply. */
+     the guard withholds next session, so it only ever turns a feature ON, and only on a clean MEASURED record
+     (a 'turn-on') -- never on an estimate. It does NOT auto-disable: a measured backfire is surfaced as
+     'reconsider' for the person to turn off deliberately, because the audit's net is pooled, not per-feature, so
+     --write cannot tell a feature that backfired once but is strongly net-positive from one that is net-negative
+     -- and reverting a net-positive feature would cost tokens. 'try'/'measure' are opportunity estimates, left
+     for the person to enable and measure. Knob names come from the fixed feature list (never transcript
+     content), values are booleans, and every other key is preserved (merge, not replace) -- the `preset`
+     contract. The plain `tokenbrake tune` is the preview; this is the deliberate apply. */
   if (flag('--write')) {
     const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
     console.log('Auto-tune --write -- ' + t.sessions + ' session(s), ' + t.guarded + ' with the guard');
-    const plan = t.features.filter((f) => f.status === 'turn-on' || f.status === 'review');
+    const plan = t.features.filter((f) => f.status === 'turn-on');
+    const review = t.features.filter((f) => f.status === 'review');
+    const reviewNote = review.length ? ' It does not auto-disable: ' + review.map((f) => f.knob).join(', ')
+      + ' measurably backfired -- turn ' + (review.length > 1 ? 'those' : 'it') + ' off by hand if you want (`tokenbrake tune` shows the backfire).' : '';
     if (!plan.length) {
-      console.log('  No MEASURED change to apply. --write only acts on measured evidence: it turns ON a feature with a');
-      console.log('  clean measured record and turns OFF one that measurably backfired. "try"/"measure" are estimates --');
-      console.log('  enable those yourself for a session first (`tokenbrake tune` shows them), then re-run --write. Nothing written.');
+      console.log('  No feature has a clean MEASURED record to turn on. --write acts only on measured evidence, never an');
+      console.log('  estimate -- enable a "try"/"measure" feature yourself for a session first (`tokenbrake tune`), then re-run.' + reviewNote);
       return;
     }
     /* Read the RAW file (not the defaults-merged cfg) as the merge base, so a default is never baked in. A
@@ -1288,18 +1291,18 @@ function tuneReport() {
       if (e && e.code === 'ENOENT') current = {};
       else { console.log('  ' + cfgPath + ' is not valid JSON -- fix or remove it before --write, so its other settings are not lost. Nothing written.'); return; }
     }
-    /* Every plan feature is a real flip: decide() returns 'turn-on' only when the feature is off (-> true) and
-       'review' only when it is on (-> false), so f.on always differs from the target -- there is no
-       "already matches" case (a matching feature is 'keep'/'leave-off' and never reaches the plan). */
+    /* Every plan feature is off (decide() returns 'turn-on' only when the feature is off), so each is a real
+       false -> true flip -- there is no "already matches" case (a matching feature is 'keep' and never here). */
     const next = { ...current };
-    for (const f of plan) next[f.knob] = (f.status === 'turn-on');
+    for (const f of plan) next[f.knob] = true;
     writeJson(cfgPath, next);
-    console.log('  Applied ' + plan.length + ' change(s) to ' + cfgPath + ' (every other key preserved):');
+    console.log('  Turned ON ' + plan.length + ' feature(s) in ' + cfgPath + ' (every other key preserved):');
     for (const f of plan) {
-      const to = f.status === 'turn-on', m = f.measured;   // m always present with fired > 0: decide() gives turn-on/review only to a measured feature
+      const m = f.measured;   // always present with fired > 0: decide() gives 'turn-on' only to a measured feature
       const ev = m.savedCarried == null ? m.fired + ' fired, ' + m.backfired + ' sent the model back' : m.fired + ' fired, ' + m.backfired + ' pulled back';
-      console.log('    "' + f.knob + '": ' + f.on + ' -> ' + to + '   (' + (to ? 'measured clean' : 'measured backfire') + ': ' + ev + ')');
+      console.log('    "' + f.knob + '": false -> true   (measured clean: ' + ev + ')');
     }
+    if (review.length) console.log(' ' + reviewNote);
     console.log('  Revert any line by editing ' + cfgPath + '. Re-run `tokenbrake tune` after more sessions to re-check. Tokens, never dollars.');
     return;
   }
@@ -1419,9 +1422,9 @@ function help() {
       [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
                                       where it has not, plus the Read cap's health. Prints the exact knob to
                                       set. Benchmark sessions skipped
-      --write                         apply the MEASURED recommendation to tokenbrake.json: turn on a feature
-                                      with a clean measured record, turn off one that measurably backfired
-                                      (estimates are left for you to enable and measure). Merges, never replaces
+      --write                         turn ON the features with a clean MEASURED record (estimates, and features
+                                      that backfired, are left for you to decide). Merges into tokenbrake.json,
+                                      never replaces; aborts rather than overwrite a malformed config
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
 }
 
