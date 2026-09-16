@@ -1282,11 +1282,11 @@ function tuneReport() {
       console.log('  enable those yourself for a session first (`tokenbrake tune` shows them), then re-run --write. Nothing written.');
       return;
     }
-    const current = readJson(cfgPath, {});
+    const current = readJson(cfgPath, {});   // the RAW file: the merge base, so defaults are not baked in
     const changes = [];
     for (const f of plan) {
-      const to = f.status === 'turn-on', from = !!current[f.knob];
-      if (from !== to) changes.push({ f, from, to });
+      const to = f.status === 'turn-on';       // turn-on -> true, review -> false
+      if (f.on !== to) changes.push({ f, from: f.on, to });   // f.on is autotune's effective state (the single authority)
     }
     if (!changes.length) { console.log('  Config already matches the measured recommendation -- nothing written.'); return; }
     const next = { ...current };
@@ -1294,9 +1294,9 @@ function tuneReport() {
     writeJson(cfgPath, next);
     console.log('  Applied ' + changes.length + ' change(s) to ' + cfgPath + ' (every other key preserved):');
     for (const c of changes) {
-      const m = c.f.measured;
-      const ev = m ? (m.savedCarried == null ? m.fired + ' fired, ' + m.backfired + ' sent the model back' : m.fired + ' fired, ' + m.backfired + ' pulled back') : '';
-      console.log('    "' + c.f.knob + '": ' + c.from + ' -> ' + c.to + '   (' + (c.to ? 'measured clean' : 'measured backfire') + (ev ? ': ' + ev : '') + ')');
+      const m = c.f.measured;   // always present with fired > 0: plan is turn-on/review, which decide() gives only to a measured feature
+      const ev = m.savedCarried == null ? m.fired + ' fired, ' + m.backfired + ' sent the model back' : m.fired + ' fired, ' + m.backfired + ' pulled back';
+      console.log('    "' + c.f.knob + '": ' + c.from + ' -> ' + c.to + '   (' + (c.to ? 'measured clean' : 'measured backfire') + ': ' + ev + ')');
     }
     console.log('  Revert any line by editing ' + cfgPath + '. Re-run `tokenbrake tune` after more sessions to re-check. Tokens, never dollars.');
     return;
