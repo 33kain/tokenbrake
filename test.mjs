@@ -2799,6 +2799,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   }
   t('TUNE_DEFAULTS matches guard.js DEFAULTS for every mirrored key', pinned, badKey);
 
+  /* GIT_CMD mirrors guard.js GIT_DIFF (guard.js can't be require()d), and gitOpportunity estimates against the
+     command set the guard actually collapses -- so pin the regex source to guard.js the same way, or the two
+     can silently diverge (guard starts collapsing `git log -p`, say) with nothing failing. */
+  const gm = /const GIT_DIFF = \/(.+?)\/;/.exec(guardSrc);
+  t('GIT_CMD matches guard.js GIT_DIFF source (the mirror is pinned)', !!gm && gm[1] === T.GIT_CMD.source, gm ? gm[1] + ' vs ' + T.GIT_CMD.source : 'GIT_DIFF not found in guard.js');
+
   // ---- cli wiring: tune runs and help lists it ----
   const cfg2 = mkdtempSync(join(tmpdir(), 'tokenbrake-tune-'));
   const e2 = { ...process.env, CLAUDE_CONFIG_DIR: cfg2 };

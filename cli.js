@@ -557,16 +557,15 @@ function readsReport() {
       continue;
     }
     const sessionId = p.sessionId || f.session;
-    const u = transcript.unboundedReads(p, ledger, { sessionId });
+    const u = transcript.unboundedReads(p, ledger, { sessionId, readMaxBytes: cfg.readMaxBytes });
     const d = transcript.readDepths(p, ledger, { sessionId, linesOnDisk });
     /* The product's own self-check, and the reason it exists: a read over readMaxBytes that was NOT capped
        means either the guard was not running in that session or it did not fire. Those are the same evidence
        and opposite conclusions -- "the cap is inert on this workload" against "the cap is not running on this
        workload" -- and nothing in this repo could tell them apart. The ledger settles it: if it holds no row
        at all for a session, the guard was not there; if it holds rows and the read still went through
-       unbounded, the cap had its chance and missed. */
-    const over = u.reads.filter(r => !r.capped && !r.ceiling && (r.bytes || 0) > cfg.readMaxBytes);
-    if (over.length) missed.push([id, over.length, ledgerSessions.has(sessionId)]);
+       unbounded, the cap had its chance and missed. `u.over` is that predicate, owned by unboundedReads. */
+    if (u.over) missed.push([id, u.over, ledgerSessions.has(sessionId)]);
     if (!u.n && !d.n) { skipped.push([id, 'no whole-file reads and no resolvable targets']); continue; }
     pooled.push([id, u.n, cwd]);
     reads = reads.concat(u.reads);
@@ -1243,8 +1242,7 @@ function tuneReport() {
   const found = transcript.findTranscripts(CFG_DIR);
   if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
 
-  const cfg = { ...transcript.TUNE_DEFAULTS };
-  try { Object.assign(cfg, JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'))); } catch {}
+  const cfg = { ...transcript.TUNE_DEFAULTS, ...readJson(path.join(CFG_DIR, 'tokenbrake.json'), {}) };
 
   const parsed = [], skipped = [];
   for (const f of found) {
@@ -1280,7 +1278,7 @@ function tuneReport() {
     }
     const o = f.opportunity;
     if (!o || !o.n) return 'not fired, and no opportunity seen in these sessions';
-    const bound = f.key === 'gitView' ? 'up to ' : f.key === 'readAfterEdit' ? 'up to ' : '~ ';
+    const bound = f.bound === 'upper' ? 'up to ' : '~ ';   // upper-bound estimators say "up to"; the under-counting ones "~"
     const what = f.key === 'gitView' ? ' large git diff/show result(s) (gitView acts only on those touching a lockfile/minified path)'
       : f.key === 'blobElide' ? ' blob-like shell result(s)'
       : f.key === 'mcpTrim' ? ' MCP result(s) over maxChars'

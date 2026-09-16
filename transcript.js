@@ -1082,7 +1082,12 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       via: 'read-cap' });
   }
   const sized = reads.filter((r) => !r.ceiling);
-  return { reads, sized, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
+  /* Reads over `readMaxBytes` (from opts) the cap did NOT act on -- the guard had its chance and missed, the
+     "missing" signal report --reads and the auto-tuner both read. One predicate, here where the reads are
+     classified, rather than the same filter copied into each caller. 0 when no readMaxBytes is passed. */
+  const overMax = Number(o.readMaxBytes) || 0;
+  const over = overMax ? reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > overMax).length : 0;
+  return { reads, sized, over, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
     files: new Set(reads.map((r) => normReadPath(r.file, parsed.cwd))).size,
     capped: reads.filter((x) => x.capped).length, recordedOriginal, recordedRewritten,
     nearCeiling, hostLines, persistedSkipped,
@@ -1408,13 +1413,13 @@ function autotune(parsedSessions, ledger, cfg) {
 
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
-  let capReads = 0, capOver = 0, capFired = 0, guarded = 0, viaLedger = 0, viaMarker = 0;
+  let capOver = 0, capFired = 0, guarded = 0;
   const readMaxBytes = Number(cfg.readMaxBytes) || 60000;
 
   for (const p of sessions) {
     carry(p);
     const g = guardRan(p, led, p.sessionId);
-    if (g.ran) { guarded++; if (g.via === 'ledger') viaLedger++; else viaMarker++; }
+    if (g.ran) guarded++;
 
     const a = backfireAudit(p, led);
     for (const w of a.withholds) bump(w.kind, w);
@@ -1428,15 +1433,14 @@ function autotune(parsedSessions, ledger, cfg) {
     const ro = repeatReads(p); reReadOpp.n += ro.repeats; reReadOpp.carried += ro.carried;
     const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried;
 
-    const u = unboundedReads(p, led, { sessionId: p.sessionId });
-    capReads += u.reads.length;
+    const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
     capFired += u.capped;
-    capOver += u.reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > readMaxBytes).length;
+    capOver += u.over;   // reads over readMaxBytes the cap did not act on (unboundedReads owns the predicate)
     reachSessions.push({ parsed: p, trimmed: trimmedResults(p, led), ran: g.ran });
   }
 
   const on = (k) => !!cfg[k];
-  const measuredOf = (k) => kind[k] ? { fired: kind[k].fired, backfired: kind[k].backfired, savedCarried: kind[k].savedCarried } : null;
+  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as exactly {fired, backfired, savedCarried}
   /* The read narrowings measure fired/backfired only (no out/ save, so no savedCarried); carry that shape. */
   const readMeasured = (fired, back) => fired > 0 ? { fired, backfired: back, savedCarried: null } : null;
 
@@ -1454,18 +1458,21 @@ function autotune(parsedSessions, ledger, cfg) {
     if (opp && (opp.n >= OPP_MIN_N || (opp.carried || 0) >= OPP_MIN_CARRIED)) return isOn ? 'keep' : 'try';
     return 'leave-off';
   };
-  const feat = (key, label, knob, measured, opp) => {
+  /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
+     re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead and
+     gitOpportunity, shown as "up to N"), 'near' for the deliberately under-counting ones (shown as "~ N"). */
+  const feat = (key, label, knob, measured, opp, bound) => {
     const isOn = on(knob);
-    return { key, label, knob, on: isOn, measured, opportunity: opp || null, status: decide(isOn, measured, opp) };
+    return { key, label, knob, on: isOn, bound, measured, opportunity: opp || null, status: decide(isOn, measured, opp) };
   };
 
   const features = [
-    feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), blob),
-    feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), gitOpp),
-    feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp),
-    feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
-    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp),
-    feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits),
+    feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), blob, 'near'),
+    feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), gitOpp, 'upper'),
+    feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp, 'near'),
+    feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
+    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'near'),
+    feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits, 'upper'),
   ];
 
   /* The Read cap is always on and has its own tuning views (report --reads/--where); the tuner only reads its
@@ -1474,8 +1481,7 @@ function autotune(parsedSessions, ledger, cfg) {
      chance and did not take it (a config or coverage problem worth flagging), which is only meaningful when a
      guard was present, hence the `guarded` guard. */
   const capVerdict = (capOver > 0 && guarded) ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
-  const readCap = { currentLimit: Number(cfg.readLimitLines) || 300, readMaxBytes,
-    reads: capReads, over: capOver, fired: capFired, verdict: capVerdict };
+  const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict };
 
   const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], keep: [] };
   for (const f of features) {
@@ -1486,7 +1492,7 @@ function autotune(parsedSessions, ledger, cfg) {
     else summary.leaveOff.push(f.label);
   }
 
-  return { sessions: sessions.length, guarded, viaLedger, viaMarker,
+  return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
     netCarried, features, readCap, summary,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
@@ -1742,4 +1748,4 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
   capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
-  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, TUNE_DEFAULTS };
+  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };
