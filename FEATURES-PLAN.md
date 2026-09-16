@@ -246,9 +246,31 @@ grandfathered, to be cleaned up later, not extended).
     A/B-gated narrowing; a later pass can broaden the matchers if the A/B shows the gaps matter.
     ( The `gitCollapse` `.map`-in-`a.mapper.js` substring false-positive raised in review was FIXED here — the
     match is now a path SUFFIX, not a substring. )
+- **Personalized Auto-Tuner — DONE (v1: recommendation-only, ships ON).** `tokenbrake tune` reads a person's own
+  recent sessions and, per off-by-default feature, recommends **turn on / try / leave off** with the exact knob.
+  It is advisory — read-only, prints to stdout, changes nothing that enters context — so it needs no default-OFF
+  gate or A/B of its own (like `report --backfire`); it touches `transcript.js` + `cli.js`, so it ran the full
+  `/simplify → /code-review → /security-review` loop. `transcript.autotune` (pure, tested) composes two sources
+  kept strictly apart: **measured** (the backfire audit's real fired/backfired/saved for a feature that ran —
+  the *only* thing that earns a "turn on"; a measured backfire → "leave off"/"reconsider") and **opportunity**
+  (a coarse, deliberately UNDER-counting estimate for a feature that is off — `blobOpportunity`/`mcpOpportunity`/
+  `editThenRead`/`gitOpportunity` + `repeatReads`, from the facts `parseTranscript` keeps — which earns at most a
+  "try it and measure", never a "turn on", the Read-cap trigger's rule). Also reports the Read cap's health
+  (firing/dormant/missing) and trim reach (`reachPooled`). `TUNE_DEFAULTS` mirrors the guard's DEFAULTS (guard.js
+  can't be `require`d) and is **pinned to guard.js by a test**. 18 new checks. Tokens/cache, never dollars.
+  - **Deferred follow-ups (recorded, not built):** (1) **`tune --write`** — apply the recommended knobs to
+    `tokenbrake.json` after showing the diff. Held back on purpose: writing config is the one part that changes
+    what the guard withholds next session, so it earns its own separately-reviewed pass (confirmation + diff +
+    the "never widen silently" care), not a bundle into the read-only v1. (2) **`dedup` opportunity** has no
+    stored signal (dedup hashes result bodies, which `parseTranscript` drops), so it shows "turn on to measure"
+    until it fires — recovering it would mean surfacing a body hash in the parse, its own change. (3) **shapeFilters
+    / jsonShape** are trim sub-modes with no distinct ledger `kind`, so `tune` does not give them first-class
+    verdicts (they ride the `trim` kind); the explicit-`kind` ledger field (narrowing-4 follow-up) would let it.
+    (4) `editThenRead`/`gitOpportunity` are coarser than the others (an upper bound and an edit→read heuristic);
+    once `--write` lands, tightening them against the real deltas/gitview firings is the natural next measurement.
 - **Remaining narrowings** (each ships off, each validated by Step 0 before any default moves): Grep-Anchored
   Reads (higher backfire risk — deferred: the Grep tool already returns matching lines with context, so a
   following Read usually wants *more*, not the same window), Dependency Surface Reader, API/JSON Field
-  Projection; plus Instruction Diet Compiler, Personalized Auto-Tuner (the report engine already holds most of
-  it), Deterministic Replay Simulator (rides the `trim.js` extraction). The blob elider's two deferred
+  Projection; plus Instruction Diet Compiler, Deterministic Replay Simulator (rides the `trim.js` extraction).
+  (The Personalized Auto-Tuner shipped — see above; `tune --write` is its one deferred follow-up.) The blob elider's two deferred
   follow-ups (a `Read` of a one-line minified file; MCP base64 result blocks) also remain.

@@ -1229,6 +1229,98 @@ function auditReport() {
     + '\n  negative is spending tokens, not saving them. Token-reads only; --cost is where dollars live.');
 }
 
+/* The Personalized Auto-Tuner (`tokenbrake tune`). Pools your recent real sessions -- the same population and
+   skips as report --reads/--where -- and, for each off-by-default feature, prints its MEASURED record where it
+   has fired (from the backfire audit) or a labelled OPPORTUNITY estimate where it has not, then a per-feature
+   recommendation and the exact knob to set. Recommends only: it never writes tokenbrake.json (that changes what
+   the guard withholds next session, so it stays the person's explicit act -- the recommendation names the knob
+   to paste). The recommendation engine is transcript.autotune, kept pure and tested; this only pools and prints. */
+function tuneReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const only = opt('--cwd');
+  const want = opt('--session');
+  const ledger = loadLedger();
+  const found = transcript.findTranscripts(CFG_DIR);
+  if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
+
+  const cfg = { ...transcript.TUNE_DEFAULTS };
+  try { Object.assign(cfg, JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'))); } catch {}
+
+  const parsed = [], skipped = [];
+  for (const f of found) {
+    const id = String(f.session).slice(0, 8);
+    if (want && !String(f.session).startsWith(want)) continue;
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    const cwd = p.cwd || '';
+    if (only) { if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; } }
+    else if (/tokenbrake-bench/i.test(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
+    if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
+    parsed.push(p);
+  }
+  if (!parsed.length) { console.log('No usable session(s) to tune from' + (want ? ' for --session=' + want : '') + (only ? ' under --cwd=' + only : '') + '.'); return; }
+
+  const t = transcript.autotune(parsed, ledger, cfg);
+  console.log('Auto-tune -- ' + t.sessions + ' session(s) pooled, ' + t.guarded + ' with the guard, ' + skipped.length + ' skipped'
+    + (only ? '  (--cwd=' + only + ')' : ''));
+  if (t.thin) console.log('  Few guarded sessions -- a weak base; treat these as provisional and run more sessions to firm them up.');
+  if (t.netCarried) console.log('  Saving so far: ~ ' + fmt(t.netCarried) + ' net token-reads across the features already on (backfire audit).');
+  else console.log('  Nothing withheld yet in these sessions -- every context-narrowing feature below is off.');
+
+  const mark = { 'turn-on': '[ON] ', 'keep': '[on] ', 'try': '[try]', 'review': '[!!] ', 'leave-off': '[ - ]' };
+  const evidence = (f) => {
+    const m = f.measured, isRead = m && m.savedCarried == null;
+    if (m && m.fired > 0) {
+      const back = isRead
+        ? m.backfired + ' sent the model back'
+        : m.backfired + ' pulled back' + (m.savedCarried ? ', ~ ' + fmt(m.savedCarried) + ' token-reads saved' : '');
+      return 'fired ' + m.fired + 'x, ' + back
+        + (f.status === 'try' ? '  -- clean, but too few firings to be sure; run a few more sessions' : '')
+        + (f.status === 'review' ? '  -- it backfired; reconsider leaving it on' : '');
+    }
+    const o = f.opportunity;
+    if (!o || !o.n) return 'not fired, and no opportunity seen in these sessions';
+    const bound = f.key === 'gitView' ? 'up to ' : f.key === 'readAfterEdit' ? 'up to ' : '~ ';
+    const what = f.key === 'gitView' ? ' large git diff/show result(s) (gitView acts only on those touching a lockfile/minified path)'
+      : f.key === 'blobElide' ? ' blob-like shell result(s)'
+      : f.key === 'mcpTrim' ? ' MCP result(s) over maxChars'
+      : f.key === 'reReadElide' ? ' whole-file re-read(s)'
+      : f.key === 'readAfterEdit' ? ' edit-then-whole-read(s)' : ' result(s)';
+    return 'not fired; would act on ' + bound + o.n + what + (o.carried ? ' (~ ' + fmt(o.carried) + ' carried token-reads)' : '');
+  };
+  console.log('\n  Off-by-default features:');
+  for (const f of t.features) {
+    const set = (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
+      : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
+    console.log('    ' + (mark[f.status] || '     ') + ' ' + f.label + ' (' + f.knob + ')' + set);
+    console.log('        ' + evidence(f));
+  }
+
+  const rc = t.readCap;
+  const capLine = rc.verdict === 'firing' ? 'firing -- capped ' + rc.fired + ' read(s) in these sessions'
+    : rc.verdict === 'missing' ? 'MISSING -- ' + rc.over + ' read(s) went over readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes) uncapped while the guard was running; check the read-pre hook is installed'
+    : 'dormant -- no read reached readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes), so the cap had nothing to act on';
+  console.log('\n  Read cap (always on): ' + capLine + '.');
+  console.log('    For the exact readLimitLines/readMaxBytes values, the evidence is in: tokenbrake report --reads (and --where).');
+
+  if (t.reach && t.guarded) {
+    const W = Math.round(1000 * (t.reach.windowShareOfCarried || 0)) / 10;
+    console.log('\n  Trim reach: ~ ' + W + '% of carried tokens sit where the trim can act (over the ' + t.guarded + ' guarded session(s)). report --reach breaks it down.');
+  }
+
+  const s = t.summary;
+  const parts = [];
+  if (s.turnOn.length) parts.push('Turn on: ' + s.turnOn.join(', '));
+  if (s.tryThese.length) parts.push('Try: ' + s.tryThese.join(', '));
+  if (s.review.length) parts.push('Reconsider: ' + s.review.join(', '));
+  if (s.leaveOff.length) parts.push('Leave off: ' + s.leaveOff.join(', '));
+  console.log('\n  ' + (parts.length ? parts.join('.  ') + '.' : 'Nothing to change on this evidence.'));
+  if (skipped.length) { console.log('\n  Skipped:'); for (const [id, why] of skipped.slice(0, 12)) console.log('    ' + id + '...  ' + why); if (skipped.length > 12) console.log('    (+ ' + (skipped.length - 12) + ' more)'); }
+  console.log('\n  A "turn on" is a MEASURED, clean record. A "try" is an ESTIMATE from what the model read -- built to under-count,');
+  console.log('  so turn the feature on and run `tokenbrake report --backfire` to confirm before trusting it. Recommendations only:');
+  console.log('  nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens, never dollars.');
+}
+
 function help() {
   console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
 
@@ -1275,8 +1367,13 @@ function help() {
                                       saved. The gate a narrowing passes before its default moves. Tokens only
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
+  npx tokenbrake tune                 read your recent sessions and recommend which off-by-default features to
+      [--cwd=<text>]                  turn on: each feature's real record where it has fired (fired / pulled
+      [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
+                                      where it has not, plus the Read cap's health. Recommends only -- it prints
+                                      the exact knob to set, never writes. Benchmark sessions skipped
   npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
 }
 
-const cmds = { init, uninstall, status, doctor, report, preset, show: showOutput, outputs, ls: outputs, clean, help };
+const cmds = { init, uninstall, status, doctor, report, tune: tuneReport, preset, show: showOutput, outputs, ls: outputs, clean, help };
 (cmds[cmd] || help)();

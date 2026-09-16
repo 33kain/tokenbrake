@@ -2681,6 +2681,134 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(proj, { recursive: true, force: true });
 }
 
+/* ---- Personalized Auto-Tuner (`tokenbrake tune`) --------------------------
+   The recommendation engine (transcript.autotune) composes the backfire audit (MEASURED: what the feature did
+   when it ran) with coarse OPPORTUNITY estimates (what it would do, for a feature that is off). The decision it
+   makes per feature is the driftable part, so it is pinned here: measured beats opportunity, a measured backfire
+   is disqualifying, and opportunity earns at most a "try", never a "turn it on". The opportunity estimators and
+   the mirrored TUNE_DEFAULTS are pinned too. */
+{
+  console.log('\n-- auto-tuner (tokenbrake tune)');
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  const reqs = (n) => Array.from({ length: n }, () => ({ model: 'claude-opus-5' }));
+  const sid = 'c0ffee12-3456-7890-abcd-ef0123456789';
+  const stem = (id) => sid.slice(0, 8) + '-' + String(id).slice(-10).replace(/[^\w-]/g, '');
+  const outOf = (id) => '/cfg/tokenbrake/out/' + stem(id) + '.txt';
+  /* A result with the fields autotune's pipeline reads; a test overrides only what it needs. */
+  const R = (o) => ({ id: null, name: 'Bash', file: null, what: '', marker: false, chars: 0, lines: 1,
+    tokens: 0, carried: 0, isError: false, whole: false, afterReq: 0, ...o });
+  const blobLedger = (id) => ({ ev: 'post', session: sid, id, tool: 'Bash', chars: 30000, kept: 200, blob: true, saved: outOf(id) });
+  const fBlob = (t) => t.features.find((f) => f.key === 'blobElide');
+
+  // ---- MEASURED decisions ----
+  const IDs = ['toolu_01B1', 'toolu_01B2', 'toolu_01B3'];
+  const cleanBlob = () => ({ sessionId: sid, cwd: '/w', requests: reqs(6), compactions: [],
+    results: IDs.map((id, i) => R({ id, what: 'cat bundle.min.js', marker: true, tokens: 500, afterReq: i })) });
+  const cleanLedger = IDs.map(blobLedger);
+
+  const onClean = T.autotune([cleanBlob()], cleanLedger, { blobElide: false });
+  t('a clean measured record (3 fires, 0 pulled back) recommends turn-on when the feature is off',
+    fBlob(onClean).status === 'turn-on' && onClean.summary.turnOn.includes('Binary-Blob Elider'), fBlob(onClean).status);
+  const onKeep = T.autotune([cleanBlob()], cleanLedger, { blobElide: true });
+  t('the same clean record, already on, recommends keep', fBlob(onKeep).status === 'keep' && onKeep.summary.keep.includes('Binary-Blob Elider'), fBlob(onKeep).status);
+
+  const backfiredBlob = () => ({ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: IDs[0], what: 'cat bundle.min.js', marker: true, tokens: 100, afterReq: 0 }),
+      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 6000, afterReq: 1 })] });
+  t('a measured backfire recommends leave-off when off', fBlob(T.autotune([backfiredBlob()], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
+  const onBack = T.autotune([backfiredBlob()], [blobLedger(IDs[0])], { blobElide: true });
+  t('a measured backfire recommends review when on', onBack.features.find((f) => f.key === 'blobElide').status === 'review' && onBack.summary.review.includes('Binary-Blob Elider'));
+
+  const fewClean = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: IDs[0], what: 'cat bundle.min.js', marker: true, tokens: 500, afterReq: 0 })] };
+  t('one clean fire is too few to assert -- recommends try, not turn-on', fBlob(T.autotune([fewClean], [blobLedger(IDs[0])], { blobElide: false })).status === 'try');
+
+  // ---- OPPORTUNITY decisions (no fires) ----
+  /* carry() recomputes r.carried from r.tokens (tokens x turns carried), so drive the opportunity's carried
+     through tokens here -- requests(2) with afterReq 0 carries 1 turn, so carried == tokens. */
+  const blobby = (n, chars, tokens) => ({ sessionId: 'opp', cwd: '/w', requests: reqs(2), compactions: [],
+    results: Array.from({ length: n }, () => R({ name: 'Bash', what: 'base64 dump', chars, lines: 1, tokens })) });
+  const bigOpp = T.autotune([blobby(4, 6000, 25)], [], { blobElide: false });
+  t('material opportunity (>= floor fires) with no measured record recommends try',
+    fBlob(bigOpp).status === 'try' && !fBlob(bigOpp).measured && fBlob(bigOpp).opportunity.n === 4, JSON.stringify(fBlob(bigOpp).opportunity));
+  t('tiny opportunity (1 fire, little carried) recommends leave-off', fBlob(T.autotune([blobby(1, 6000, 25)], [], { blobElide: false })).status === 'leave-off');
+  t('one fire but heavy carried opportunity clears the floor -> try', fBlob(T.autotune([blobby(1, 6000, 5000)], [], { blobElide: false })).status === 'try');
+
+  const mixed = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: IDs[0], what: 'cat x', marker: true, tokens: 100, afterReq: 0 }),
+      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 6000, afterReq: 1 }),
+      R({ name: 'Bash', what: 'base64', chars: 6000, lines: 1, carried: 9999 })] };
+  t('a measured backfire wins over heavy opportunity (leave-off, not try)', fBlob(T.autotune([mixed], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
+
+  // ---- opportunity estimators (units) ----
+  const P = (results) => ({ cwd: '/w', results });
+  const bo = T.blobOpportunity(P([
+    R({ name: 'Bash', chars: 5000, lines: 1, carried: 10 }),     // a blob: 1 line, over the floor
+    R({ name: 'Bash', chars: 5000, lines: 3 }),                  // too many lines
+    R({ name: 'Bash', chars: 5000, lines: 400 }),                // a log, not a blob
+    R({ name: 'Bash', chars: 5000, lines: 1, isError: true }),   // failed -> the guard leaves it whole
+    R({ name: 'Bash', chars: 2000, lines: 1 }),                  // under the size floor
+    R({ name: 'Read', chars: 9000, lines: 1 }),                  // not shell
+  ]), { blobMinChars: 4000, blobMaxLine: 2000 });
+  t('blobOpportunity counts only a 1-2 line shell result over the size floor', bo.n === 1 && bo.carried === 10, JSON.stringify(bo));
+
+  const mo = T.mcpOpportunity(P([
+    R({ name: 'mcp__github__x', chars: 7000, carried: 5 }),       // big MCP -> counts
+    R({ name: 'mcp__github__x', chars: 7000, marker: true }),     // already trimmed
+    R({ name: 'mcp__github__x', chars: 3000 }),                   // under maxChars
+    R({ name: 'Bash', chars: 9000 }),                             // not MCP
+  ]), { maxChars: 6000 });
+  t('mcpOpportunity counts only an untrimmed mcp result over maxChars', mo.n === 1 && mo.carried === 5, JSON.stringify(mo));
+
+  const go = T.gitOpportunity(P([
+    R({ name: 'Bash', what: 'git diff', chars: 5000, carried: 3 }),      // counts
+    R({ name: 'Bash', what: 'git log --stat', chars: 5000 }),           // not diff/show
+    R({ name: 'Bash', what: 'git diff', chars: 1000 }),                  // under the floor
+    R({ name: 'Bash', what: 'git show HEAD', chars: 5000, carried: 4 }), // counts
+  ]), { gitViewMinChars: 2000 });
+  t('gitOpportunity counts git diff/show over the floor, not git log', go.n === 2 && go.carried === 7, JSON.stringify(go));
+
+  const eo = T.editThenRead(P([
+    R({ name: 'Edit', file: '/w/a.js' }),
+    R({ name: 'Read', file: '/w/a.js', whole: true, carried: 8 }),   // whole read after an edit of the same file
+    R({ name: 'Read', file: '/w/b.js', whole: true }),               // no prior edit
+    R({ name: 'Edit', file: '/w/c.js' }),
+    R({ name: 'Read', file: '/w/c.js', whole: false }),              // bounded read, not what the delta narrows
+  ]));
+  t('editThenRead counts a whole read of a file edited earlier this session', eo.n === 1 && eo.carried === 8, JSON.stringify(eo));
+
+  // ---- read-cap health ----
+  const postRow = { ev: 'post', session: sid, id: 'x', tool: 'Bash', chars: 100 };
+  const dormant = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [],
+    results: [R({ name: 'Bash', what: 'ls', chars: 100 })] }], [postRow], {});
+  t('read cap reads dormant when no read reaches readMaxBytes', dormant.readCap.verdict === 'dormant', dormant.readCap.verdict);
+  const missing = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(3), compactions: [],
+    results: [R({ name: 'Read', file: '/w/huge.js', whole: true, chars: 70000, lines: 1000,
+      shape: { bytes: 70000, lines: 1000, numbered: false, from: null, to: null } })] }], [postRow], { readMaxBytes: 60000 });
+  t('read cap reads missing when an over-threshold read went uncapped with the guard running', missing.readCap.verdict === 'missing', JSON.stringify(missing.readCap));
+
+  // ---- TUNE_DEFAULTS pinned to guard.js DEFAULTS (guard.js cannot be require()d: it runs on load) ----
+  const guardSrc = readFileSync('./guard.js', 'utf8');
+  const D = T.TUNE_DEFAULTS;
+  let pinned = true, badKey = '';
+  for (const k of Object.keys(D)) {
+    const m = new RegExp('\\b' + k + ':\\s*(true|false|-?\\d+)').exec(guardSrc);
+    const got = m ? m[1] : '(absent)';
+    if (got !== String(D[k])) { pinned = false; badKey = k + '=' + got + ' vs ' + D[k]; break; }
+  }
+  t('TUNE_DEFAULTS matches guard.js DEFAULTS for every mirrored key', pinned, badKey);
+
+  // ---- cli wiring: tune runs and help lists it ----
+  const cfg2 = mkdtempSync(join(tmpdir(), 'tokenbrake-tune-'));
+  const e2 = { ...process.env, CLAUDE_CONFIG_DIR: cfg2 };
+  const rTune = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e2 });
+  t('cli tune with no transcripts exits 0 and says so (fails open)', rTune.status === 0 && /No transcripts found/.test(rTune.stdout), (rTune.stdout || rTune.stderr || '').slice(0, 80));
+  const rHelp = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env: e2 });
+  t('help lists the tune command', /tokenbrake tune/.test(rHelp.stdout));
+  rmSync(cfg2, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);
