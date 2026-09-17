@@ -932,3 +932,27 @@ Publish before the 14th, funnel to the CONTEXA update and the npm package.
 My estimate was that a third or more of consumption in long chat threads is re-sent history — a guess. The
 twenty-second card above is the first measurement: on a 689k-token session, two thirds of the per-message cost on the
 five-hour limit went away with Start fresh. The number is usable in copy as written there, with its caveats.
+
+## Decided 2026-09-17 — one install, user scope; the committed project-scope install is gone
+
+tokenbrake installs once, at user scope. The repo no longer commits a project-scope install: `.claude/settings.json`
+and the `.claude/hooks/tokenbrake/guard.js` copy are removed, and the guard-copy byte-identity invariant is retired —
+there is no committed copy to keep in step, so `guard.js` is edited directly. Reason: on any machine with both a
+user-scope and the committed project-scope install — anyone who uses tokenbrake and also develops it — both hooks fire
+per `PostToolUse` call. Every result runs the guard twice and the ledger double-logs; with dedup on, the second
+instance re-hashes the same bytes, finds the record the first just wrote, and emits a self-pointer (an "identical to
+an earlier result" pointer at the same call's own saved output, because `saveOut` names files by `tool_use_id`).
+Patching that one guard branch would leave the doubled rows; removing the committed install closes all of it at the
+source, so `guard.js` is unchanged (the self-pointer patch drafted here was reverted).
+
+Braking now comes from a single install everywhere: cloud/CI via the environment **Setup script** (`tokenbrake init`,
+user scope — README's cloud section), local dev via the developer's own install. `--project` stays as a CLI feature
+for a team that commits the guard to a shared repo whose members don't run it at user scope. `test.mjs` pins the
+repo's *absence* of a committed install (642 checks). PR #70; `guard.js`/`cli.js`/`transcript.js` net-unchanged, so
+the `/simplify → /code-review → /security-review` loop did not apply.
+
+Still open: set the cloud environment's Setup script before #70 merges, or fresh cloud sessions on this repo run
+unbraked until it is set (this session was braked only by the committed install — `~/.claude/settings.json` in the
+container is empty). Measurement note: A/B numbers taken inside the tokenbrake repo on a machine that still carries the
+old committed install (before pulling #70) are doubled and should be discarded; elsewhere the machine is single-scope
+and clean.
