@@ -284,6 +284,15 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     t('status calls a stale installed guard stale, and says what it costs',
       /guard build: STALE/.test(drifted.stdout) && /records an older guard/.test(drifted.stdout),
       (drifted.stdout.match(/[^\n]*guard build:[^\n]*/) || [])[0]);
+    /* A CRLF working-tree copy (Windows core.autocrlf=true, the default) is the same code as the LF blob/tarball,
+       byte-different only in line endings. The staleness check must treat it as matching, or every Windows dev
+       checkout false-alarms -- the platform tokenbrake ships to. Pre-fix this hashed raw bytes and cried STALE. */
+    const crlf = keep.replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n');
+    writeFileSync(gf, crlf);
+    const eol = cli(['status']);
+    t('status treats a CRLF copy of the same code as matching, not stale (Windows autocrlf)',
+      /guard build: matches this checkout/.test(eol.stdout) && !/STALE/.test(eol.stdout),
+      (eol.stdout.match(/[^\n]*guard build:[^\n]*/) || [])[0]);
     writeFileSync(gf, keep);
   }
   t('status does not write to the ledger', readFileSync(join(CFG, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').length === ledgerLines);
@@ -2601,6 +2610,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = cli2(['doctor', '--fix']);
   t('doctor --fix re-copies the guard and then passes, exit 0', r.status === 0 && /FIXED/.test(r.stdout));
   t('doctor --fix restored the byte-identical guard', readFileSync(gf, 'utf8') === readFileSync('./guard.js', 'utf8'));
+  // A CRLF copy of the same code (Windows autocrlf) is not drift -- doctor must pass it, not flag STALE (mirrors status).
+  writeFileSync(gf, readFileSync('./guard.js', 'utf8').replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n'));
+  r = cli2(['doctor']);
+  t('doctor treats a CRLF copy of the same code as matching, not stale (Windows autocrlf)',
+    r.status === 0 && !/STALE/.test(r.stdout), r.stdout.split('\n').find(l => /passed|STALE|ERROR/.test(l)));
+  writeFileSync(gf, readFileSync('./guard.js', 'utf8'));   // restore an LF copy for the checks below
   writeFileSync(cfgFile, '{ not valid json');
   r = cli2(['doctor']);
   t('doctor flags invalid tokenbrake.json, exit non-zero', r.status === 1 && /not valid JSON/.test(r.stdout));
