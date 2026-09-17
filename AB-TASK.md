@@ -3060,3 +3060,69 @@ call it* at n = 1 and the diff was forced by the task, so the organic firing RAT
 is unmeasured. It ships a **recommended opt-in** (`gitView: true`). The lasting
 win of this run is the environment fix: **the double-guard bug is resolved**, so
 every future A/B here reads clean.
+
+## Measurement epoch — `eee95d1`, 2026-09-17: the classifier moved and the trim's ceiling was wrong
+
+Not a run. This records a commit that changes what the guard does, so numbers
+taken on either side of it are not the same experiment. Two things moved.
+
+**The excerpt/trim split moved.** The classifier's operand slots now reject an
+option and an unquoted glob, and the recursive/list-only grep exclusion scans the
+whole option cluster instead of its first letter. Before it, `grep -rn` was caught
+but `grep -nr`, `grep -ir`, `grep -vl` were not — the same searches typed in the
+other order kept the single-file exemption and passed their whole multi-file
+result through: **36,469 characters, whole, per call**, measured. `cat *.log` did
+the same for however many files the glob matched. So a ledger comparison spanning
+this commit mixes two classifiers, and the ON arm of any older pair exempted
+commands this one trims. `[` and `]` stay allowed on purpose (route segments like
+`app/[id]/page.tsx` are far commoner than a bracket glob); only `*` and `?` mark
+"possibly many files".
+
+**The trim was emitting past the hook output ceiling.** `trimText` measured the
+trimmed TEXT against the 10,000-char limit, but the limit applies to the emitted
+JSON, and escaping costs a character per quote, backslash and newline. Swept by
+line width on quote-dense output: 50 chars emitted 8,715 (fine), **75 emitted
+11,788, 400 emitted 16,446** — past the ceiling, where Claude Code drops the
+`updatedToolOutput` silently and the FULL untrimmed result enters context. The
+guard would have logged a trim that never happened.
+
+**What this does and does not invalidate.** It does not inflate any saving
+recorded here. `trimSavings` counts a result only when it carries the
+`[tokenbrake]` marker in the transcript *and* matches a ledger row — a dropped
+emission has no marker, so it was never counted as saved. The exposure is the
+other way round: a dropped emission is an ON-arm result that entered whole while
+the ledger said otherwise, which would show up as unexplained carried, not as
+overstated savings.
+
+Scanned every session on this machine for it: **102 trims emitted across 12
+sessions, 32 confirmed landed, 0 confirmed dropped, 62 unmatched.** Eight results
+initially looked dropped and are not — each delivered ~2,100 characters, *less*
+than the guard's own kept size (5,575–8,484), which is Claude Code's persisted-
+output preview replacing an oversized result, not a rejected emission. The
+delivered size is the tell: below the ledger's `kept` means the host spilled it,
+at the original size means the emission was refused. So there is **no observed
+instance of this bug in the recorded data**, which fits the shape of the
+trigger — it needs quote- or backslash-dense output at line width 75+, and build
+and test logs are neither.
+
+**The file-excerpt cap is a separate case and affects nothing recorded.** It
+skipped the ceiling fold entirely (15–40 KB emissions), but it has never fired:
+of **554 real ledger rows, 21 were classified as excerpts and 0 were capped**,
+because `readMaxBytes` (60,000) sits above Claude Code's own ~30,000-character
+shell ceiling — the largest shell result ever recorded here is 29,878. What kept
+it dormant was a threshold, not the code.
+
+**That last point is the live one for this page.** `scripts/sweep-readmax.mjs`
+and `tune` both recommend lowering `readMaxBytes`, and any value under ~30,000
+brings that branch into reach. Taken before `eee95d1`, such a recommendation
+would have woken a silent-drop path with no evidence trail. **The sweep's
+sub-30,000 rows are only valid against the post-fix guard; re-run them before
+acting on one.**
+
+**How to audit a past session for it.** `report --top` already marks a result
+`[trim not applied]` when a ledger row exists and the transcript result carries no
+marker. That is the signal; compare the delivered size against the row's `kept` to
+tell a host spill from a refused emission.
+
+No default changed and no flag was added — both fixes restore behaviour the code
+already documented, and the excerpt fix is a no-op at shipped defaults. 641 checks.

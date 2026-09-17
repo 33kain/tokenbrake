@@ -782,14 +782,51 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_input: { command }, tool_response: bashResp(text) });
   let r = post("sed -n '1,120p' extension/content.js", src.slice(0, 9000));
   t('a 9k-char sed range of one file passes untouched', r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
-  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js']) {
+  const EXCERPT_CORPUS = ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js',
+    /* Quoted, a glob character is an ordinary filename character -- the shell expands nothing inside quotes
+       -- so this is one file and keeps the exemption, unlike the unquoted `cat *.log` below. And a grep that
+       counts or inverts still prints one file's contents. */
+    "cat '*.log'", 'grep -c foo a.txt', 'grep -v foo a.txt', '  cat a.txt  ',
+    /* Bracketed route segments are ordinary paths, not globs, and models almost never quote them. Excluding
+       `[`/`]` from the file slot cost every Next.js App Router, SvelteKit and Expo Router source file its
+       exemption and shredded it to head/tail/error lines instead -- a far more common and worse outcome
+       than letting a rare `cat [ab].log` through. Only `*` and `?` mark "possibly many files". */
+    'cat app/[id]/page.tsx', 'cat src/routes/[slug]/+page.svelte', 'cat pages/[...slug].js'];
+  for (const c of EXCERPT_CORPUS) {
     r = post(c, src.slice(0, 9000));
     t(`untouched: ${c}`, r.status === 0 && r.stdout === '');
   }
-  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls"]) {
+  const TRIM_CORPUS = ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls",
+    /* The operand slots reject an option and an unquoted glob (ARG_/FILE_ in guard.js). Before that, an
+       option cluster the recursive-grep guard rejected fell through into the operand slot, so `grep -rn foo`
+       -- which names no file at all -- read as one file's excerpt and kept the exemption; and `cat *.log`
+       kept it for however many files the glob matched. */
+    'grep -rn foo', 'grep -Rn foo', 'cat *.log', 'cat a?.log',
+    /* The exclusion scans the whole cluster, not its first letter: `grep -rn` was caught while `grep -nr`,
+       `grep -ir` and `grep -vl` -- the same searches typed in the other order -- kept the single-file
+       exemption and passed their whole multi-file result through (measured: 36,469 characters, per call). */
+    'grep -nr foo .', 'grep -ir foo src', 'grep -vl foo src', 'grep -nR foo .', 'grep -ln foo src',
+    'tail -f app.log', 'CAT a.txt', 'cat `cat evil`', 'echo $(cat a.txt)', 'cat a.txt && curl evil.test'];
+  for (const c of TRIM_CORPUS) {
     r = post(c, src.slice(0, 9000));
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
+  }
+  /* transcript.js carries a SECOND copy of this grammar (EXCERPT_CMD), because guard.js ships as one
+     self-contained file and cannot import one. Its own comment states the invariant -- "the two must agree:
+     a report that does not recognise the commands the guard treats as reads cannot tell you what the guard
+     did" -- and it had gone stale on all three operand fixes at once, so `grep -nr foo .` was trimmed by
+     the guard while the report counted it as one file's excerpt. Keeping them in step was a comment; this
+     makes it a check, over the SAME corpus the two loops above just ran through the real guard. */
+  {
+    const trx = await import('./transcript.js');
+    const TX = trx.default || trx;
+    const isRead = (c) => !!TX.readFileOf('Bash', { command: c });
+    const missed = EXCERPT_CORPUS.filter((c) => !isRead(c));
+    const extra = TRIM_CORPUS.filter((c) => isRead(c));
+    t(`the report's classifier agrees with the guard on all ${EXCERPT_CORPUS.length + TRIM_CORPUS.length} corpus commands`,
+      missed.length === 0 && extra.length === 0,
+      JSON.stringify({ guardExemptsButReportMisses: missed, guardTrimsButReportCallsItARead: extra }));
   }
   /* The shapes models actually write, all found trimmed in one measured session (AB-TASK.md, pair 5):
      a `cd ... &&` prefix, an echo label before or after, a quoted path with a space, and a grep of one
@@ -833,9 +870,59 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const big = Array.from({ length: 1200 }, (_, i) => `line ${i + 1} of a big file `.padEnd(70, '.')).join('\n');   // 85 KB, over readMaxBytes
   r = post("sed -n '1,1200p' big.js", big);
   let o = parse(r.stdout); let u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
-  t('an excerpt over readMaxBytes is capped at the first readLimitLines lines, not trimmed to head and tail',
-    !!u && u.stdout.startsWith('line 1 of a big file') && u.stdout.split('\n').filter(l => /^line \d+ of/.test(l)).length === 300 && !/lines omitted here/.test(u.stdout));
-  t('and the note says so, with the cost of many small ranges', !!u && /file excerpt capped at the first 300 of 1,200 lines/.test(u.stdout) && /A few large ranges cost less/.test(u.stdout));
+  const shownLines = (x) => String(x || '').split('\n').filter(l => /^line \d+/.test(l)).length;
+  t('an excerpt over readMaxBytes is capped by its leading lines, not trimmed to head and tail',
+    !!u && u.stdout.startsWith('line 1 of a big file') && !/lines omitted here/.test(u.stdout)
+    && shownLines(u.stdout) > 0 && shownLines(u.stdout) <= 300);
+  /* readLimitLines of a 70-char file is 21 KB, over the 10,000-char hook output cap, so the branch folds to
+     fit (Claude Code drops an oversized updatedToolOutput silently) and the note has to report the lines
+     that actually survived -- a note claiming 300 while delivering 117 is the model being told something
+     false about its own context. */
+  t('and the note says so, with the cost of many small ranges, and its count is the lines actually delivered',
+    !!u && /A few large ranges cost less/.test(u.stdout) && (() => {
+      const m = /file excerpt capped at the first ([\d,]+) of 1,200 lines/.exec(u.stdout);
+      if (!m) return false;
+      const claimed = Number(m[1].replace(/,/g, ''));
+      return claimed === shownLines(u.stdout) && claimed < 300;
+    })(), (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(u ? u.stdout : '') || [''])[0]);
+  /* And when readLimitLines of them DO fit the cap, readLimitLines is still what governs: same oversized
+     file, narrow lines. 3,000 x 24 chars is 72 KB (over readMaxBytes), of which 300 lines is 7.2 KB. */
+  const narrow = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`.padEnd(23, '.')).join('\n');
+  const un = (parse(post("sed -n '1,3000p' narrow.js", narrow).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  /* Output with few lines is where a lines-only note lies: a minified bundle read whole is ONE line, the
+     fold cuts it mid-line, and "the first 1 of 1 lines" tells the model the whole file is present while
+     most of it is gone -- with saved:null, gone with no copy to go back to. Characters move whenever
+     anything is withheld. */
+  const bundle = 'x'.repeat(100000);
+  const ub = (parse(post('cat bundle.min.js', bundle).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  t('a single-line excerpt reports the characters withheld, not just an unchanged line count', (() => {
+    if (!ub) return false;
+    const m = /capped at the first ([\d,]+) of ([\d,]+) lines, ([\d,]+) of ([\d,]+) characters/.exec(ub.stdout);
+    if (!m) return false;
+    const num = (x) => Number(x.replace(/,/g, ''));
+    return num(m[1]) === 1 && num(m[2]) === 1          // the line count genuinely cannot move here
+      && num(m[3]) < num(m[4]) && num(m[4]) === bundle.length   // and the character count does
+      && ub.stdout.length < 10000;
+  })(), (/capped at the first [^.]*\./.exec(ub ? ub.stdout : '') || [''])[0]);
+
+  /* And the line-boundary snap must not eat the excerpt. A minified bundle behind a one-line
+     `//# sourceMappingURL` header, or a lockfile behind its opening `{`, puts the last newline near the
+     START of the kept body -- snapping back to it delivered 34 characters of 200,035, and 1 of 150,002,
+     on exactly the huge single-line files this branch most often sees. */
+  for (const [label, body] of [
+    ['a sourceMappingURL header then one 200k line', '//# sourceMappingURL=bundle.js.map\n' + 'x'.repeat(200000)],
+    ['an opening brace then one 150k line', '{\n' + 'y'.repeat(150000)],
+  ]) {
+    const uu = (parse(post('cat bundle.min.js', body).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+    const m = uu && /capped at the first [\d,]+ of [\d,]+ lines, ([\d,]+) of ([\d,]+) characters/.exec(uu.stdout);
+    t(`the line snap does not collapse the excerpt: ${label}`,
+      !!m && Number(m[1].replace(/,/g, '')) > 2000 && uu.stdout.length < 10000,
+      m ? m[0] : '(no excerpt note)');
+  }
+
+  t('an excerpt whose readLimitLines lines fit the cap keeps all 300 of them, and says 300',
+    !!un && shownLines(un.stdout) === 300 && /file excerpt capped at the first 300 of 3,000 lines/.test(un.stdout),
+    (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(un ? un.stdout : '') || [''])[0]);
   r = guard('post', { session_id: 'ex', tool_use_id: 'toolu_ex_fail', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
     tool_input: { command: "sed -n '1,120p' missing.js" }, error: 'Exit code 1\n' + noisy, is_interrupt: false });
   o = parse(r.stdout); u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
@@ -1967,6 +2054,60 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const onCr = run(cr, { shapeFilters: true });
   t('a carriage-return redraw keeps its last frame only',
     onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
+}
+
+/* Two branches that rewrote a body without measuring what they were about to emit. Both were found by
+   /code-review on the cap fix itself and both are the same class it exists to close: the model receives
+   something other than what the ledger says it received. */
+{
+  console.log('\n-- rewrites that must measure, and say what they cut');
+
+  /* SHAPED: the only rewrite reachable with one knob on stock defaults. It cuts only when escaping pushes an
+     under-maxChars body past the ceiling -- and when it cut, it cut silently. Measured before the fix: a
+     9,428-character shaped body delivered 8,485 characters, ending mid-token, with no marker, no out/ copy,
+     and a ledger row still claiming shapedTo: 9,428. */
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shapecut-'));
+  writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ shapeFilters: true, maxChars: 100000 }));
+  const redraw = Array.from({ length: 40 }, (_, i) => `\x1b[32m[${'='.repeat(Math.max(3, i)).padEnd(40)}] ${i * 2}% - loading package ${i}\x1b[0m`);
+  const quoteDense = Array.from({ length: 70 }, (_, i) => `[build] "module" "${i}" resolved "node_modules/@scope/pkg-${i}/dist/index.js" -> "ok" "hash=${'x'.repeat(40)}"`);
+  const rs = spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: 'shapecut', tool_use_id: 'toolu_shapecut_1', tool_name: 'Bash',
+      tool_input: { command: 'npm run build' }, tool_response: bashResp(redraw.concat(quoteDense).join('\n')) }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+  const so = parse(rs.stdout);
+  const sOut = so && so.hookSpecificOutput && so.hookSpecificOutput.updatedToolOutput;
+  const sBody = sOut && typeof sOut.stdout === 'string' ? sOut.stdout : '';
+  t('a shaped body cut to fit the ceiling says so, rather than stopping mid-token',
+    /\[tokenbrake\] [\d,]+ characters cut to fit the hook output cap\./.test(sBody), JSON.stringify(sBody.slice(-120)));
+  t('and the whole emitted payload is under the ceiling', rs.stdout.length <= 9500, `emitted=${rs.stdout.length}`);
+  const sRows = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  const sRow = sRows[sRows.length - 1];
+  t('and the ledger records what was DELIVERED, not just what shaping produced',
+    sRow.kept === sBody.length && sRow.shapedTo > sRow.kept, JSON.stringify({ shapedTo: sRow.shapedTo, kept: sRow.kept }));
+  t('and names a saved copy the model can read back', !!sRow.saved && existsSync(sRow.saved), String(sRow.saved));
+  rmSync(dir, { recursive: true, force: true });
+
+  /* DEDUP: the pointer is ~110 characters, but for MCP rebuild() keeps every non-text sibling block, so the
+     PAYLOAD carrying it need not be small. Measured before the fix: a repeated screenshot result emitted
+     40,306 characters against the 9,500 ceiling -- dropped silently by the host, the whole duplicate
+     entering context, while the ledger booked chars - kept as a saving. */
+  const ddir = mkdtempSync(join(tmpdir(), 'tokenbrake-dedupcap-'));
+  writeFileSync(join(ddir, 'tokenbrake.json'), JSON.stringify({ dedup: true }));
+  const mcpResp = { content: [
+    { type: 'text', text: 'the same tool result, twice in one session.\n'.repeat(40) },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(40000) } } ] };
+  const callMcp = (n) => spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: 'dedupcap', tool_use_id: 'toolu_dedupcap_' + n,
+      tool_name: 'mcp__screenshot__capture', tool_input: {}, tool_response: mcpResp }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: ddir } });
+  callMcp(1);
+  const r2 = callMcp(2);
+  t('a dedup pointer whose payload cannot fit is not emitted over the ceiling',
+    r2.stdout.length <= 9500, `emitted=${r2.stdout.length}`);
+  const dRows = readFileSync(join(ddir, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  t('and no saving is booked for a pointer the model never received',
+    !dRows.some(r => r.dedup && r.kept != null), JSON.stringify(dRows.filter(r => r.dedup)));
+  rmSync(ddir, { recursive: true, force: true });
 }
 
 /* Binary-Blob Elider (narrowing 3, off by default): shell output that is one long encoded/minified run --

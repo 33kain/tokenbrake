@@ -17,7 +17,23 @@ const os = require('os');
 const MODE = process.argv[2] || 'post';
 const CFG_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const TB_DIR = path.join(CFG_DIR, 'tokenbrake');
-const HOOK_OUTPUT_CAP = 9500; // Claude Code caps hook output strings at 10,000 chars
+/* Claude Code caps hook output at 10,000 characters; 9,500 is the margin. WHICH 10,000 is an OPEN QUESTION
+   this code takes a position on: the docs (README, HANDOFF) say "hook output STRINGS", and until 2026-09-17
+   every branch measured the replacement string. The branches now measure JSON.stringify(payload).length --
+   the whole emitted envelope -- because if the ceiling is the envelope, a string-based check lets escaping
+   carry an emission past it and the host drops it SILENTLY, so the original enters context and the ledger
+   logs a saving that never happened.
+   The two readings are not equivalent and the difference is large: JSON escaping costs a character per quote
+   and backslash and six per control byte, so on dense output the envelope reading delivers roughly half, or
+   on a binary dump a fifth, of what the string reading would. If the string reading is right, this is pure
+   loss -- recoverable loss (out/ holds the full copy and the note names it), but loss.
+   NOT YET SETTLED BY MEASUREMENT. No dropped emission has ever been observed here: 102 emitted trims across
+   12 real sessions, 0 confirmed dropped. Settling it needs the pre-2026-09-17 guard emitting a string under
+   9,500 whose envelope clears 10,000, in a live session, and checking whether the marker arrives -- the
+   headless --debug-file method HANDOFF.md describes. Until then this errs toward delivering less rather than
+   risking a silent drop; if the string reading is confirmed, revert the measurement basis here and every
+   branch that measures through fitsCap/emitFitted falls back with it. */
+const HOOK_OUTPUT_CAP = 9500;
 
 const DEFAULTS = {
   enabled: true,
@@ -89,11 +105,40 @@ const PASS = /^\s*(?:ok|pass(?:ed)?|✓|✔|√)\b/i;
 
    Pipes and redirects stay excluded on purpose: `sed -n '1,50p' f | grep x` no longer prints the file, it
    prints a filter over it, and trimming that is fair game. Recursive and list-only greps are excluded for
-   the same reason — they are a search across files, not one file's contents. */
-const PATH_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+   the same reason -- they are a search across files, not one file's contents.
+
+   That exclusion scans the WHOLE option cluster, not its first letter. `(?![rRlL])` only looked at the
+   character after the `-`, so `grep -rn` was caught while `grep -nr`, `grep -ir` and `grep -vl` -- the same
+   searches with the flags typed in the other order -- kept the single-file exemption and passed their whole
+   multi-file result through untouched (measured: 36,469 characters, whole, per call). `[a-zA-Z]*[rRlL]`
+   rejects the cluster wherever the r/R/l sits. */
+/* The three operand slots below differ only in what they exclude, so the quoted forms live once: a change
+   to shell quoting has to land in one place, not three, or the slots silently disagree -- which is the bug
+   this section fixes. A quoted operand keeps its glob characters literal, which is why FILE_ excludes `*`
+   and `?` only when unquoted. Note this is exact for '...' and approximate for "...": double quotes still
+   expand `$VAR`, `$(...)` and backticks, so `cat "$FILES"` can print several files and still reads as one
+   file's excerpt. That is a known and deliberate limit -- the guard classifies text it never executes, and
+   the failure is the same fail-open direction as any other command shape it does not understand. */
+const Q_ = String.raw`'[^']+'|"[^"]+"`;
+const PATH_ = String.raw`(?:${Q_}|[^|;&<>'"\s]+)`;
 const LABEL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
+/* An operand, not an option. The leading `-` is what separates `grep -rn foo` -- a recursive search whose
+   pattern sits in the operand slot and which names no file at all -- from `grep -i foo a.txt`. Without this,
+   an option cluster the `(?![rRlL])` guard rejects falls through into the operand slots instead, and the
+   recursive grep reads as one file's excerpt: the exemption the paragraph above says it does not get.
+   ARG_ still allows globs because a grep PATTERN may legitimately contain `*`, `?` or `[]`. */
+const ARG_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s]+)`;
+/* The read target: ONE file. Not an option either, and unquoted it carries no `*` or `?` -- `cat *.log`
+   prints many files run together, which is the oversized output the trim exists for, not one file's
+   contents. Quoted, they are ordinary filename characters, so `cat '*.log'` stays an excerpt.
+   `[` and `]` are deliberately NOT excluded. They are a bracket glob perhaps once in a thousand commands
+   and route-segment syntax constantly -- `app/[id]/page.tsx`, `routes/[slug]/+page.svelte`,
+   `pages/[...slug].js` -- and models rarely quote paths. Excluding them cost every Next.js/SvelteKit route
+   file its excerpt exemption and handed the model a head/tail/error-line shred of its own source instead,
+   which is a far worse and far more frequent outcome than letting `cat [ab].log` through. */
+const FILE_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s*?]+)`;
 const READ_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
-  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![rRlL])[a-zA-Z]+)*\s+${PATH_})\s+${PATH_}`;
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+${FILE_}`;
 const EXCERPT = new RegExp(
   String.raw`^\s*(?:cd\s+${PATH_}\s*&&\s*)?(?:${LABEL_}\s*(?:&&|;)\s*)?${READ_}` +
   String.raw`(?:\s*(?:&&|;)\s*${LABEL_})*\s*$`);
@@ -138,8 +183,66 @@ function noTrimmed(cfg, subject, isMcp) {
 function readStdin() {
   try { return JSON.parse(fs.readFileSync(0, 'utf8')); } catch { return null; }
 }
-function emit(obj) {
-  fs.writeSync(1, JSON.stringify(obj)); // synchronous so exit can't truncate it
+function emit(obj) { emitJson(JSON.stringify(obj)); }
+function emitJson(json) {
+  fs.writeSync(1, json); // synchronous so exit can't truncate it
+}
+/* The emitted envelope, whose key names the host dictates. Built in ONE place so that when the contract
+   moves, no branch is left emitting the old shape -- a mismatch the host rejects silently. */
+function payload(hookEventName, updatedToolOutput) {
+  return { hookSpecificOutput: { hookEventName, updatedToolOutput } };
+}
+/* The hook output ceiling applies to the EMITTED JSON, not to the text. JSON escaping costs a character per
+   quote, backslash and newline, so a body that passes a length check can still be refused -- and Claude Code
+   drops an oversized updatedToolOutput SILENTLY: the original result enters context, the rewrite is lost, and
+   the ledger records a saving that never happened. Measured, a 6,000-character trim of quote-dense output
+   serializes to 11,788, and a wide one to 16,446. Every branch that rewrites a body measures with this. */
+function serialize(p) { try { return JSON.stringify(p); } catch { return null; } }
+function fitsCap(p) { const j = serialize(p); return j !== null && j.length <= HOOK_OUTPUT_CAP; }
+/* Shrink a rewritten body until its payload fits, then emit it. `render(budget)` rebuilds the body to a
+   character budget and `wrap` puts it in the tool's own response shape. The cut is PROPORTIONAL to the
+   measured overage rather than equal to it: where every byte escapes to two, cutting `over` characters
+   removes twice that much payload and collapses the body to nothing. Bounded passes, and the emitted payload
+   is always built from the final body (assigning inside the loop emitted the one before the last cut).
+   Returns the body it sent, so the ledger records what the model actually received -- or null when nothing
+   was emitted at all, which is the fail-open case the tail comment explains. */
+function emitFitted(hookEventName, wrap, render) {
+  const payloadOf = (b) => payload(hookEventName, wrap(b));
+  /* Serialized ONCE per body and carried: the loop's measurement, the final fit check and the emission all
+     read the same string, where they were three JSON.stringify calls over the same ~9.5 KB payload. */
+  let budget = HOOK_OUTPUT_CAP, body = render(budget), json = serialize(payloadOf(body));
+  /* Six, not four: each pass multiplies the budget by cap/size so it converges geometrically, but a render
+     whose body carries fixed overhead the budget does not cover (the excerpt's note) approaches from
+     above and spent four passes still 438 characters over. The passes are pure string work on at most
+     ~9 KB and this branch is already the oversized case. */
+  for (let pass = 0; pass < 6; pass++) {
+    const size = json === null ? Infinity : json.length;   // unserializable measures as over, and shrinks
+    if (size <= HOOK_OUTPUT_CAP || !body) break;
+    /* Scale the next budget from min(budget, body.length), then cap the step at 90% of it. Neither term
+       alone works, and each failure here was measured. Scaling by the BUDGET alone stalls when `render`
+       never bound it: an MCP body sat at 6,246 characters against a 9,500 budget and two passes moved
+       neither. Scaling by BODY.LENGTH alone biases every estimate upward by overhead the budget does not
+       cover -- the excerpt's ~350-character note -- and at high expansion the iteration settles ABOVE the
+       ceiling: quotes and backslashes expand 2x and hid that, but CONTROL characters serialize as \u00XX
+       and expand 6x, and a NUL- or BEL-dense body (a binary dump, a terminal capture, a .pack) stalled at
+       10,889, delivering 2,005 characters of 240,000 while the ledger recorded the saving. The 0.9 clamp is
+       what guarantees each pass makes progress; at that fixed point the ratio is ~0.84, so it never binds on
+       its own and cannot rescue a bad scale term. */
+    const eff = Math.min(budget, body.length);
+    const scaled = Math.floor(eff * HOOK_OUTPUT_CAP / size);
+    budget = Math.max(400, Math.min(scaled, Math.floor(eff * 0.9)));
+    body = render(budget);
+    json = serialize(payloadOf(body));
+  }
+  /* If six passes cannot make it fit, emitting anyway is the worst of both: the host refuses it, the original
+     result enters context, and the caller logs a saving that did not happen. That is the failure this helper
+     exists to remove, so do not commit it here. `wrap` can add content the budget does not reach -- an MCP
+     result whose sibling blocks (an image, a resource) dwarf the text it trims -- and no amount of shrinking
+     the text will help. Returning null means "nothing emitted": the original passes through untouched, which
+     is the honest fail-open, and the caller logs no kept/saved claim for it. */
+  if (json === null || json.length > HOOK_OUTPUT_CAP) return null;
+  emitJson(json);
+  return body;
 }
 function log(rec) {
   try {
@@ -390,7 +493,7 @@ function mcpBody(resp) {
   return null;
 }
 
-function trimText(text, cfg, savedPath) {
+function trimText(text, cfg, savedPath, cap = HOOK_OUTPUT_CAP) {
   const lines = text.split('\n');
   const note = savedPath ? ` Full output saved to ${savedPath} — Read or Grep it if you need more.` : '';
   let out;
@@ -453,8 +556,8 @@ function trimText(text, cfg, savedPath) {
     out = text.slice(0, half) + `\n\n[tokenbrake] ${(text.length - 2 * half).toLocaleString()} chars omitted here.${note}\n\n` + text.slice(-half);
   }
 
-  if (out.length > HOOK_OUTPUT_CAP) {
-    const half = Math.floor((HOOK_OUTPUT_CAP - 120) / 2);
+  if (out.length > cap) {
+    const half = Math.floor((cap - 120) / 2);
     out = out.slice(0, half) + `\n\n[tokenbrake] further trimmed to fit hook output cap.${note}\n\n` + out.slice(-half);
   }
   return out;
@@ -518,6 +621,16 @@ function handlePost(input, cfg) {
      against (2.1.261) and, per the docs, possibly both. Take whichever carries the text. An interrupted
      call is the user's doing: nothing to trim, nothing to log. */
   const failed = input.hook_event_name === 'PostToolUseFailure';
+  /* The Bash response shape, in one place. CLAUDE.md: Claude Code validates updatedToolOutput against the
+     tool's own schema and drops a mismatch SILENTLY, so a shape change that reaches five of six call sites
+     fails with nothing in the log. Every rewrite branch below is inside a `!failed` guard, so the term is
+     redundant at each of them individually and load-bearing for the one shared spelling. On failure the
+     output Claude sees is the error string itself, so the replacement is a string too. */
+  const evName = failed ? 'PostToolUseFailure' : 'PostToolUse';
+  const wrapShell = (t) => (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: t, stderr: '' } : t;
+  /* One spelling of "what the ledger calls an emission that did not go out". Four branches log this, and it
+     had already drifted between them. */
+  const outcome = (b) => (b == null ? { unfitted: true } : { kept: b.length });
   if (failed && input.is_interrupt) return;
   const asText = (v) => typeof v === 'string' ? v
     : (v && typeof v === 'object') ? (isShell ? [v.stdout, v.stderr].filter(Boolean).join('\n') : JSON.stringify(v)) : '';
@@ -565,11 +678,18 @@ function handlePost(input, cfg) {
       const prior = h ? dedupLookup(input.session_id, h) : null;
       if (prior) {
         const pointer = `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
-        const updated = isMcp ? mcp.rebuild(pointer)
-          : (resp && typeof resp === 'object' ? { ...resp, stdout: pointer, stderr: '' } : pointer);
-        log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
-        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updated } });
-        return;
+        /* The pointer is ~110 characters, but the PAYLOAD carrying it need not be small: for MCP,
+           rebuild() keeps every non-text sibling block (an image, a resource) and spreads the original
+           response around it. Measured, a duplicate screenshot result emitted 40,306 characters against a
+           9,500 ceiling -- dropped silently, the whole duplicate entering context while the ledger booked
+           chars - kept as saved. So this branch measures like every other rewrite, and when the pointer
+           cannot be delivered it claims nothing and falls through to the ordinary handling below. */
+        const dedupPayload = payload(evName, isMcp ? mcp.rebuild(pointer) : wrapShell(pointer));
+        if (fitsCap(dedupPayload)) {
+          log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
+          emit(dedupPayload);
+          return;
+        }
       }
       if (h) { const saved = saveOut(input, dtext); if (saved) dedupRecord(input.session_id, { h, id: path.basename(saved).replace(/\.txt$/, ''), chars: dtext.length }); }
     }
@@ -586,9 +706,10 @@ function handlePost(input, cfg) {
     const body = mcp;   // resolved once above; rec.chars is already the inner-text length
     if (cfg.mcpTrim && !failed && body && !noTrimmed(cfg, tool, true) && body.text.length > cfg.maxChars) {
       const saved = saveOut(input, body.text);
-      const trimmed = trimText(body.text, cfg, saved);
-      log({ ...rec, mcp: true, kept: trimmed.length, saved });
-      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: body.rebuild(trimmed) } });
+      /* Measured like the shell trim: an MCP body is JSON, so escaping is at its worst here -- a one-line
+         dense result trimmed to 6,246 characters serialized to 12,377, past the ceiling, and was dropped. */
+      const trimmed = emitFitted(evName, (t) => body.rebuild(t), (b) => trimText(body.text, cfg, saved, b));
+      log({ ...rec, mcp: true, saved, ...outcome(trimmed) });
       return;
     }
     if (cfg.logAllTools) log(rec);
@@ -626,13 +747,20 @@ function handlePost(input, cfg) {
     const ml = maxLineLen(text);
     if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
       const saved = saveOut(input, text);
-      const keep = Math.min(cfg.blobKeepChars, HOOK_OUTPUT_CAP - 500);   // leave room for the descriptor/path so the marker+note can't be truncated off
-      const head = text.slice(0, keep);
+      const keep = cfg.blobKeepChars;   // the ceiling is emitFitted's job alone; blobKeepChars means what it says
       const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
-      const descriptor = `${head}${text.length > keep ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
-      log({ ...rec, chars: text.length, blob: true, kept: descriptor.length, saved });   // chars = the (possibly shaped) text we actually withheld, not the pre-shape rec.chars
-      const updatedBlob = (resp && typeof resp === 'object') ? { ...resp, stdout: descriptor, stderr: '' } : descriptor;
-      emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedBlob } });
+      /* Measured like the others. This branch's kept head is base64 or minified source BY CONSTRUCTION, so it
+         is the most escape-dense body the guard ever emits -- `blobKeepChars` is 160 by default, which is why
+         a fixed character reserve ever appeared to hold, but raising it is a one-knob change and at 8,000
+         this emitted 16,474. Math.max(0) below is NOT dead: `keep` comes from config, and a negative
+         blobKeepChars would make slice() cut from the END of the blob. */
+      const renderBlob = (budget) => {
+        const h = text.slice(0, Math.max(0, Math.min(keep, budget)));
+        return `${h}${text.length > h.length ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
+      };
+      const descriptor = emitFitted(evName, wrapShell, renderBlob);
+      // chars = the (possibly shaped) text we actually withheld, not the pre-shape rec.chars
+      log({ ...rec, chars: text.length, blob: true, saved, ...outcome(descriptor) });
       return;
     }
   }
@@ -655,11 +783,23 @@ function handlePost(input, cfg) {
          would grow context and log kept > chars, poisoning the A/B. When it does not pay off (or a huge
          all-real-source diff would still overflow the cap), fall through to the normal trim below; that path
          re-saves the same out/ file (idempotent, same tool_use_id) -- accepted for this uncommon case. */
+      /* The cap test is on the EMITTED payload, not on `body`: a collapsed diff whose kept real-source hunks
+         are quote- or backslash-dense passed the character check and serialized past the ceiling (measured
+         10,456 at 60 such lines, 17,058 at 100), so the collapse was dropped, the whole diff entered, and the
+         ledger logged the saving anyway. Below the window it fits; above it, `body` exceeds the budget and
+         this falls through to the trim as it already did. */
+      /* body.length is a free and SOUND precondition, not a replacement for the payload check: JSON escaping
+         never shrinks a string, so a body already past the ceiling cannot serialize under it. Without it the
+         common case -- a collapse that then falls through to the trim anyway -- serializes a diff that can
+         run to hundreds of KB. Measured, fitsCap on a 515 KB body costs 0.7 ms plain and 5.3 ms NUL-dense,
+         against ~0.1 microseconds for the length test. */
       if (body.length < text.length && body.length <= HOOK_OUTPUT_CAP) {
-        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
-        const updatedGit = (resp && typeof resp === 'object') ? { ...resp, stdout: body, stderr: '' } : body;
-        emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedGit } });
-        return;
+        const gitPayload = payload(evName, wrapShell(body));
+        if (fitsCap(gitPayload)) {
+          log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+          emit(gitPayload);
+          return;
+        }
       }
     }
   }
@@ -669,8 +809,27 @@ function handlePost(input, cfg) {
     /* Shaped but under the trim threshold: the replacement still has to go out, or the shaping is a
        measurement of something the model never received — the mistake the report's credit fix was about. */
     if (shaped) {
-      const u = (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: text, stderr: '' } : text;
-      emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: u } });
+      /* Under maxChars is not under the ceiling: a 5.8 KB shaped build log of quote-dense lines emitted
+         11,751. Shaping is the one rewrite that can be reached with a single knob on stock defaults, and a
+         dropped shaping is exactly the "measurement of something the model never received" the note above
+         warns about -- so it is measured too. The text is already below maxChars, so the fold only ever
+         engages on escaping.
+         When it does engage it must SAY so. A bare slice delivered a build log that stopped mid-token with
+         no marker, no out/ copy and a ledger row claiming shapedTo -- measured, 943 characters gone from a
+         9,428-character shaped body, the silent loss this whole change exists to remove, inverted from
+         "emitted nothing" into "emitted less than it claimed". The note is charged against the budget, so
+         the body plus its note still fits, and out/ is written only on the pass that actually cuts. */
+      let shapeSaved = null;
+      const renderShaped = (b) => {
+        if (text.length <= b) return text;
+        if (shapeSaved === null) shapeSaved = saveOut(input, text) || '';
+        const note = `\n\n[tokenbrake] ${(text.length - b).toLocaleString()} characters cut to fit the hook output cap.`
+          + (shapeSaved ? ` Full output saved to ${shapeSaved} — Read it if you need the rest.` : '');
+        const body = text.slice(0, Math.max(0, b - note.length)) + note;
+        return body;
+      };
+      const shapedOut = emitFitted(evName, wrapShell, renderShaped);
+      log({ ...rec, shaped: true, saved: shapeSaved || null, ...outcome(shapedOut) });
     }
     return;
   }
@@ -684,24 +843,61 @@ function handlePost(input, cfg) {
   }
   if (excerpt) {
     const all = text.split('\n');
-    const kept = all.slice(0, cfg.readLimitLines).join('\n');
-    const trimmedExcerpt = `${kept}\n\n[tokenbrake] file excerpt capped at the first ${cfg.readLimitLines} of ${all.length.toLocaleString()} lines (${text.length.toLocaleString()} chars). A few large ranges cost less than many small ones: each call is a request that re-reads the whole context. Use a narrower range, or Grep to locate the section first.`;
-    log({ ...rec, excerpt: true, kept: trimmedExcerpt.length, saved: null });
-    const updatedExcerpt = (resp && typeof resp === 'object') ? { ...resp, stdout: trimmedExcerpt, stderr: '' } : trimmedExcerpt;
-    emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedExcerpt } });
+/* Fit the hook output cap, which trimText applies to the trim path and this branch has to apply to
+       itself: Claude Code validates updatedToolOutput and drops an oversized one SILENTLY, so 300 lines of
+       a wide file would lose the cap altogether instead of applying it (15 KB at 40-char lines, 40 KB at
+       120, against a 10,000-char ceiling).
+       The ceiling is a property of the emitted JSON, not of the text, and JSON escaping costs a character
+       for every quote, backslash and newline -- so a fixed reserve cannot cover it. Measured on this
+       branch, 8.1 KB of text emits 8.6 KB of JSON from plain lines but 10.0 KB from quote-heavy JSON
+       (`cat package-lock.json`), 10.1 KB from Windows paths and 16.5 KB from quote-dense content. So
+       measure the real payload and cut the body by the overage. The note is rebuilt each pass, never
+       sliced: a note claiming 300 lines while delivering 117 tells the model something false about its own
+       context, and a note cut in half tells it nothing. Bounded passes, and a body that will not shrink
+       emits NOTHING -- the original passes through untouched, which is how this fails open. */
+/* The note counts CHARACTERS as well as lines. Lines alone are a lie on output that has few of them:
+       a 100,000-char minified bundle read whole is one line, the fold cuts it to ~9,000 chars mid-line, and
+       a lines-only note reads "the first 1 of 1 lines" -- telling the model the whole file is present while
+       91% of it is gone and, with saved:null, gone with no copy to go back to. Characters move whenever
+       anything is withheld, whatever the line structure. */
+    const noteFor = (body) => `\n\n[tokenbrake] file excerpt capped at the first ${(body ? body.split('\n').length : 0).toLocaleString()} of ${all.length.toLocaleString()} lines, ${body.length.toLocaleString()} of ${text.length.toLocaleString()} characters. A few large ranges cost less than many small ones: each call is a request that re-reads the whole context. Use a narrower range, or Grep to locate the section first.`;
+
+    /* Cut to the budget, then snap back to a line boundary only when that is CHEAP. When the last newline
+       sits near the START -- a minified bundle behind a one-line `//# sourceMappingURL` header, a lockfile
+       behind its opening `{` -- snapping throws away everything after it: measured, 34 characters delivered
+       of 200,035, and 1 of 150,002, on exactly the huge single-line files this branch most often sees. Past
+       the halfway mark the snap costs at most a partial line; before it the mid-line cut stands, and the
+       note counts characters so a body ending mid-line is still described honestly. */
+    const renderExcerpt = (budget) => {
+      let kept = all.slice(0, cfg.readLimitLines).join('\n');
+      if (kept.length > budget) {
+        kept = kept.slice(0, budget);   // emitFitted never renders below a 400 budget
+        const nl = kept.lastIndexOf('\n');
+        if (nl > 0 && nl >= kept.length / 2) kept = kept.slice(0, nl);
+      }
+      return kept + noteFor(kept);
+    };
+    const keptExcerpt = emitFitted(evName, wrapShell, renderExcerpt);
+    log({ ...rec, excerpt: true, saved: null, ...outcome(keptExcerpt) });
     return;
   }
 
   const saved = saveOut(input, text);
 
-  const trimmed = trimText(text, cfg, saved);
-  log({ ...rec, kept: trimmed.length, saved });
   // Claude Code validates updatedToolOutput against the tool's own response schema. For Bash that is
   // { stdout, stderr, interrupted, isImage } — a bare string is rejected (silently, in the debug log only)
   // and the original output goes through untouched. Keep the object shape, put the trimmed text in stdout.
   // On failure the output Claude sees is the error string itself, so the replacement is a string too.
-  const updated = (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: trimmed, stderr: '' } : trimmed;
-  emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: updated } });
+
+  /* The ceiling is a property of the EMITTED JSON, and trimText measures the text. JSON escaping costs a
+     character per quote, backslash and newline, so the two diverge exactly on the output most worth
+     trimming: measured, a 6,000-character trim of quote-dense build output emits 11,788 characters, and a
+     wide one 16,446, against a 10,000 ceiling. Claude Code drops an oversized updatedToolOutput SILENTLY --
+     so the trim is discarded and the FULL untrimmed result enters context, the precise inverse of the
+     intent, with nothing in the ledger to say it happened. Re-trim to a budget shrunk by the measured
+     overage until the real payload fits. Bounded passes, and the last text emitted is the one logged. */
+  const trimmed = emitFitted(evName, wrapShell, (b) => trimText(text, cfg, saved, b));
+  log({ ...rec, saved, ...outcome(trimmed) });
 }
 
 /* Lines in a file, by counting newline bytes -- the ledger's `lines` convention throughout, so a file with no

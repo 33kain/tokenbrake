@@ -2,6 +2,12 @@ name: CI
 
 # The test suite on every push to main and every pull request. No dependencies
 # to install: the package has none.
+#
+# The matrix is the package's own promise, checked rather than asserted:
+# `engines.node` says >=18, so 18 is tested and not just claimed, and the guard
+# is Windows-facing (paths, path.sep, PowerShell, spawn semantics), so every
+# Node version runs on Windows too. Before this matrix a Windows-only failure in
+# the sid-sanitization test reached main and was fixed after the fact.
 
 on:
   push:
@@ -10,11 +16,17 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false        # one version's failure must not hide the others
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['18', '20', '22']
+    name: tests (node ${{ matrix.node }}, ${{ matrix.os }})
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node }}
       - name: tokenbrake tests
-        run: node test.mjs
+        run: npm test

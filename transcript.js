@@ -62,9 +62,15 @@ function describe(name, input) {
    with the path quoted if it has spaces. The two must agree -- a report that does not recognise the
    commands the guard treats as reads cannot tell you what the guard did. */
 const P_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+/* Mirrors guard.js ARG_/FILE_ exactly; see the long comments there for why an operand rejects a leading `-`
+   and why the file slot rejects an unquoted `*`/`?` but deliberately keeps `[` and `]`. The guard trims
+   whatever these reject, so a report that spells them differently misreports what the guard did. */
+const Q_ = String.raw`'[^']+'|"[^"]+"`;
+const ARG_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s]+)`;
+const FILE_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s*?]+)`;
 const LBL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
 const RD_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
-  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![rRlL])[a-zA-Z]+)*\s+${P_})\s+(${P_})`;
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+(${FILE_})`;
 const EXCERPT_CMD = new RegExp(
   String.raw`^\s*(?:cd\s+${P_}\s*&&\s*)?(?:${LBL_}\s*(?:&&|;)\s*)?${RD_}` +
   String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
