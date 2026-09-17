@@ -2794,6 +2794,49 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     && onKeep.features.find((f) => f.key === 'blobElide').offer === null,
     JSON.stringify(offByHand.features.map((f) => f.key + ':' + f.offer)));
 
+  /* `offer` is the --write policy and is null at every status but turn-on. `note` is the DISPLAY classification,
+     computed at ANY status, so the preview and summary can explain a config-off knob without leaning on `offer`
+     -- which, being null at 'try'/'measure', had left both printing "Set <knob>: true" / "Try:" for a knob the
+     person set false or scoped to one tool. `note` turns on the ONE fact the [off] mark must follow: whether the
+     feature is actually running. `running` is on but only via a tools entry (top-level not true), so it reads
+     on, never [off]; `scoped`/`user-off` are the two OFF-by-config kinds; a knob on via its top-level key is null. */
+  const running = T.autotune([cleanBlob()], cleanLedger, { blobElide: false, tools: { Bash: { blobElide: true } } }, { disabled: ['blobElide'] });
+  const offTry = T.autotune([fewClean], [blobLedger(IDs[0])], { blobElide: false }, { disabled: ['blobElide'] });
+  const scopedTry = T.autotune([fewClean], [blobLedger(IDs[0])], { tools: { Bash: { blobElide: false } } });
+  const offMeasure = T.autotune([blobby(1, 6000, 25)], [], { blobElide: false }, { disabled: ['blobElide'] });
+  t('note reads on-via-a-tools-entry as running (never off), off-via-tools as scoped, top-level false as user-off',
+    fBlob(running).note === 'running' && fBlob(scopedOn).note === 'running'   // scopedOn = {tools:{Bash:{blobElide:true}}} is ON for Bash
+    && fBlob(scopedTry).note === 'scoped' && fBlob(offTry).note === 'user-off'
+    && fBlob(onClean).note === null && fBlob(onKeep).note === null,
+    JSON.stringify({ running: fBlob(running).note, scopedOn: fBlob(scopedOn).note, scopedTry: fBlob(scopedTry).note, offTry: fBlob(offTry).note, onClean: fBlob(onClean).note, onKeep: fBlob(onKeep).note }));
+
+  /* F1: a hand-off (or tool-scoped) knob sitting at 'try'/'measure' -- its firings earned a clean-but-few record
+     before it was turned off -- has offer null, so the preview used to fall through to "Set <knob>: true" and
+     the summary to "Try:"/"Measure:", recommending the exact flip --write then refuses. `note` fixes the
+     preview; the summary leaves these to the per-feature [off] line rather than a "Try:" or "would turn on"
+     claim neither the few/no evidence nor --write supports (only a clean-record turn-on earns excluded). */
+  t('a hand-off knob at try status: offer null (the field the preview leaned on) but note user-off',
+    fBlob(offTry).status === 'try' && fBlob(offTry).offer === null && fBlob(offTry).note === 'user-off',
+    JSON.stringify({ status: fBlob(offTry).status, offer: fBlob(offTry).offer, note: fBlob(offTry).note }));
+  t('and the summary keeps it out of Try without overstating it as a turn-on (neither tryThese nor excluded)',
+    !offTry.summary.tryThese.includes('Binary-Blob Elider') && !offTry.summary.excluded.includes('Binary-Blob Elider'),
+    JSON.stringify({ tryThese: offTry.summary.tryThese, excluded: offTry.summary.excluded }));
+  t('a tool-scoped knob at try status is note scoped, offer null, and likewise omitted from the summary',
+    fBlob(scopedTry).status === 'try' && fBlob(scopedTry).offer === null && fBlob(scopedTry).note === 'scoped'
+    && !scopedTry.summary.tryThese.includes('Binary-Blob Elider') && !scopedTry.summary.excluded.includes('Binary-Blob Elider'),
+    JSON.stringify({ status: fBlob(scopedTry).status, note: fBlob(scopedTry).note, tryThese: scopedTry.summary.tryThese, excluded: scopedTry.summary.excluded }));
+  t('a hand-off knob at measure status is likewise left to the detail line, not filed under Measure or excluded',
+    fBlob(offMeasure).status === 'measure' && fBlob(offMeasure).note === 'user-off'
+    && !offMeasure.summary.measure.includes('Binary-Blob Elider') && !offMeasure.summary.excluded.includes('Binary-Blob Elider'),
+    JSON.stringify({ status: fBlob(offMeasure).status, measure: offMeasure.summary.measure, excluded: offMeasure.summary.excluded }));
+  /* Only a genuine turn-on (a clean measured record the config overrides) earns the excluded bucket, where
+     "Would turn on, but your config says otherwise" is exactly true -- offByHand is that case. A RUNNING knob
+     is on and is never diverted: excluded would be a false claim for something already running, so it stays keep. */
+  t('a clean-record turn-on the config overrides IS the excluded case, while a running knob stays in keep',
+    offByHand.summary.excluded.includes('Binary-Blob Elider') && !offByHand.summary.turnOn.includes('Binary-Blob Elider')
+    && running.summary.keep.includes('Binary-Blob Elider') && !running.summary.excluded.includes('Binary-Blob Elider'),
+    JSON.stringify({ excludedTurnOn: offByHand.summary.excluded, runningKeep: running.summary.keep, runningExcluded: running.summary.excluded }));
+
   /* `status === 'turn-on' && scoped` is reachable only when a tools entry sets the knob FALSE with no
      top-level key: a tools entry setting it true makes on() true, which makes decide() return 'keep'. The
      fixture that used the true shape never reached the exclusion at all. */
@@ -3029,6 +3072,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('tune --write merges, preserving other keys', after.maxChars === 5000, JSON.stringify(after));
   t('tune --write reports what it turned on with the measured reason', /Turned ON 1 feature/.test(rw.stdout) && /"blobElide": false -> true/.test(rw.stdout) && /measured clean/.test(rw.stdout), rw.stdout.split('\n').filter(l => /blobElide|Turned ON/.test(l)).join(' | '));
 
+  /* F2: writeJson itself can throw (a root-owned or read-only config, a full disk). --write catches it and
+     names the cause instead of ending on an unhandled stack trace -- the same fail-open shape as the read
+     refusal tested just above ("names a read failure as a read failure"). It has no black-box test here on
+     purpose: the read and the write traverse the same path, so every filesystem condition that fails the
+     write (EISDIR, ENOTDIR, a missing parent) fails the earlier read first and is caught there; and the one
+     that would not (an unwritable existing file) cannot be staged as the root this suite runs as, which
+     bypasses the mode bits. The success path the guard wraps is covered by the "Turned ON" assertion above. */
   const rw2 = cli3(['tune', '--write']);   // blobElide now on + clean -> 'keep', not in the turn-on plan
   t('a second --write is a no-op once the clean feature is already on', rw2.status === 0 && /No feature has a clean MEASURED record to turn on/.test(rw2.stdout), rw2.stdout.split('\n').slice(0, 3).join(' | '));
 
@@ -3108,6 +3158,44 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const scopedLine = rScoped.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
   t('a knob turned off at the top level but on for a tool is not rendered as off',
     !/\[off\]/.test(scopedLine) && /a "tools" entry turns it on/.test(scopedLine), scopedLine.trim());
+
+  /* The same must hold with NO top-level key at all: a knob enabled only under tools.<tool> is on for that
+     tool, so it reads as running, never [off]. A regression marked it [off] because the mark had been keyed on
+     the config classification (`note`) rather than on whether the feature is actually on. */
+  writeFileSync(cfg3Path, JSON.stringify({ tools: { Bash: { blobElide: true } } }));
+  const scopedOnLine = cli3(['tune']).stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('a knob enabled only under tools.<tool>, with no top-level key, renders as running, not [off]',
+    !/\[off\]/.test(scopedOnLine) && /a "tools" entry turns it on/.test(scopedOnLine), scopedOnLine.trim());
+
+  /* A knob the person set false that ALSO measurably backfired is a leave-off, not a turn-on candidate: its
+     mark must stay [ - ] and it must NOT dangle "delete the line or set it true to take it back". The config
+     note (and the [off] mark) belong only where the status would otherwise OFFER the turn-on (turn-on/try/
+     measure), never beside a measured backfire -- a regression showed [off] + the re-enable invite here. */
+  const cfgBk = mkdtempSync(join(tmpdir(), 'tokenbrake-tunebk-'));
+  const eBk = { ...process.env, CLAUDE_CONFIG_DIR: cfgBk };
+  const sidBk = 'backfire01-2222-3333-4444-555566667777', BK = 'toolu_BKAAAA1111';
+  const wBk = join(cfgBk, 'projects', 'bk'); mkdirSync(wBk, { recursive: true });
+  const outBk = join(cfgBk, 'tokenbrake', 'out', sidBk.slice(0, 8) + '-' + BK.slice(-10).replace(/[^\w-]/g, '') + '.txt');
+  mkdirSync(join(cfgBk, 'tokenbrake', 'out'), { recursive: true });
+  writeFileSync(outBk, 'x'.repeat(30000));
+  writeFileSync(join(wBk, 'bk01.jsonl'), [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: sidBk, timestamp: '2026-01-01T00:00:00Z', cwd: '/work/bk', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: BK, name: 'Bash', input: { command: 'cat bundle.min.js' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: BK, content: '[tokenbrake] withheld blob-like output' }] } }),
+    JSON.stringify({ type: 'assistant', uuid: 'r2', sessionId: sidBk, timestamp: '2026-01-01T00:01:00Z', cwd: '/work/bk', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_RB', name: 'Read', input: { file_path: outBk } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:01:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_RB', content: 'x'.repeat(30000) }] } }),
+  ].join('\n'));
+  writeFileSync(join(cfgBk, 'tokenbrake', 'ledger.jsonl'),
+    JSON.stringify({ ev: 'post', session: sidBk, id: BK, tool: 'Bash', chars: 30000, kept: 200, blob: true, saved: outBk }) + '\n');
+  writeFileSync(join(cfgBk, 'tokenbrake.json'), JSON.stringify({ blobElide: false }));
+  const rBk = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: eBk });
+  const bkLine = rBk.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('a hand-off knob that measurably backfired renders [ - ], never [off] with a "set it true" invite',
+    rBk.status === 0 && /\[ - \]/.test(bkLine) && !/\[off\]/.test(bkLine) && !/set it true to take it back/.test(bkLine),
+    bkLine.trim());
+  t('and the footer files the backfired hand-off knob under leave-off, not "would turn on"',
+    /Leave off \(backfired\): Binary-Blob Elider/.test(rBk.stdout) && !/Would turn on[^.]*Binary-Blob Elider/.test(rBk.stdout),
+    (rBk.stdout.split('\n').find((l) => /Leave off|Would turn on/.test(l)) || '(none)').trim());
+  rmSync(cfgBk, { recursive: true, force: true });
 
   writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
   const rwCwd = cli3(['tune', '--cwd=/work/tw', '--write']);

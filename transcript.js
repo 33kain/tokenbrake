@@ -1549,7 +1549,18 @@ function autotune(parsedSessions, ledger, cfg, opts) {
        The status is left alone -- it is the truth about what the feature DID, and a knob the person turned
        off still has the clean measured record that earned its turn-on. Only the OFFER changes. */
     const offer = status !== 'turn-on' ? null : isScoped ? 'scoped' : isDisabled ? 'user-off' : 'turn-on';
-    return { key, label, knob, on: isOn, scoped: isScoped, disabled: isDisabled, offer,
+    /* `offer` is the --write policy and is null off a turn-on, so the preview cannot lean on it to explain a
+       config-governed knob at 'try'/'measure' -- it would print "Set knob: true" for a feature the person set
+       false. `note` is the DISPLAY classification, computed at ANY status once here so the renderer never
+       re-combines the raw booleans, and it turns on the ONE fact the [off] mark must follow: whether the
+       feature is actually running. `running` is on but only because a `tools` entry provides the on (the
+       top-level key is not true) -- it must read as on, never [off], whether that key is absent or explicitly
+       false. `scoped` and `user-off` are the two ways a feature is OFF by config: a `tools` entry pins it off,
+       or the top-level key is false. A knob on via its own top-level key -- with or without a per-tool
+       exception -- is plain on, so it is null and renders from status like any other on feature. */
+    const topOn = !!cfg[knob];
+    const note = (isOn && !topOn) ? 'running' : (!isOn && isScoped) ? 'scoped' : (!isOn && isDisabled) ? 'user-off' : null;
+    return { key, label, knob, on: isOn, scoped: isScoped, disabled: isDisabled, offer, note,
       bound, measured, opportunity: opp || null, status };
   };
 
@@ -1589,11 +1600,18 @@ function autotune(parsedSessions, ledger, cfg, opts) {
 
   const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [], excluded: [] };
   for (const f of features) {
-    /* The summary is the line people act on, so it follows the same exclusions as --write -- but into its OWN
-       bucket. Folding them into `keep` made that list mean two opposite things at once ("already on, keep it"
-       and "off, and not being offered"), which the next reader of summary.keep would have got exactly
-       backwards for a disabled knob. */
-    if (f.offer && f.offer !== 'turn-on') summary.excluded.push(f.label);
+    /* The summary is the line people act on, so a config-off feature (off, and either scoped to a tool or set
+       false -- read from `note`) contributes to it ONLY from a genuine turn-on: a clean measured record whose
+       flip the config overrides, where "Would turn on, but your config says otherwise" is exactly true. At
+       'try'/'measure' that claim would overstate (few or no measured evidence, and --write sets neither), and
+       filing it under "Try:"/"Measure:" would recommend flipping a knob the person set off -- so those are left
+       to the per-feature [off] line alone. A measured backfire on an off knob still reads as leave-off, and
+       'review' needs the feature on, which a config-off knob is not. `running` is on where its `tools` entry
+       applies and is never config-off. This is why the divert reads `note`, not `offer`: `offer` is null off a
+       turn-on, so it had left a config-off knob at 'try'/'measure' under "Try:"/"Measure:". */
+    const configOff = f.note === 'scoped' || f.note === 'user-off';
+    if (configOff && (f.status === 'try' || f.status === 'measure')) continue;   // off by config, weak/no evidence: detail line only
+    if (configOff && f.status === 'turn-on') summary.excluded.push(f.label);
     else if (f.status === 'turn-on') summary.turnOn.push(f.label);
     else if (f.status === 'try') summary.tryThese.push(f.label);
     else if (f.status === 'review') summary.review.push(f.label);

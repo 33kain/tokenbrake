@@ -35,7 +35,21 @@ const nodeFlag = args.find(a => a.startsWith('--node='));
 const nodeCmd = nodeFlag ? nodeFlag.slice('--node='.length) : (PROJECT ? 'node' : process.execPath);
 
 function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } }
-function writeJson(p, obj) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n'); }
+function writeJson(p, obj) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  /* Write a sibling temp file and rename it over the target, rather than writing p directly: fs.writeFileSync
+     opens with O_TRUNC, emptying an existing config before the write runs, so a failed write (full disk, quota,
+     I/O error) would leave it wiped. temp-then-rename leaves the ORIGINAL untouched on any THROWN error -- the
+     temp absorbs the failure, the catch removes it and re-throws. `wx` (O_CREAT|O_EXCL) makes the temp refuse
+     to open through a pre-existing file or symlink, so a name collision or a planted symlink in a shared config
+     dir cannot redirect the write, and a random suffix keeps the name from colliding in the first place. rename
+     within a directory is atomic and Node maps it to MOVEFILE_REPLACE_EXISTING on Windows; it replaces the
+     target even when that target is itself a symlink (the config becomes a regular file), the accepted cost of
+     an atomic replace. Not fsync-durable: a power loss in the rename window is out of scope for a config file. */
+  const tmp = p + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
+  try { fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(tmp, p); }
+  catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+}
 function isOurs(group) {
   return Array.isArray(group.hooks) && group.hooks.some(h =>
     String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
@@ -1340,7 +1354,15 @@ function tuneReport() {
        false -> true flip -- there is no "already matches" case (a matching feature is 'keep' and never here). */
     const next = { ...current };
     for (const f of plan) next[f.knob] = true;
-    writeJson(cfgPath, next);
+    /* The read and parse above refuse cleanly; the write itself can still fail (a root-owned or read-only
+       config, a full disk). writeJson writes a temp file and renames it into place, so a failure leaves the
+       existing config untouched -- catch it here to name the cause and stop, rather than end on an unhandled
+       stack trace that reads like a tokenbrake bug. */
+    try { writeJson(cfgPath, next); }
+    catch (e) {
+      console.log('  ' + cfgPath + ' could not be written (' + ((e && e.code) || 'unknown error') + ') -- your existing config was left unchanged. Check its permissions and free space, then re-run --write.');
+      return;
+    }
     console.log('  Turned ON ' + plan.length + ' feature(s) in ' + cfgPath + ' (every other key preserved):');
     for (const f of plan) {
       const m = f.measured;   // always present with fired > 0: decide() gives 'turn-on' only to a measured feature
@@ -1393,20 +1415,27 @@ function tuneReport() {
   };
   console.log('\n  Off-by-default features:');
   for (const f of t.features) {
-    /* Consistent with --write above, and from the same field: a knob it will decline to set is reported, not
-       recommended. Offering `Set "x": true` for something --write then refuses is the tuner disagreeing with
-       itself. `disabled && on` is a real combination -- a top-level false with a `tools` entry turning it on --
-       and it is RUNNING, so it is described that way rather than as off. */
-    const set = f.offer === 'user-off' ? '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)'
-      : f.offer === 'scoped' ? '   ("' + f.knob + '" is set per-tool under "tools" -- edit that entry, not the top-level key)'
-      : (f.disabled && f.on) ? '   (top-level "' + f.knob + '": false, but a "tools" entry turns it on -- it is running where that entry applies)'
+    /* `note` (from feat()) is the status-independent config classification: `scoped` (a `tools` entry pins the
+       knob off) and `user-off` (top-level false) are the two ways it is off BY CONFIG, `running` is on via a
+       `tools` entry (never [off]). `offer` is not used here -- being null off a turn-on, it let a config-off
+       knob at 'try'/'measure' fall through to "Set <knob>: true", recommending exactly the flip --write
+       refuses. But the config note replaces "Set true" only where the status WOULD offer the turn-on
+       (turn-on/try/measure). At `review`/`leave-off` the measured verdict speaks, so "delete the line or set it
+       true to take it back" is not dangled beside a knob that measurably backfired, and the mark stays the
+       verdict's rather than a flat [off]. */
+    const configOff = f.note === 'scoped' || f.note === 'user-off';
+    const offerable = f.status === 'turn-on' || f.status === 'try' || f.status === 'measure';
+    const set = f.note === 'running' ? '   (top-level "' + f.knob + '" is not on, but a "tools" entry turns it on -- it is running where that entry applies)'
+      : (configOff && offerable) ? (f.note === 'scoped'
+          ? '   ("' + f.knob + '" is set per-tool under "tools" -- edit that entry, not the top-level key)'
+          : '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)')
       : (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
       : f.status === 'measure' ? '   Set "' + f.knob + '": true to measure it'
       : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
-    /* `[ON]` beside a line that says --write will not set it is the contradiction the set-line just lost, and
-       it applies to BOTH excluded kinds: a tool-scoped turn-on is reachable only when a tools entry sets the
-       knob false with no top-level key, so it is off too. Same field, same answer, both cases. */
-    const offerMark = f.offer && f.offer !== 'turn-on' ? '[off]' : (mark[f.status] || '     ');
+    /* [off] only where the feature is off by config AND the status would otherwise offer to turn it on, so the
+       mark and the set-line agree. `running` is on, and a config-off knob at review/leave-off keeps its verdict
+       mark ([!!] / [ - ]) -- its measured record still speaks -- so neither is flattened to [off]. */
+    const offerMark = (configOff && offerable) ? '[off]' : (mark[f.status] || '     ');
     console.log('    ' + offerMark + ' ' + f.label + ' (' + f.knob + ')' + set);
     console.log('        ' + evidence(f));
   }
