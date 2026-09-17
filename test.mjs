@@ -9,7 +9,7 @@
    full-size while `status` said "installed". Nothing in a sandbox could see
    that; this file pins the shape so it cannot regress unnoticed. */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -782,11 +782,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_input: { command }, tool_response: bashResp(text) });
   let r = post("sed -n '1,120p' extension/content.js", src.slice(0, 9000));
   t('a 9k-char sed range of one file passes untouched', r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
-  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js']) {
+  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js',
+    /* Quoted, a glob character is an ordinary filename character -- the shell expands nothing inside quotes
+       -- so this is one file and keeps the exemption, unlike the unquoted `cat *.log` below. And a grep that
+       counts or inverts still prints one file's contents. */
+    "cat '*.log'", 'grep -c foo a.txt', 'grep -v foo a.txt', '  cat a.txt  ',
+    /* Bracketed route segments are ordinary paths, not globs, and models almost never quote them. Excluding
+       `[`/`]` from the file slot cost every Next.js App Router, SvelteKit and Expo Router source file its
+       exemption and shredded it to head/tail/error lines instead -- a far more common and worse outcome
+       than letting a rare `cat [ab].log` through. Only `*` and `?` mark "possibly many files". */
+    'cat app/[id]/page.tsx', 'cat src/routes/[slug]/+page.svelte', 'cat pages/[...slug].js']) {
     r = post(c, src.slice(0, 9000));
     t(`untouched: ${c}`, r.status === 0 && r.stdout === '');
   }
-  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls"]) {
+  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls",
+    /* The operand slots reject an option and an unquoted glob (ARG_/FILE_ in guard.js). Before that, an
+       option cluster the recursive-grep guard rejected fell through into the operand slot, so `grep -rn foo`
+       -- which names no file at all -- read as one file's excerpt and kept the exemption; and `cat *.log`
+       kept it for however many files the glob matched. */
+    'grep -rn foo', 'grep -Rn foo', 'cat *.log', 'cat a?.log',
+    /* The exclusion scans the whole cluster, not its first letter: `grep -rn` was caught while `grep -nr`,
+       `grep -ir` and `grep -vl` -- the same searches typed in the other order -- kept the single-file
+       exemption and passed their whole multi-file result through (measured: 36,469 characters, per call). */
+    'grep -nr foo .', 'grep -ir foo src', 'grep -vl foo src', 'grep -nR foo .', 'grep -ln foo src',
+    'tail -f app.log', 'CAT a.txt', 'cat `cat evil`', 'echo $(cat a.txt)', 'cat a.txt && curl evil.test']) {
     r = post(c, src.slice(0, 9000));
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
@@ -833,9 +852,59 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const big = Array.from({ length: 1200 }, (_, i) => `line ${i + 1} of a big file `.padEnd(70, '.')).join('\n');   // 85 KB, over readMaxBytes
   r = post("sed -n '1,1200p' big.js", big);
   let o = parse(r.stdout); let u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
-  t('an excerpt over readMaxBytes is capped at the first readLimitLines lines, not trimmed to head and tail',
-    !!u && u.stdout.startsWith('line 1 of a big file') && u.stdout.split('\n').filter(l => /^line \d+ of/.test(l)).length === 300 && !/lines omitted here/.test(u.stdout));
-  t('and the note says so, with the cost of many small ranges', !!u && /file excerpt capped at the first 300 of 1,200 lines/.test(u.stdout) && /A few large ranges cost less/.test(u.stdout));
+  const shownLines = (x) => String(x || '').split('\n').filter(l => /^line \d+/.test(l)).length;
+  t('an excerpt over readMaxBytes is capped by its leading lines, not trimmed to head and tail',
+    !!u && u.stdout.startsWith('line 1 of a big file') && !/lines omitted here/.test(u.stdout)
+    && shownLines(u.stdout) > 0 && shownLines(u.stdout) <= 300);
+  /* readLimitLines of a 70-char file is 21 KB, over the 10,000-char hook output cap, so the branch folds to
+     fit (Claude Code drops an oversized updatedToolOutput silently) and the note has to report the lines
+     that actually survived -- a note claiming 300 while delivering 117 is the model being told something
+     false about its own context. */
+  t('and the note says so, with the cost of many small ranges, and its count is the lines actually delivered',
+    !!u && /A few large ranges cost less/.test(u.stdout) && (() => {
+      const m = /file excerpt capped at the first ([\d,]+) of 1,200 lines/.exec(u.stdout);
+      if (!m) return false;
+      const claimed = Number(m[1].replace(/,/g, ''));
+      return claimed === shownLines(u.stdout) && claimed < 300;
+    })(), (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(u ? u.stdout : '') || [''])[0]);
+  /* And when readLimitLines of them DO fit the cap, readLimitLines is still what governs: same oversized
+     file, narrow lines. 3,000 x 24 chars is 72 KB (over readMaxBytes), of which 300 lines is 7.2 KB. */
+  const narrow = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`.padEnd(23, '.')).join('\n');
+  const un = (parse(post("sed -n '1,3000p' narrow.js", narrow).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  /* Output with few lines is where a lines-only note lies: a minified bundle read whole is ONE line, the
+     fold cuts it mid-line, and "the first 1 of 1 lines" tells the model the whole file is present while
+     most of it is gone -- with saved:null, gone with no copy to go back to. Characters move whenever
+     anything is withheld. */
+  const bundle = 'x'.repeat(100000);
+  const ub = (parse(post('cat bundle.min.js', bundle).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  t('a single-line excerpt reports the characters withheld, not just an unchanged line count', (() => {
+    if (!ub) return false;
+    const m = /capped at the first ([\d,]+) of ([\d,]+) lines, ([\d,]+) of ([\d,]+) characters/.exec(ub.stdout);
+    if (!m) return false;
+    const num = (x) => Number(x.replace(/,/g, ''));
+    return num(m[1]) === 1 && num(m[2]) === 1          // the line count genuinely cannot move here
+      && num(m[3]) < num(m[4]) && num(m[4]) === bundle.length   // and the character count does
+      && ub.stdout.length < 10000;
+  })(), (/capped at the first [^.]*\./.exec(ub ? ub.stdout : '') || [''])[0]);
+
+  /* And the line-boundary snap must not eat the excerpt. A minified bundle behind a one-line
+     `//# sourceMappingURL` header, or a lockfile behind its opening `{`, puts the last newline near the
+     START of the kept body -- snapping back to it delivered 34 characters of 200,035, and 1 of 150,002,
+     on exactly the huge single-line files this branch most often sees. */
+  for (const [label, body] of [
+    ['a sourceMappingURL header then one 200k line', '//# sourceMappingURL=bundle.js.map\n' + 'x'.repeat(200000)],
+    ['an opening brace then one 150k line', '{\n' + 'y'.repeat(150000)],
+  ]) {
+    const uu = (parse(post('cat bundle.min.js', body).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+    const m = uu && /capped at the first [\d,]+ of [\d,]+ lines, ([\d,]+) of ([\d,]+) characters/.exec(uu.stdout);
+    t(`the line snap does not collapse the excerpt: ${label}`,
+      !!m && Number(m[1].replace(/,/g, '')) > 2000 && uu.stdout.length < 10000,
+      m ? m[0] : '(no excerpt note)');
+  }
+
+  t('an excerpt whose readLimitLines lines fit the cap keeps all 300 of them, and says 300',
+    !!un && shownLines(un.stdout) === 300 && /file excerpt capped at the first 300 of 3,000 lines/.test(un.stdout),
+    (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(un ? un.stdout : '') || [''])[0]);
   r = guard('post', { session_id: 'ex', tool_use_id: 'toolu_ex_fail', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
     tool_input: { command: "sed -n '1,120p' missing.js" }, error: 'Exit code 1\n' + noisy, is_interrupt: false });
   o = parse(r.stdout); u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
