@@ -1836,6 +1836,17 @@ function sessionFacts(parsed, ledger) {
     const l = (r.id && idx.byId.get(r.id)) || idx.byWhat.get(r.what);
     if (l && l.kept != null && l.chars != null && l.kept < l.chars) { trimmed++; keptOut += Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }
   }
+  /* Split entered/carried by the tool class each guard feature acts on -- Read (the read cap), shell
+     (Bash/PowerShell: the base trim, blobElide, gitView), MCP (mcpTrim), and everything else the guard
+     leaves alone. The A-vs-B change per class is what says WHERE brake 1's carried-context saving comes
+     from -- the read cap or the shell trim -- rather than one blended number. classOf mirrors guard.js's
+     own isShell (Bash/PowerShell) and isMcp (mcp__*) gates; the guard ships as a lone file so this cannot
+     import them -- if the guard learns to trim a new tool class, teach classOf the same split or that class's
+     saving reads as the untrimmed 'other' baseline. */
+  const byClass = { Read: { n: 0, entered: 0, carried: 0 }, shell: { n: 0, entered: 0, carried: 0 },
+    MCP: { n: 0, entered: 0, carried: 0 }, other: { n: 0, entered: 0, carried: 0 } };
+  const classOf = (n) => n === 'Read' ? 'Read' : (n === 'Bash' || n === 'PowerShell') ? 'shell' : /^mcp__/.test(String(n)) ? 'MCP' : 'other';
+  for (const r of parsed.results) { const cls = byClass[classOf(r.name)]; cls.n++; cls.entered += r.tokens; cls.carried += r.carried; }
   return {
     session: String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8),
     model: Object.keys(c.byModel).join('+') || (parsed.requests.find(q => q.model) || {}).model || '?',
@@ -1844,13 +1855,22 @@ function sessionFacts(parsed, ledger) {
     processed: u.processed, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, input: u.input, out: u.out,
     entered: parsed.results.reduce((s, r) => s + r.tokens, 0),
     carried: parsed.results.reduce((s, r) => s + r.carried, 0),
-    trimmed, keptOut, repeats: rep.repeats, repeatTokens: rep.tokens
+    trimmed, keptOut, repeats: rep.repeats, repeatTokens: rep.tokens, byClass
   };
 }
 
 function renderCompare(A, B, ledger) {
   const a = sessionFacts(A, ledger), b = sessionFacts(B, ledger);
   const money = (x, f) => f.unpriced ? '$' + x.toFixed(2) + '*' : '$' + x.toFixed(2);
+  /* Break the entered and carried totals out by tool class, so the change column says which of the guard's
+     domains (read cap vs shell trim) moved. entered is the guard's lever; carried is entered x turns, so a
+     shorter arm B drops carried in every class at once regardless of the guard -- read entered per class to
+     attribute a saving to the guard. Only classes present in either arm show; 'other' (tools the guard leaves
+     alone) is the task-variance baseline: Read/shell dropping while 'other' holds flat is the guard, all four
+     dropping together is a shorter arm. */
+  const classRows = (metric) => ['Read', 'shell', 'MCP', 'other']
+    .filter((k) => a.byClass[k].n || b.byClass[k].n)
+    .map((k) => [`  ${metric}: ${k}`, kfmt(a.byClass[k][metric]), kfmt(b.byClass[k][metric]), a.byClass[k][metric], b.byClass[k][metric]]);
   const rows = [
     ['API cost, list price', money(a.cost, a), money(b.cost, b), a.cost, b.cost],
     ['requests', fmt(a.requests), fmt(b.requests), a.requests, b.requests],
@@ -1861,12 +1881,14 @@ function renderCompare(A, B, ledger) {
     ['output tokens', kfmt(a.out), kfmt(b.out), a.out, b.out],
     ['tool results', fmt(a.results), fmt(b.results), a.results, b.results],
     ['tool results entered', kfmt(a.entered), kfmt(b.entered), a.entered, b.entered],
+    ...classRows('entered'),
     ['tool results carried', kfmt(a.carried), kfmt(b.carried), a.carried, b.carried],
+    ...classRows('carried'),
     ['trimmed by the guard', `${a.trimmed} (~ ${kfmt(a.keptOut)} kept out)`, `${b.trimmed} (~ ${kfmt(b.keptOut)} kept out)`, null, null],
     ['repeat reads', `${a.repeats} (~ ${kfmt(a.repeatTokens)})`, `${b.repeats} (~ ${kfmt(b.repeatTokens)})`, null, null],
     ['compactions', fmt(a.compactions), fmt(b.compactions), null, null],
   ];
-  const change = (x, y) => (x == null || y == null || !x) ? '' : ((y - x) / x * 100).toFixed(0).replace(/^(-?)/, (m, s) => s === '-' ? '-' : '+') + '%';
+  const change = (x, y) => (x == null || y == null || !x) ? '' : ((y - x) / x * 100).toFixed(0).replace(/^-0$/, '0').replace(/^(-?)/, (m, s) => s === '-' ? '-' : '+') + '%';
   const w0 = 24, w1 = Math.max(14, ...rows.map(r => r[1].length)), w2 = Math.max(14, ...rows.map(r => r[2].length));
   const lines = [];
   lines.push(`A: ${a.session}...  ${a.model}  ${A.cwd || ''}`);
@@ -1876,6 +1898,7 @@ function renderCompare(A, B, ledger) {
   for (const r of rows) lines.push(`${r[0].padEnd(w0)}  ${r[1].padStart(w1)}  ${r[2].padStart(w2)}  ${change(r[3], r[4])}`);
   lines.push('');
   lines.push('Change is B against A. Cost is list price, cache writes at the 1h rate' + ((a.unpriced || b.unpriced) ? '; * a model without a listed price was left out' : '') + '.');
+  lines.push('The entered:/carried: rows split those totals by tool class -- Read (read cap), shell (the trim: Bash/PowerShell), MCP (mcp trim), other (untrimmed, the task-variance baseline). entered is the guard\'s lever; carried is entered x turns, so a shorter arm drops carried everywhere -- read entered per class to credit the guard.');
   lines.push('Two sessions differ by more than their configuration: on one task, identical arms came out 21% apart in cost (AB-TASK.md).');
   return lines.join('\n');
 }
