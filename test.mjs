@@ -782,7 +782,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_input: { command }, tool_response: bashResp(text) });
   let r = post("sed -n '1,120p' extension/content.js", src.slice(0, 9000));
   t('a 9k-char sed range of one file passes untouched', r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
-  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js',
+  const EXCERPT_CORPUS = ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js',
     /* Quoted, a glob character is an ordinary filename character -- the shell expands nothing inside quotes
        -- so this is one file and keeps the exemption, unlike the unquoted `cat *.log` below. And a grep that
        counts or inverts still prints one file's contents. */
@@ -791,11 +791,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
        `[`/`]` from the file slot cost every Next.js App Router, SvelteKit and Expo Router source file its
        exemption and shredded it to head/tail/error lines instead -- a far more common and worse outcome
        than letting a rare `cat [ab].log` through. Only `*` and `?` mark "possibly many files". */
-    'cat app/[id]/page.tsx', 'cat src/routes/[slug]/+page.svelte', 'cat pages/[...slug].js']) {
+    'cat app/[id]/page.tsx', 'cat src/routes/[slug]/+page.svelte', 'cat pages/[...slug].js'];
+  for (const c of EXCERPT_CORPUS) {
     r = post(c, src.slice(0, 9000));
     t(`untouched: ${c}`, r.status === 0 && r.stdout === '');
   }
-  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls",
+  const TRIM_CORPUS = ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls",
     /* The operand slots reject an option and an unquoted glob (ARG_/FILE_ in guard.js). Before that, an
        option cluster the recursive-grep guard rejected fell through into the operand slot, so `grep -rn foo`
        -- which names no file at all -- read as one file's excerpt and kept the exemption; and `cat *.log`
@@ -805,10 +806,27 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
        `grep -ir` and `grep -vl` -- the same searches typed in the other order -- kept the single-file
        exemption and passed their whole multi-file result through (measured: 36,469 characters, per call). */
     'grep -nr foo .', 'grep -ir foo src', 'grep -vl foo src', 'grep -nR foo .', 'grep -ln foo src',
-    'tail -f app.log', 'CAT a.txt', 'cat `cat evil`', 'echo $(cat a.txt)', 'cat a.txt && curl evil.test']) {
+    'tail -f app.log', 'CAT a.txt', 'cat `cat evil`', 'echo $(cat a.txt)', 'cat a.txt && curl evil.test'];
+  for (const c of TRIM_CORPUS) {
     r = post(c, src.slice(0, 9000));
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
+  }
+  /* transcript.js carries a SECOND copy of this grammar (EXCERPT_CMD), because guard.js ships as one
+     self-contained file and cannot import one. Its own comment states the invariant -- "the two must agree:
+     a report that does not recognise the commands the guard treats as reads cannot tell you what the guard
+     did" -- and it had gone stale on all three operand fixes at once, so `grep -nr foo .` was trimmed by
+     the guard while the report counted it as one file's excerpt. Keeping them in step was a comment; this
+     makes it a check, over the SAME corpus the two loops above just ran through the real guard. */
+  {
+    const trx = await import('./transcript.js');
+    const TX = trx.default || trx;
+    const isRead = (c) => !!TX.readFileOf('Bash', { command: c });
+    const missed = EXCERPT_CORPUS.filter((c) => !isRead(c));
+    const extra = TRIM_CORPUS.filter((c) => isRead(c));
+    t(`the report's classifier agrees with the guard on all ${EXCERPT_CORPUS.length + TRIM_CORPUS.length} corpus commands`,
+      missed.length === 0 && extra.length === 0,
+      JSON.stringify({ guardExemptsButReportMisses: missed, guardTrimsButReportCallsItARead: extra }));
   }
   /* The shapes models actually write, all found trimmed in one measured session (AB-TASK.md, pair 5):
      a `cd ... &&` prefix, an echo label before or after, a quoted path with a space, and a grep of one
