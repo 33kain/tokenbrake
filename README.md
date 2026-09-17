@@ -144,11 +144,11 @@ npx tokenbrake init --project  # this project only: .claude/settings.json (commi
                                # machine: with both, the guard runs twice per call, and `status` says so
 ```
 
-One or the other, normally. With both, every result runs through the guard twice: the second pass is a no-op on
-an already trimmed output, and the ledger records it twice -- `report --ledger`, `--caps` and `--reach` drop the
-duplicate and say how many they dropped, and `status` reports the overlap. The one case worth keeping both is a
-repository whose committed install must protect anyone who clones it while a user-scope install covers everything
-else you work on.
+One or the other -- never both. User scope is the install; `--project` is for a team that commits the guard to a
+shared repo whose members don't already run it at user scope. With both, every result runs through the guard twice:
+the second pass is a no-op on an already trimmed output, and the ledger records it twice -- `report --ledger`,
+`--caps` and `--reach` drop the duplicate and say how many they dropped, and `status` reports the overlap -- but that
+is cleanup after a misconfiguration, not a mode to run in.
 
 Restart Claude Code (or run `/hooks` to confirm two tokenbrake entries). Node 18+ is the only requirement — no
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.

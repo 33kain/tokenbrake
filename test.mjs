@@ -2538,27 +2538,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   else t('claude plugin validate accepts the plugin manifest', cli.status === 0, (cli.stdout + cli.stderr).trim().split('\n').pop());
 }
 
-/* ---- the repository's own project-scope install ----------------------------
-   .claude/settings.json gives every session on this repository brake 1, so the hooks are
-   exercised on their own development. The guard there is a copy, refreshed by
-   `node cli.js init --project`; this pins it to the source so it cannot drift. */
+/* ---- this repo commits NO project-scope install ---------------------------
+   tokenbrake installs once, at user scope (README); the repo carries no committed
+   `.claude/settings.json`, so a session working on it is braked by a user-scope install
+   (the environment Setup script in the cloud), never a doubled second project install.
+   Pinning the absence catches an accidental `init --project` committed back into the repo. */
 {
-  const own = JSON.parse(readFileSync('./.claude/settings.json', 'utf8'));
-  const hook = (ev) => own.hooks[ev][0].hooks[0];
-  t('project install: the committed guard is byte-identical to guard.js',
-    readFileSync('./.claude/hooks/tokenbrake/guard.js', 'utf8') === readFileSync('./guard.js', 'utf8'));
-  t('project install: PostToolUse on every tool, PreToolUse on Read, both through the committed guard',
-    own.hooks.PostToolUse[0].matcher === '*' && own.hooks.PreToolUse[0].matcher === 'Read' &&
-    hook('PostToolUse').args.join(' ') === '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js post' &&
-    hook('PreToolUse').args.join(' ') === '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js read-pre' &&
-    hook('PostToolUse').command === 'node' && hook('PreToolUse').command === 'node');
-  t('project install: PostToolUseFailure on the shells through the same guard',
-    own.hooks.PostToolUseFailure[0].matcher === 'Bash|PowerShell' && hook('PostToolUseFailure').args[1] === 'post');
+  t('repo commits no project-scope install (.claude/settings.json absent)', !existsSync('./.claude/settings.json'));
+  t('repo commits no guard copy under .claude/hooks', !existsSync('./.claude/hooks/tokenbrake/guard.js'));
 }
 
 /* ---- Wave 1: preset, outputs/show, doctor --------------------------------
    cli.js-only features, no guard-behaviour change. A fresh config dir and a temp cwd so the dual-scope
-   check sees no project install (this repo's own .claude would otherwise trip it). */
+   check sees no project install regardless of where the suite is run from. */
 {
   const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-w1-'));
   const proj = join(cfg, 'proj'); mkdirSync(proj, { recursive: true });

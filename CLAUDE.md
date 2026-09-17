@@ -9,10 +9,12 @@ node cli.js status     # what is installed on this machine, plus one real spawn 
 node cli.js report     # what ate the last session's tokens
 ```
 
-Every Claude Code and Cowork session on this repository runs with brake 1 on: `.claude/settings.json` is the
-project-scope install, and `.claude/hooks/tokenbrake/guard.js` is a copy of `guard.js`, not a source. After changing
-`guard.js`, refresh the copy with `node cli.js init --project` and commit both; `test.mjs` fails if they differ.
-Hooks load at session start, so a session that edits the guard keeps running the copy it started with.
+tokenbrake installs once, at user scope (`node cli.js init` → `~/.claude/settings.json`), and covers every project on
+that machine — there is no per-project toggle, and this repo does not commit a project-scope install of its own. A
+cloud or Cowork session on this repo runs braked when the environment's **Setup script** runs `tokenbrake init` (user
+scope — see the README's cloud section); a local session runs braked from the developer's own user-scope install.
+Because the guard runs from that single install, `guard.js` has no committed copy to keep in step — edit `guard.js`
+directly. Hooks load at session start, so a session that edits the guard keeps running the version it started with.
 
 Every change that touches `guard.js`, `cli.js`, or `transcript.js` runs the same loop before it merges: `/simplify`
 (cut what the change doesn't need), then `/code-review` (bugs — the guard sees untrusted tool output and must fail
