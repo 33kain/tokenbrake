@@ -222,6 +222,7 @@ npx tokenbrake report --reach             # how much of what your tools deliver 
 npx tokenbrake report --cost              # the session in dollars, by token type and model, plus the saving
 npx tokenbrake report --cost --model=sonnet   # reprice the same tokens as if it had run on another model
 npx tokenbrake report --backfire          # what the guard withheld vs. what the model pulled back -- the net
+npx tokenbrake tune                       # read your recent sessions and recommend which off-by-default features to turn on
 ```
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
@@ -492,6 +493,44 @@ commit/preamble intact, and saves the full diff to `out/`. It only touches `git 
 log`, not `git status`); a diff with no generated files, or `--stat`/`--name-only` output, collapses nothing
 and passes through. A failed command is never touched. It counts as a plain trim to `report --backfire`
 (labelled `gitview`), so a `Read` of the saved diff registers as a backfire. Off until an A/B moves it.
+
+## Auto-tune — which of those to turn on
+
+Every feature above ships **off**, which is safe but leaves the question every operator actually has: *which of
+these would help me?* `tokenbrake tune` answers it from your own recent sessions, and keeps two kinds of answer
+strictly apart:
+
+- **Measured** — the feature already fired in these sessions, so the backfire audit has its real record: fired
+  N times, M pulled back, the token-reads it saved. A clean measured record with enough firings is the only
+  thing that earns a **turn it on**; a measured backfire earns a **leave off** (or, if it is already on, a
+  *reconsider*).
+- **Opportunity** — the feature is off, so there is nothing to measure. Instead `tune` estimates how often it
+  *would* act from what your transcripts already record (a blob-shaped shell result, a large MCP payload, a `git
+  diff`, an edit followed by a whole re-read). Every estimate is built to **under-count**, and it earns at most a
+  **try it and measure** — never a *turn it on*, because whether the model comes back for what was withheld is
+  behavioural and costs a session to learn (the same rule the Read-cap trigger has always lived under).
+
+```
+npx tokenbrake tune                 # pool your recent real sessions (benchmark sessions skipped)
+npx tokenbrake tune --cwd=<text>    # restrict the pool to one project; --session=<prefix> for one session
+npx tokenbrake tune --write         # apply the MEASURED recommendation to tokenbrake.json (see below)
+```
+
+It prints, per feature, that verdict and the **exact knob to set**. Plain `tune` is a preview — it changes
+nothing. It also reports the Read cap's health (firing / dormant / missing — the exact value still comes from
+`report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache,
+never dollars — `--cost` is where dollars live.
+
+**`tune --write`** applies the recommendation to `~/.claude/tokenbrake.json`, and only ever acts on **measured**
+evidence — never an estimate. It turns **on** the features with a clean measured record (a `turn on`). It does
+**not** turn anything off: a feature that measurably backfired is surfaced as `reconsider` for you to disable
+deliberately (the backfire audit's net is pooled, not per-feature, so `--write` can't tell a feature that
+backfired once but is strongly net-positive from one that is net-negative — and reverting a net-positive feature
+would cost tokens); `try` and `measure` verdicts are opportunity estimates, left for you to enable and measure
+yourself first. It merges (every other key is preserved, like `preset`, and it aborts rather than overwrite a
+malformed config), and prints exactly what it turned on and the measured reason. The apply is gated on measured
+evidence for the same reason the whole project ships every context-narrowing feature off: whether a withhold
+pays off or backfires is behavioural, and only a real session measures it.
 
 ## Presets
 

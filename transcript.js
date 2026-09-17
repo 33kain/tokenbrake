@@ -1082,7 +1082,15 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       via: 'read-cap' });
   }
   const sized = reads.filter((r) => !r.ceiling);
-  return { reads, sized, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
+  /* Reads over `readMaxBytes` (from opts) the cap did NOT act on -- the guard had its chance and missed, the
+     "missing" signal report --reads and the auto-tuner both read. One predicate, here where the reads are
+     classified, rather than the same filter copied into each caller. An ABSENT readMaxBytes disables the signal
+     (over: 0); an explicit 0 is honored (the guard takes 0 literally as "cap everything", so any uncapped read
+     is over it) -- distinguished so a caller passing 0 is not silently treated as "no threshold". */
+  const overMaxN = Number(o.readMaxBytes);
+  const overMax = (o.readMaxBytes == null || !Number.isFinite(overMaxN)) ? null : overMaxN;
+  const over = overMax == null ? 0 : reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > overMax).length;
+  return { reads, sized, over, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
     files: new Set(reads.map((r) => normReadPath(r.file, parsed.cwd))).size,
     capped: reads.filter((x) => x.capped).length, recordedOriginal, recordedRewritten,
     nearCeiling, hostLines, persistedSkipped,
@@ -1289,6 +1297,338 @@ function triggerGrid(reads, triggers, limits, opts) {
     return { trigger, caught: caught.length, caughtBytes, inert: overBytes.length - caught.length,
       byteShare: totalBytes ? caughtBytes / totalBytes : 0, byLimit };
   });
+}
+
+/* ---- Personalized Auto-Tuner (`tokenbrake tune`) --------------------------------------------------------
+
+   Every off-by-default feature ships with a knob and no guidance on when it earns its keep. This reads a
+   person's OWN recent sessions and answers that per feature, from two sources kept strictly apart:
+
+     MEASURED   -- the feature actually fired in these sessions (its ledger rows + the backfire audit). Ground
+                   truth: fired N times, M pulled back, ~T token-reads saved. A clean measured record with
+                   enough firings is the ONLY thing that earns a "turn it on".
+     OPPORTUNITY -- the feature is off, so there is nothing to measure; instead estimate how often it WOULD act
+                   from the facts parseTranscript keeps (chars, lines, the file, the command). Every estimator
+                   below is built to UNDER-count -- a lower bound -- so "worth trying" is never asserted on
+                   inflated opportunity, and it earns at most a "try it and measure", never a "turn it on":
+                   whether the model comes back for what was withheld is behavioural and costs a session to
+                   learn, the same rule the Read-cap trigger has always lived under (AB-TASK.md).
+
+   Pure: parsed sessions + the ledger + the merged config in, a structured recommendation out. cli.js renders
+   it. This function only ever reads -- it never writes a config. */
+
+/* The guard.js DEFAULTS the tuner needs: the off-by-default state of each feature (so a feature the user has
+   not turned on reads as off) and the thresholds the opportunity estimators compare against. guard.js cannot be
+   require()d (it runs on load and installs as a single file), so these are mirrored here and PINNED to guard.js
+   by a test in test.mjs, the same way stemOf is pinned to saveOut. cli.js merges the user's tokenbrake.json
+   over this, so a knob the user changed is respected and only the rest fall back to the default. */
+const TUNE_DEFAULTS = {
+  mcpTrim: false, dedup: false, readAfterEdit: false, reReadElide: false, blobElide: false, gitView: false,
+  maxChars: 6000, blobMinChars: 4000, blobMaxLine: 2000, dedupMinChars: 1000, gitViewMinChars: 2000,
+  readMaxBytes: 60000, readLimitLines: 300,
+};
+
+const MIN_FIRE = MIN_WITHHOLDS;   // reuse the audit's confidence floor: below it a clean measured record is "try", not "on"
+/* Judgment floors for turning an OPPORTUNITY into a "try it": below both, the feature would act too rarely or
+   too cheaply on this person's work to be worth flipping a default and running a measurement session for. Named
+   because they are a choice, not a measurement -- a different tolerance would set them elsewhere. */
+const OPP_MIN_N = 3;             // it would act at least this many times across the pooled sessions
+const OPP_MIN_CARRIED = 2000;    // or withhold at least this many carried token-reads (one big blob can clear this alone)
+
+/* Blob-elider opportunity on a session it did NOT run in: shell results the guard's blob gate WOULD fire on,
+   estimated from the two facts parseTranscript keeps (chars, lines), not the body it drops. A blob is one very
+   long line that dominates the output. With only chars and lines, the TRUE lower bound is a SINGLE-line result
+   (`lines === 1`) over the floor: its one line IS the whole output, so its longest line = chars, which clears
+   blobMaxLine (chars >= blobMaxLine via the floor) and is 100% of the output -- so it satisfies the dominance
+   share for ANY blobLineShare, and this estimate does not depend on that knob's value (which is why blobLineShare
+   is not among the mirrored TUNE_DEFAULTS). Deliberately conservative: it skips a two-line result even though a
+   blob with a trailing newline is two lines, because chars+lines alone cannot tell that (dominant) case from two
+   real long lines (not dominant, which the guard would NOT elide) -- so it never over-counts.
+
+   It also has one big BLIND SPOT worth stating: a blob OVER maxChars has already been char-sliced by the
+   always-on trim before blobElide would ever see it, so it arrives multi-line with the trim marker and is not a
+   single line here -- exactly the large blobs blobElide helps most are invisible, and their original shape is
+   destroyed (not recoverable from the transcript or the ledger). So this sees only the untapped blobs the trim
+   left whole (one-liners between the floor and maxChars); a low count is NOT evidence blobElide would not help,
+   which is why the tuner never turns a low blob count into a "leave off" (only a measured backfire does that).
+   Failed commands are excluded (the guard leaves an error whole). */
+function blobOpportunity(parsed, cfg) {
+  const floor = Math.max(Number(cfg.blobMinChars) || 4000, Number(cfg.blobMaxLine) || 2000);
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
+    if (r.isError || r.lines !== 1 || r.chars < floor) continue;
+    n++; carried += r.carried || 0;
+  }
+  return { n, carried };
+}
+
+/* MCP-trim opportunity: mcp__* results the model received whole and over maxChars, which is exactly what
+   mcpTrim would route through the trim. A result already carrying the guard's marker is excluded -- it was
+   trimmed, so it is not an untapped opportunity. One BLIND SPOT (like blobOpportunity's): an MCP result Claude
+   Code judged too large is persisted by the host and only a ~2KB preview lands in the transcript, so its r.chars
+   reads under maxChars and it is missed here -- exactly the oversized MCP results mcpTrim most targets. So a low
+   count is not proof mcpTrim would not help; it under-counts (the safe direction), and the real number comes
+   from turning mcpTrim on for a session. */
+function mcpOpportunity(parsed, cfg) {
+  const max = Number(cfg.maxChars) || 6000;
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (!/^mcp__/.test(r.name) || r.isError || r.marker || r.chars <= max) continue;
+    n++; carried += r.carried || 0;
+  }
+  return { n, carried };
+}
+
+/* Read-After-Edit opportunity: a file this session edited and then read WHOLE -- the unbounded verify-read the
+   delta narrows to the changed region. Edits surface as Edit/MultiEdit results whose `file` is the path
+   (readFileOf returns file_path for any tool that names one); a later unbounded Read of the same file is the
+   read the delta targets. Path-normalised so an Edit and a Read of the same file join. Coarse and an UPPER
+   bound: the delta only fires on files at or under readMaxBytes (a bigger file's re-read is size-capped
+   instead), which this does not check -- the file's true size is not in the result -- so it is reported as
+   "up to N", the count to confirm by turning the delta on, never as exact. */
+function editThenRead(parsed) {
+  const cwd = parsed.cwd;
+  const edited = new Set();
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (r.isError) continue;   // a failed edit changed nothing; a failed read delivered nothing
+    if (r.name === 'Edit' || r.name === 'MultiEdit') { const k = normReadPath(r.file, cwd); if (k) edited.add(k); continue; }
+    if (r.name === 'Read' && r.whole && r.file) {
+      const k = normReadPath(r.file, cwd);
+      if (k && edited.has(k)) { n++; carried += r.carried || 0; }
+    }
+  }
+  return { n, carried };
+}
+
+/* Git-view opportunity: an UNTRIMMED `git diff`/`git show` result over gitViewMinChars. This is an UPPER bound,
+   unlike the exact-lower-bound estimators -- the guard collapses only the hunks of generated/lockfile paths, and
+   with the body dropped this cannot see whether such a path is in the diff. So it counts every large diff and
+   the render labels it "up to"; the real number comes from turning gitView on for a session. A result already
+   carrying the guard's marker is excluded (as mcpOpportunity does): the always-on trim already char-sliced it,
+   so its carried in the transcript is the shrunken value, not the diff's -- counting it would double-count what
+   the trim already saved and size it wrong. GIT_CMD mirrors guard.js GIT_DIFF. */
+const GIT_CMD = /\bgit(?:\s+-C\s+\S+)?\s+(?:diff|show)\b/;
+function gitOpportunity(parsed, cfg) {
+  const min = Number(cfg.gitViewMinChars) || 2000;
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
+    if (r.isError || r.marker || r.chars < min || !GIT_CMD.test(String(r.what || ''))) continue;
+    n++; carried += r.carried || 0;
+  }
+  return { n, carried };
+}
+
+/* Read-After-Read opportunity: a WHOLE-file read of a file already read WHOLE earlier this session -- the
+   population reReadElide narrows (guard.js only elides whole re-reads). Deliberately NOT repeatReads, which
+   keys on path+range (so it counts a bounded `sed` re-read the elision never touches) and is windowed by
+   compaction (so it drops a post-compaction whole re-read the elision WOULD narrow, since the guard does not
+   consult compaction). An UPPER bound: the elision also requires the file unchanged and the re-read recent,
+   neither checkable from the transcript, so it is shown as "up to N". */
+function reReadOpportunity(parsed) {
+  const cwd = parsed.cwd;
+  const seen = new Set();
+  let n = 0, carried = 0;
+  for (const r of parsed.results) {
+    if (r.name !== 'Read' || !r.whole || !r.file || r.isError) continue;   // a failed read delivered nothing to re-elide
+    const k = normReadPath(r.file, cwd);
+    if (!k) continue;
+    if (seen.has(k)) { n++; carried += r.carried || 0; } else seen.add(k);
+  }
+  return { n, carried };
+}
+
+/* `opts.disabled` is the set of knobs written `false` in the raw tokenbrake.json. It cannot be derived from
+   `cfg`: the caller hands us TUNE_DEFAULTS merged with the file, and every feature knob defaults to false
+   there, so "absent" and "deliberately off" are the same value by the time it arrives. Only the raw file
+   distinguishes them, so the caller reads it and passes the distinction in. */
+function autotune(parsedSessions, ledger, cfg, opts) {
+  cfg = cfg || {};
+  const led = ledger || [];
+  const sessions = (parsedSessions || []).filter(Boolean);
+
+  const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried
+  const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0 });
+    e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; };
+  let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
+
+  const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
+  const reachSessions = [];
+  let capOver = 0, capFired = 0, guarded = 0, sawLedger = false;
+  /* Respect an explicit readMaxBytes including 0 (which the guard takes literally as "cap everything"); only a
+     genuinely absent value falls back to the shipped default. */
+  const readMaxBytes = cfg.readMaxBytes == null ? 60000 : Number(cfg.readMaxBytes);
+
+  for (const p of sessions) {
+    /* Self-protect: a transcript parsed with no sessionId of its own would make every ledger join below skip its
+       session filter and attribute ALL sessions' rows to this one. The transcript filename is the session id, so
+       recover it here -- so any caller, not just tuneReport, is safe. carry(p) already mutates p, so this does too. */
+    if (!p.sessionId && p.file) p.sessionId = path.basename(String(p.file), '.jsonl');
+    carry(p);
+    const g = guardRan(p, led, p.sessionId);
+    if (g.ran) guarded++;
+
+    const a = backfireAudit(p, led);
+    for (const w of a.withholds) bump(w.kind, w);
+    deltaFired += a.deltas.fired; deltaBack += a.deltas.backfired;
+    reReadFired += a.reReads.fired; reReadBack += a.reReads.backfired;
+    netCarried += a.net; withholds += a.withholds.length;
+
+    const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
+    const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
+    const eo = editThenRead(p); edits.n += eo.n; edits.carried += eo.carried;
+    const ro = reReadOpportunity(p); reReadOpp.n += ro.n; reReadOpp.carried += ro.carried;
+    const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried;
+
+    const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
+    capFired += u.capped;
+    /* Only a GUARDED session's uncapped over-threshold read is a "missing" signal: in an unguarded session
+       (teleported, or read before install) the read went whole because the guard was not there, not because the
+       cap failed -- counting it would manufacture a phantom config defect. So gate per-session, not on the
+       global guarded count.
+       Specifically on LEDGER evidence, which is what report --reads buckets on (ledgerSessions, cli.js) -- the
+       parity this comment used to claim while gating on g.ran, which also accepts a transcript MARKER. A marker
+       proves the PostToolUse hook ran; it says nothing about whether the PreToolUse read hook was ever
+       registered, and the two are separate entries in settings.json. So a marker-only session (ledger rotated
+       or deleted) cannot tell "the read-pre hook is missing" from "the evidence is missing", and reporting the
+       first is the phantom defect this gate exists to prevent. */
+    if (g.via === 'ledger') { sawLedger = true; capOver += u.over; }
+    // reachPooled only uses the guarded sessions (filtered below), so skip the trimmedResults scan for the rest
+    reachSessions.push({ parsed: p, trimmed: g.ran ? trimmedResults(p, led) : null, ran: g.ran });
+  }
+
+  /* A knob can be set per TOOL as well as globally: guard.js toolConfig() shallow-merges cfg.tools[<tool>]
+     over every knob, for the post hook and the read hook alike. Reading only the top level called a
+     Bash-only elider "off", credited it with the measured record its own Bash firings produced, and told
+     --write to write a TOP-LEVEL true -- widening a deliberately tool-scoped setting to every tool on one
+     tool's evidence. The mirror case (a tools entry turning a globally-on knob off) printed [on] for a
+     feature disabled where it actually runs. `scoped` carries the fact that a knob is tool-scoped at all, so
+     --write can decline to flatten it rather than guess which tool the person meant. */
+  const plainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const toolCfgs = plainObj(cfg.tools) ? Object.values(cfg.tools) : [];
+  const entriesFor = (k) => toolCfgs.filter((v) => plainObj(v) && k in v);
+  const on = (k) => !!cfg[k] || entriesFor(k).some((v) => !!v[k]);
+  const scoped = (k) => entriesFor(k).length > 0;
+  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as exactly {fired, backfired, savedCarried}
+  /* The read narrowings measure fired/backfired only (no out/ save, so no savedCarried); carry that shape. */
+  const readMeasured = (fired, back) => fired > 0 ? { fired, backfired: back, savedCarried: null } : null;
+
+  /* One decision, applied to every feature. Measured beats opportunity: a feature that fired is judged on what
+     happened, never on an estimate. A measured backfire is disqualifying whatever the count (ab10: the count of
+     withholds does not predict the bill, so one real pull-back is evidence) -- and it is the ONLY thing that
+     earns a definitive "leave off". A clean measured record earns "turn it on" only past the confidence floor;
+     below it, "try". With no firings, material opportunity earns at most a "try" (never a "turn it on":
+     backfire is behavioural and must be measured), and NO material opportunity earns "measure" -- not "leave
+     off", because the off-state estimators have blind spots (blobElide's biggest wins in particular are
+     invisible off-state: the always-on trim char-slices a large blob before blobElide would ever see it), so
+     the honest verdict is "no signal from the off state, turn it on for a session and measure". */
+  const decide = (isOn, measured, opp) => {
+    if (measured && measured.fired > 0) {
+      if (measured.backfired > 0) return isOn ? 'review' : 'leave-off';
+      if (measured.fired >= MIN_FIRE) return isOn ? 'keep' : 'turn-on';
+      return isOn ? 'keep' : 'try';   // clean but too few to be sure: keep it if already on, else worth a try
+    }
+    if (opp && (opp.n >= OPP_MIN_N || (opp.carried || 0) >= OPP_MIN_CARRIED)) return isOn ? 'keep' : 'try';
+    return isOn ? 'keep' : 'measure';
+  };
+  /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
+     re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead,
+     gitOpportunity and reReadOpportunity, shown as "up to N"), 'near' for the exact lower-bound ones
+     (blobOpportunity, mcpOpportunity, shown as "~ N"). */
+  const disabledKnobs = new Set((opts && opts.disabled) || []);
+  const feat = (key, label, knob, measured, opp, bound) => {
+    const isOn = on(knob), isScoped = scoped(knob), isDisabled = disabledKnobs.has(knob);
+    const status = decide(isOn, measured, opp);
+    /* `on`/`scoped`/`disabled` stay as the raw facts -- each is something only one source knows, and all three
+       combinations occur ({blobElide:false, tools:{Bash:{blobElide:true}}} is disabled AND scoped AND on).
+       `offer` is the one POLICY built from them, decided here beside decide() rather than re-derived by each
+       caller: --write, the per-feature render and the summary were each combining the three booleans in a
+       different precedence order, so "does a tools entry beat a top-level false?" had three answers.
+       The status is left alone -- it is the truth about what the feature DID, and a knob the person turned
+       off still has the clean measured record that earned its turn-on. Only the OFFER changes. */
+    const offer = status !== 'turn-on' ? null : isScoped ? 'scoped' : isDisabled ? 'user-off' : 'turn-on';
+    /* `offer` is the --write policy and is null off a turn-on, so the preview cannot lean on it to explain a
+       config-governed knob at 'try'/'measure' -- it would print "Set knob: true" for a feature the person set
+       false. `note` is the DISPLAY classification, computed at ANY status once here so the renderer never
+       re-combines the raw booleans, and it turns on the ONE fact the [off] mark must follow: whether the
+       feature is actually running. `running` is on but only because a `tools` entry provides the on (the
+       top-level key is not true) -- it must read as on, never [off], whether that key is absent or explicitly
+       false. `scoped` and `user-off` are the two ways a feature is OFF by config: a `tools` entry pins it off,
+       or the top-level key is false. A knob on via its own top-level key -- with or without a per-tool
+       exception -- is plain on, so it is null and renders from status like any other on feature. */
+    const topOn = !!cfg[knob];
+    const note = (isOn && !topOn) ? 'running' : (!isOn && isScoped) ? 'scoped' : (!isOn && isDisabled) ? 'user-off' : null;
+    return { key, label, knob, on: isOn, scoped: isScoped, disabled: isDisabled, offer, note,
+      bound, measured, opportunity: opp || null, status };
+  };
+
+  const features = [
+    feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), blob, 'near'),
+    feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), gitOpp, 'upper'),
+    feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp, 'near'),
+    feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
+    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'upper'),
+    feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits, 'upper'),
+  ];
+
+  /* The Read cap is always on and has its own tuning views (report --reads/--where); the tuner only reads its
+     HEALTH here. dormant: no read reached readMaxBytes, so the cap has nothing to act on. firing: it capped
+     reads. missing: reads went over readMaxBytes uncapped in a session the guard was running -- the cap had its
+     chance and did not take it (a config or coverage problem worth flagging). capOver already counts only
+     guarded sessions (see the loop), so it alone carries the "guard was present" condition.
+     unmeasured comes FIRST because the other three are all statements about a guard that ran. With no guarded
+     session in the pool -- a fresh install, or --cwd onto a project where the guard was never installed --
+     capOver is 0 by its own gate and capFired is 0 because no cap could fire, so the fall-through would report
+     "dormant: no read reached readMaxBytes", asserting a measurement nothing performed and pointing the person
+     away from the install that would actually help. */
+  /* `unmeasured` covers both ways the cap can be un-judged, not just one. capOver is now gated on ledger
+     evidence, and capFired is structurally 0 without it too (unboundedReads marks a read capped only from a
+     ledger row), so a guarded session known ONLY by a transcript marker reaches neither counter -- and used
+     to fall through to "dormant: no read reached readMaxBytes", a flat statement about reads it never
+     examined, in a session that may hold five uncapped 100 KB whole-file reads. Both cases are the same
+     thing: nothing measured the cap here. */
+  const capVerdict = !sawLedger ? 'unmeasured' : capOver > 0 ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
+  /* Two different situations reach `unmeasured` and they want opposite advice, so the cause travels with the
+     verdict: nothing ran the guard (install it), versus sessions that did but whose ledger evidence is gone
+     (installing again changes nothing). Without this the one string had to assert "no pooled session ran the
+     guard", which flatly contradicts the "N with the guard" the header prints from the marker-inclusive
+     count. */
+  const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict,
+    why: capVerdict !== 'unmeasured' ? null : (guarded === 0 ? 'no-guard' : 'no-ledger') };
+
+  const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [], excluded: [] };
+  for (const f of features) {
+    /* The summary is the line people act on, so a config-off feature (off, and either scoped to a tool or set
+       false -- read from `note`) contributes to it ONLY from a genuine turn-on: a clean measured record whose
+       flip the config overrides, where "Would turn on, but your config says otherwise" is exactly true. At
+       'try'/'measure' that claim would overstate (few or no measured evidence, and --write sets neither), and
+       filing it under "Try:"/"Measure:" would recommend flipping a knob the person set off -- so those are left
+       to the per-feature [off] line alone. A measured backfire on an off knob still reads as leave-off, and
+       'review' needs the feature on, which a config-off knob is not. `running` is on where its `tools` entry
+       applies and is never config-off. This is why the divert reads `note`, not `offer`: `offer` is null off a
+       turn-on, so it had left a config-off knob at 'try'/'measure' under "Try:"/"Measure:". */
+    const configOff = f.note === 'scoped' || f.note === 'user-off';
+    if (configOff && (f.status === 'try' || f.status === 'measure')) continue;   // off by config, weak/no evidence: detail line only
+    if (configOff && f.status === 'turn-on') summary.excluded.push(f.label);
+    else if (f.status === 'turn-on') summary.turnOn.push(f.label);
+    else if (f.status === 'try') summary.tryThese.push(f.label);
+    else if (f.status === 'review') summary.review.push(f.label);
+    else if (f.status === 'measure') summary.measure.push(f.label);
+    else if (f.status === 'keep') summary.keep.push(f.label);
+    else summary.leaveOff.push(f.label);
+  }
+
+  /* `withholds` counts only what backfireAudit nets, which is built from ev:'post' ledger rows -- the trim
+     and its siblings, which replace an output and save a copy. The two READ narrowings log ev:'read-delta' and
+     ev:'read-reread' and never appear there, so a session in which only they fired has withholds === 0 while
+     the feature list below reports "fired 3x". Carried separately so the caller can tell "nothing has fired"
+     from "something fired that this net cannot price". */
+  return { sessions: sessions.length, guarded,
+    reach: reachPooled(reachSessions.filter((s) => s.ran)),
+    netCarried, withholds, narrowings: reReadFired + deltaFired, features, readCap, summary,
+    thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 
 /* Find transcripts. The ledger's `transcript` field (0.1.0) is exact; failing that, every JSONL under
@@ -1540,4 +1880,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN };
+  capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };
