@@ -1,6 +1,39 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-17
+
+- **`tokenbrake tune` — read your own recent sessions and get told which off-by-default features to turn on.**
+  The guard ships five narrowings off by default because each changes what enters context and has to earn its
+  place per workload; nothing told you which of them *your* work would benefit from. `tune` pools your recent
+  guarded sessions and, per feature, gives a verdict and the exact knob to set, keeping two kinds of answer
+  strictly apart: **measured** — the backfire audit's real fired / pulled-back / saved for a feature that
+  actually ran, the only thing that earns a "turn on" (a measured backfire is the only thing that earns a
+  "reconsider") — and **opportunity**, a deliberately under-counting estimate for a feature that is off, which
+  earns at most a "try it and measure", never a turn-on. It also reports the Read cap's health and trim reach.
+  Advisory and read-only, like `report --backfire` — it prints and changes nothing. `tune --write` applies the
+  *measured* recommendation to `tokenbrake.json`: it only ever turns a feature ON on a clean measured record,
+  never on an estimate and never off, merges rather than replaces, aborts rather than overwrite a malformed
+  config, and writes booleans on the fixed feature-list knobs alone. Tokens and cache, never dollars.
+
+- **The guard no longer emits a trim past Claude Code's hook-output ceiling, where it would be dropped
+  silently.** Every rewrite path measured the trimmed TEXT against the 10,000-char limit, but the limit applies
+  to the emitted JSON, and escaping costs a character per quote, backslash and newline — so at line width 75+ a
+  6,000-char trim emitted 12,000–16,000 characters, past the ceiling, where Claude Code drops the replacement
+  without a word and the full untrimmed result enters context while the ledger books a saving that never
+  happened. All paths now measure the emitted payload and, when no budget fits, emit **nothing** — the original
+  passes through, the honest fail-open. Also fixed: the file-excerpt cap skipped the fold entirely (15–40 KB
+  emissions); the classifier's recursive-grep exclusion now scans the whole option cluster, so `grep -nr` / `-ir`
+  are caught alongside `grep -rn`; and a CI matrix (ubuntu + windows × Node 18/20/22) now runs the suite on the
+  versions `engines` claims, after a Windows-only bug once reached a release because no Windows runner existed.
+
+- **`report --backfire` / `tune` count a withheld output pulled back through a piped shell command.** The
+  backfire audit — the gate that decides whether a trim was worth it — saw a pull-back only through the Read
+  tool or `tokenbrake show`, plus the single-file shell reads it already recognised (a bare `cat` / `sed -n` /
+  `head` / `tail`). A read through a piped or compound command (`sed … | head`, `cat … | tail`) carried the path
+  only in the command text and went uncounted — and since the harness pages a file with `sed`/`grep` by default,
+  that was the common way a withheld output comes back, so a real backfire could be scored "clean". Now counted.
+  A measurement change, not a guard change, recorded as an epoch in `AB-TASK.md`: a "clean" verdict from before
+  it is only a lower bound, so re-run over the same ledger before acting on one.
 
 - **"Was the guard running here" no longer needs the ledger to be sitting next to the transcript.** That question
   decides the reach verdict, and it was answered from ledger rows alone -- but the ledger lives beside the
