@@ -2836,6 +2836,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a knob set only under tools.<tool> reads as ON, not off', fBlob(scopedOn).on === true && fBlob(scopedOn).scoped === true,
     `on=${fBlob(scopedOn).on} scoped=${fBlob(scopedOn).scoped}`);
   t('and so its clean record is keep, never a turn-on that would flatten it', fBlob(scopedOn).status === 'keep', fBlob(scopedOn).status);
+  t('and the summary does not offer it either', !scopedOn.summary.turnOn.includes('Binary-Blob Elider'), JSON.stringify(scopedOn.summary.turnOn));
   t('a tools entry turning a globally-on knob OFF still reads as on where it is on',
     fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: true, tools: { Read: { blobElide: false } } })).on === true);
   t('a plain top-level knob is not marked scoped', fBlob(onKeep).scoped === false && fBlob(onClean).scoped === false);
@@ -2848,6 +2849,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     fBlob(offByHand).disabled === true && fBlob(offByHand).status === 'turn-on' && fBlob(offByHand).measured.fired === 3,
     `disabled=${fBlob(offByHand).disabled} status=${fBlob(offByHand).status}`);
   t('a knob merely absent from the file is not marked disabled', fBlob(onClean).disabled === false);
+  /* The footer is the line people act on, so it cannot say "Turn on: X" for a knob the per-feature line marks
+     [off] and --write refuses to set. */
+  t('the summary does not offer a knob the person turned off',
+    !offByHand.summary.turnOn.includes('Binary-Blob Elider') && offByHand.summary.keep.includes('Binary-Blob Elider'),
+    JSON.stringify(offByHand.summary.turnOn));
   t('autotune without the opts argument still works (disabled defaults to none)',
     fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: false })).disabled === false);
 
@@ -2861,8 +2867,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const markerOnly = { sessionId: 'marker01', cwd: '/w', requests: reqs(4), compactions: [],
     results: [R({ id: 'toolu_M1', what: 'cat x', marker: true, tokens: 10, afterReq: 0 }), hugeRead] };
   const markerTune = T.autotune([markerOnly], [], {});
-  t('a marker-only session does not manufacture a "read cap missing" verdict',
-    markerTune.guarded === 1 && markerTune.readCap.verdict !== 'missing' && markerTune.readCap.over === 0,
+  /* Not "missing", and not "dormant" either: capOver is gated on ledger evidence and capFired is structurally
+     0 without it, so nothing here examined the reads at all -- and this session holds an 80,000-char uncapped
+     whole-file read, which "dormant: no read reached readMaxBytes" would flatly deny. */
+  t('a marker-only session reports the read cap as unmeasured, not missing and not dormant',
+    markerTune.guarded === 1 && markerTune.readCap.verdict === 'unmeasured' && markerTune.readCap.over === 0,
     `guarded=${markerTune.guarded} verdict=${markerTune.readCap.verdict} over=${markerTune.readCap.over}`);
   /* The same session WITH a ledger row is real evidence, and must still raise it. */
   const withLedger = T.autotune([{ ...markerOnly, sessionId: 'ledger01' }],
@@ -3096,6 +3105,29 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('and the preview reports it rather than recommending it',
     !/Set "blobElide": true/.test(prevLine) && /false in your config/.test(prevLine), prevLine.trim());
 
+  /* An empty plan because everything qualified and was then excluded is a different situation from nothing
+     qualifying, and the advice for the second ("go enable a try feature and measure it") is wrong for the
+     first -- it printed directly under "Left alone: ... ITS CLEAN RECORD is from before you turned it off". */
+  t('an empty plan from exclusions does not claim no feature has a clean record',
+    /Nothing left to write: every feature with a clean measured record is one of the above/.test(rwOff.stdout)
+    && !/No feature has a clean MEASURED record/.test(rwOff.stdout),
+    rwOff.stdout.split('\n').find((l) => /Nothing left to write|No feature has/.test(l)) || '');
+
+  /* --session narrows the evidence exactly as --cwd does, and the header claimed to cover both. */
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
+  const rwSess = cli3(['tune', '--session=tunewrite01', '--write']);
+  t('tune --session ... --write discloses the narrowing too',
+    /evidence narrowed to --session=tunewrite01; the config it writes is global/.test(rwSess.stdout),
+    rwSess.stdout.split('\n')[0] || '');
+
+  /* `disabled` reads the top-level key, `on` also reads cfg.tools -- so the shell-scoped elider is both, and
+     it IS running. The mark and the hint must follow `on`, not the raw key. */
+  writeFileSync(cfg3Path, JSON.stringify({ blobElide: false, tools: { Bash: { blobElide: true } } }));
+  const rScoped = cli3(['tune']);
+  const scopedLine = rScoped.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('a knob turned off at the top level but on for a tool is not rendered as off',
+    !/\[off\]/.test(scopedLine) && /a "tools" entry turns it on/.test(scopedLine), scopedLine.trim());
+
   writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
   const rwCwd = cli3(['tune', '--cwd=/work/tw', '--write']);
   t('tune --cwd ... --write says the evidence was narrowed while the config it writes is global',
@@ -3233,6 +3265,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
        body sits to maxChars, and escaping doubles it from there. At 60 chars the trim path stayed green while
        the ceiling was already broken at 75 -- the corpus, not the code, was holding the assertion up. */
     Array.from({ length: 3000 }, (_, i) => '"'.repeat(120) + i).join('\n'),
+    /* CONTROL characters, the class every earlier corpus missed. JSON escapes them to \u00XX -- six
+       characters each, against two for a quote or backslash -- and a binary dump, a NUL-padded log or a
+       terminal capture is exactly the oversized output the guard exists for. Tuned only on 2x content, the
+       fold's budget estimate settled ABOVE the ceiling on these and emitted 10,889. */
+    Array.from({ length: 3000 }, (_, i) => (String.fromCharCode(0) + String.fromCharCode(1) + String.fromCharCode(7) + String.fromCharCode(31)).repeat(15) + i).join(String.fromCharCode(10)),
   ];
 
   /* Line width, not size, is what pushes a trim over the ceiling: the head+tail lines trimText keeps scale
@@ -3249,6 +3286,108 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     t(`a quote-dense trim stays under the hook output cap at line width ${w}`,
       r.status === 0 && r.stdout.length > 0 && r.stdout.length < 10000 && /\[tokenbrake\]/.test(r.stdout),
       String(r.stdout.length) + ' chars emitted');
+  }
+
+  /* The two default-OFF rewrite branches measure the emitted payload like the trim and excerpt paths do.
+     Both gated on raw character length before, which is the measure that cannot see JSON escaping: gitView
+     emitted 10,456 at 60 dense source lines and 17,058 at 100, and mcpTrim -- whose bodies are JSON, so the
+     worst case is the ordinary case -- emitted 12,377 from a body it had trimmed to 6,246. Over the ceiling
+     means Claude Code drops it silently: the full diff or MCP result enters context and the ledger records
+     the saving anyway. */
+  {
+    const odir = mkdtempSync(join(tmpdir(), 'tokenbrake-off-'));
+    const oenv = { ...process.env, CLAUDE_CONFIG_DIR: odir };
+    const oguard = (cfg, input) => {
+      writeFileSync(join(odir, 'tokenbrake.json'), JSON.stringify(cfg));
+      return spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: oenv });
+    };
+    const dq = '"'.repeat(60) + '\\'.repeat(20);
+    const lock = 'diff --git a/package-lock.json b/package-lock.json\n@@ -1,400 +1,400 @@\n'
+      + Array.from({ length: 500 }, (_, i) => `-  "old_${i}": "v${i}",\n+  "new_${i}": "v${i}",`).join('\n');
+    for (const n of [40, 60, 80, 100]) {
+      const diff = lock + '\ndiff --git a/src/app.js b/src/app.js\n@@ -1,' + n + ' +1,' + n + ' @@\n'
+        + Array.from({ length: n }, (_, i) => '+' + dq + i).join('\n');
+      const r = oguard({ gitView: true }, { session_id: 'gv', tool_use_id: 'toolu_GV' + n, tool_name: 'Bash',
+        tool_input: { command: 'git diff' }, tool_response: bashResp(diff) });
+      t(`gitView stays under the hook output cap on a dense diff (${n} escape-heavy source lines)`,
+        r.status === 0 && r.stdout.length > 0 && r.stdout.length < 10000 && /\[tokenbrake\]/.test(r.stdout),
+        String(r.stdout.length) + ' chars emitted');
+    }
+    const mcpBodies = [
+      ['quote-dense rows', Array.from({ length: 900 }, (_, i) => `  {"id": "${i}", "name": "${'"'.repeat(40)}", "v": ${i}},`).join('\n')],
+      ['one line, dense', '{"data":[' + Array.from({ length: 2000 }, (_, i) => `{"k":"${'"'.repeat(20)}","i":${i}}`).join(',') + ']}'],
+    ];
+    for (const [label, body] of mcpBodies) {
+      const r = oguard({ mcpTrim: true }, { session_id: 'mc', tool_use_id: 'toolu_MC' + label.length,
+        tool_name: 'mcp__github__list_commits', tool_input: {}, tool_response: [{ type: 'text', text: body }] });
+      t(`mcpTrim stays under the hook output cap (${label})`,
+        r.status === 0 && r.stdout.length > 0 && r.stdout.length < 10000,
+        String(r.stdout.length) + ' chars emitted from a ' + body.length + '-char body');
+    }
+    rmSync(odir, { recursive: true, force: true });
+  }
+
+  /* Straight at the expansion classes, because a corpus only ever covers what someone thought to include:
+     the quote-and-backslash corpus was green while control-character bodies emitted 10,889. Control bytes
+     serialize as \u00XX -- six characters each against two for a quote -- and a binary dump, a NUL-padded
+     log or a terminal capture full of BEL is exactly the oversized output this guard is for. */
+  const NUL = String.fromCharCode(0), SOH = String.fromCharCode(1), BEL = String.fromCharCode(7), US = String.fromCharCode(31);
+  for (const [label, body] of [
+    ['NUL only', NUL.repeat(240000)],
+    ['control-dense, one line', (NUL + SOH + BEL + US).repeat(60000)],
+    ['control-dense, short lines', Array.from({ length: 8000 }, (_, i) => (SOH + BEL).repeat(10) + i).join(String.fromCharCode(10))],
+    ['BEL-dense log', (BEL + 'x').repeat(120000)],
+  ]) {
+    for (const [what, cmd] of [['excerpt', 'cat dump.bin'], ['trim', 'node build.js']]) {
+      const r = spawnSync(process.execPath, ['./guard.js', 'post'], { encoding: 'utf8', env: fenv,
+        input: JSON.stringify({ session_id: 'ctl', tool_use_id: 'toolu_CTL' + what + label.length, tool_name: 'Bash',
+          tool_input: { command: cmd }, tool_response: bashResp(body) }) });
+      t(`the ${what} path stays under the cap on control characters (${label})`,
+        r.status === 0 && r.stdout.length > 0 && r.stdout.length < 10000 && /\[tokenbrake\]/.test(r.stdout),
+        String(r.stdout.length) + ' chars emitted');
+    }
+  }
+
+  /* The remaining rewrite branches, and the case no amount of shrinking can fix. blobElide's kept head is
+     base64 or minified source BY CONSTRUCTION, so it is the most escape-dense body the guard emits (safe at
+     the default keep of 160, 16,474 chars at a keep of 8,000); shapeFilters is the one rewrite reachable with
+     a single knob on stock defaults, and shaping that the host drops is a measurement of something the model
+     never received. */
+  {
+    const bdir = mkdtempSync(join(tmpdir(), 'tokenbrake-br-'));
+    const benv = { ...process.env, CLAUDE_CONFIG_DIR: bdir };
+    const brun = (cfg, input) => {
+      writeFileSync(join(bdir, 'tokenbrake.json'), JSON.stringify(cfg));
+      return spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8', env: benv });
+    };
+    const QQ = String.fromCharCode(34);
+
+    const rb = brun({ blobElide: true, blobKeepChars: 8000 }, { session_id: 'br', tool_use_id: 'toolu_BR1',
+      tool_name: 'Bash', tool_input: { command: 'base64 x.bin' }, tool_response: bashResp(QQ.repeat(120000)) });
+    t('blobElide stays under the hook output cap with a raised blobKeepChars',
+      rb.status === 0 && rb.stdout.length > 0 && rb.stdout.length < 10000, String(rb.stdout.length) + ' chars emitted');
+
+    const shapeable = Array.from({ length: 400 }, () => QQ.repeat(70) + ' progress').join(String.fromCharCode(10))
+      + String.fromCharCode(10) + Array.from({ length: 60 }, (_, i) => QQ.repeat(70) + i).join(String.fromCharCode(10));
+    const rs = brun({ shapeFilters: true }, { session_id: 'br', tool_use_id: 'toolu_BR2',
+      tool_name: 'Bash', tool_input: { command: 'npm run build' }, tool_response: bashResp(shapeable) });
+    t('a shaped result under maxChars still stays under the hook output cap',
+      rs.status === 0 && rs.stdout.length > 0 && rs.stdout.length < 10000, String(rs.stdout.length) + ' chars emitted');
+
+    /* An MCP result whose sibling blocks dwarf the text it trims cannot be made to fit by shrinking the text.
+       Emitting anyway would be the worst outcome: the host refuses it, the original enters context, and the
+       ledger claims a saving. Emit nothing instead -- the original passes through, which is the honest
+       fail-open -- and record no kept/saved claim. */
+    const rm = brun({ mcpTrim: true }, { session_id: 'br', tool_use_id: 'toolu_BR3', tool_name: 'mcp__x__y',
+      tool_input: {}, tool_response: [{ type: 'text', text: 'z'.repeat(20000) }, { type: 'image', data: 'A'.repeat(30000), mimeType: 'image/png' }] });
+    t('a rewrite that cannot be made to fit emits nothing rather than something the host will refuse',
+      rm.status === 0 && rm.stdout === '', String(rm.stdout.length) + ' chars emitted');
+    const brows = readFileSync(join(bdir, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse).filter(Boolean);
+    const unfit = brows.find((r) => r.mcp);
+    t('and the ledger records it as unfitted, claiming no saving',
+      !!unfit && unfit.unfitted === true && unfit.kept == null, JSON.stringify(unfit));
+
+    rmSync(bdir, { recursive: true, force: true });
   }
 
   console.log('\n-- classifier: fail-open and shape under generated commands');

@@ -580,7 +580,10 @@ npx tokenbrake clean --days=7   # delete saved full outputs older than 7 days
   built-in tools in the v2.1.12x line. On older versions the hook runs but changes nothing. Claude Code checks
   the rewrite against the tool's own result shape (for Bash: the `{ stdout, stderr, … }` object) and drops a
   mismatch without telling anyone but the debug log; tokenbrake returns the object, and `status` checks it.
-- Claude Code caps hook output strings at 10,000 characters; tokenbrake keeps its rewrite under that.
+- Claude Code caps hook output at 10,000 characters; tokenbrake keeps its rewrite under that. Whether the
+  cap applies to the replacement *string* or to the whole emitted JSON is not settled by measurement — the
+  guard currently assumes the JSON, which delivers less on escape-dense output but cannot be silently
+  dropped. See the note on `HOOK_OUTPUT_CAP` in `guard.js`.
 - For Bash, only successful tool calls pass through `PostToolUse`; a non-zero exit fires `PostToolUseFailure`,
   which tokenbrake has registered for since 0.2.2 and which Claude Code 2.1.261–2.1.267 ignores the
   replacement on, against its own hooks reference. So a failing command's output enters as Claude Code

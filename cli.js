@@ -1280,8 +1280,9 @@ function tuneReport() {
     /* --write changes ONE global tokenbrake.json, so when the evidence behind it was narrowed by --cwd or
        --session the header has to say so -- the preview render carries the filter and the apply must not
        drop it. `tune --cwd=oneproject --write` otherwise reads as a verdict on everything. */
+    const narrowed = [only ? '--cwd=' + only : null, want ? '--session=' + want : null].filter(Boolean).join(' ');
     console.log('Auto-tune --write -- ' + t.sessions + ' session(s), ' + t.guarded + ' with the guard'
-      + (only ? '  (evidence narrowed to --cwd=' + only + '; the config it writes is global)' : ''));
+      + (narrowed ? '  (evidence narrowed to ' + narrowed + '; the config it writes is global)' : ''));
     /* A tool-scoped knob is left alone: its measured record comes from the tools it is on for, and the only
        key --write knows how to set is the top-level one, which would turn it on everywhere else too. */
     const flatten = t.features.filter((f) => f.status === 'turn-on' && f.scoped);
@@ -1297,8 +1298,15 @@ function tuneReport() {
     const reviewNote = review.length ? ' It does not auto-disable: ' + review.map((f) => f.knob).join(', ')
       + ' measurably backfired -- turn ' + (review.length > 1 ? 'those' : 'it') + ' off by hand if you want (`tokenbrake tune` shows the backfire).' : '';
     if (!plan.length) {
-      console.log('  No feature has a clean MEASURED record to turn on. --write acts only on measured evidence, never an');
-      console.log('  estimate -- enable a "try"/"measure" feature yourself for a session first (`tokenbrake tune`), then re-run.' + reviewNote);
+      /* "Nothing qualified" and "everything that qualified was excluded" are different situations, and the
+         advice for the first is wrong for the second -- it read as "no feature has a clean record" directly
+         under "Left alone: ... ITS CLEAN RECORD is from before you turned it off". */
+      if (flatten.length || turnedOff.length) {
+        console.log('  Nothing left to write: every feature with a clean measured record is one of the above.' + reviewNote);
+      } else {
+        console.log('  No feature has a clean MEASURED record to turn on. --write acts only on measured evidence, never an');
+        console.log('  estimate -- enable a "try"/"measure" feature yourself for a session first (`tokenbrake tune`), then re-run.' + reviewNote);
+      }
       return;
     }
     /* Read the RAW file (not the defaults-merged cfg) as the merge base, so a default is never baked in. A
@@ -1375,12 +1383,16 @@ function tuneReport() {
   for (const f of t.features) {
     /* Consistent with --write above: a knob you set to false is reported, not recommended. Offering
        `Set "x": true` for something --write then declines to apply is the tuner disagreeing with itself. */
-    const set = f.disabled ? '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)'
+    const set = (f.disabled && !f.on) ? '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)'
+      : f.disabled ? '   (top-level "' + f.knob + '": false, but a "tools" entry turns it on -- it is running where that entry applies)'
       : (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
       : f.status === 'measure' ? '   Set "' + f.knob + '": true to measure it'
       : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
-    /* `[ON]` next to "you set this to false" is the same contradiction the set-line just lost. */
-    console.log('    ' + (f.disabled ? '[off]' : (mark[f.status] || '     ')) + ' ' + f.label + ' (' + f.knob + ')' + set);
+    /* `[ON]` next to "you set this to false" is the same contradiction the set-line just lost -- but only
+       when the feature really is off. `disabled` reads the top-level key while `on` also reads cfg.tools, so
+       `{"blobElide": false, "tools": {"Bash": {"blobElide": true}}}` -- which is how you scope the elider to
+       the shell -- is both at once, and it IS running. Defer to that. */
+    console.log('    ' + (f.disabled && !f.on ? '[off]' : (mark[f.status] || '     ')) + ' ' + f.label + ' (' + f.knob + ')' + set);
     console.log('        ' + evidence(f));
   }
 

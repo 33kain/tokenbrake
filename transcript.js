@@ -1087,7 +1087,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
      classified, rather than the same filter copied into each caller. An ABSENT readMaxBytes disables the signal
      (over: 0); an explicit 0 is honored (the guard takes 0 literally as "cap everything", so any uncapped read
      is over it) -- distinguished so a caller passing 0 is not silently treated as "no threshold". */
-  const overMax = o.readMaxBytes == null ? null : Number(o.readMaxBytes);
+  const overMax = o.readMaxBytes == null ? null : (Number.isFinite(Number(o.readMaxBytes)) ? Number(o.readMaxBytes) : null);
   const over = overMax == null ? 0 : reads.filter((r) => !r.capped && !r.ceiling && (r.bytes || 0) > overMax).length;
   return { reads, sized, over, n: reads.length, bytes: reads.reduce((t, x) => t + (x.bytes || 0), 0),
     files: new Set(reads.map((r) => normReadPath(r.file, parsed.cwd))).size,
@@ -1455,7 +1455,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
 
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
-  let capOver = 0, capFired = 0, guarded = 0;
+  let capOver = 0, capFired = 0, guarded = 0, ledgerGuarded = 0;
   /* Respect an explicit readMaxBytes including 0 (which the guard takes literally as "cap everything"); only a
      genuinely absent value falls back to the shipped default. */
   const readMaxBytes = cfg.readMaxBytes == null ? 60000 : Number(cfg.readMaxBytes);
@@ -1493,7 +1493,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
        registered, and the two are separate entries in settings.json. So a marker-only session (ledger rotated
        or deleted) cannot tell "the read-pre hook is missing" from "the evidence is missing", and reporting the
        first is the phantom defect this gate exists to prevent. */
-    if (g.via === 'ledger') capOver += u.over;
+    if (g.via === 'ledger') { ledgerGuarded++; capOver += u.over; }
     // reachPooled only uses the guarded sessions (filtered below), so skip the trimmedResults scan for the rest
     reachSessions.push({ parsed: p, trimmed: g.ran ? trimmedResults(p, led) : null, ran: g.ran });
   }
@@ -1564,12 +1564,21 @@ function autotune(parsedSessions, ledger, cfg, opts) {
      capOver is 0 by its own gate and capFired is 0 because no cap could fire, so the fall-through would report
      "dormant: no read reached readMaxBytes", asserting a measurement nothing performed and pointing the person
      away from the install that would actually help. */
-  const capVerdict = guarded === 0 ? 'unmeasured' : capOver > 0 ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
+  /* `unmeasured` covers both ways the cap can be un-judged, not just one. capOver is now gated on ledger
+     evidence, and capFired is structurally 0 without it too (unboundedReads marks a read capped only from a
+     ledger row), so a guarded session known ONLY by a transcript marker reaches neither counter -- and used
+     to fall through to "dormant: no read reached readMaxBytes", a flat statement about reads it never
+     examined, in a session that may hold five uncapped 100 KB whole-file reads. Both cases are the same
+     thing: nothing measured the cap here. */
+  const capVerdict = ledgerGuarded === 0 ? 'unmeasured' : capOver > 0 ? 'missing' : capFired > 0 ? 'firing' : 'dormant';
   const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict };
 
   const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [] };
   for (const f of features) {
-    if (f.status === 'turn-on') summary.turnOn.push(f.label);
+    /* The summary is the line people act on, so it follows the same exclusions as --write. A knob the person
+       set to false, or scoped to one tool, is reported on its own line and must not reappear in "Turn on:". */
+    if (f.status === 'turn-on' && (f.disabled || f.scoped)) summary.keep.push(f.label);
+    else if (f.status === 'turn-on') summary.turnOn.push(f.label);
     else if (f.status === 'try') summary.tryThese.push(f.label);
     else if (f.status === 'review') summary.review.push(f.label);
     else if (f.status === 'measure') summary.measure.push(f.label);
