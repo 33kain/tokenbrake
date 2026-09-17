@@ -2521,6 +2521,36 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('--compare: A and B named, cost row with the change', /A: arma0000\.\.\.  claude-opus-5/.test(cmp) && /B: armb0000\.\.\./.test(cmp) && /API cost, list price\s+\$2\.45\s+\$2\.38\s+-3%/.test(cmp), cmp.split('\n').find(l => /API cost/.test(l)));
   t('--compare: the rows the A/B rounds compared by hand', ['requests', 'cache-read tokens', 'output tokens', 'tool results entered', 'tool results carried', 'trimmed by the guard', 'repeat reads'].every(k => cmp.includes(k)));
   t('--compare: tool results entered halves, and the column says so', /tool results entered\s+2k\s+1k\s+-50%/.test(cmp), cmp.split('\n').find(l => /entered/.test(l)));
+  /* Split carried by tool class: a Read result and a Bash result must land in different classes, so the
+     change column can say whether the read cap or the shell trim cut the carried context, not one blend. */
+  const mk2 = (name, readChars, bashChars) => {
+    const L = [];
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'q1', uuid: 'q1', sessionId: name, cwd: '/w',
+      message: { model: 'claude-opus-5', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 },
+        content: [{ type: 'tool_use', id: 'u1', name: 'Read', input: { file_path: '/w/big.js' } }, { type: 'tool_use', id: 'u2', name: 'Bash', input: { command: 'npm test' } }, { type: 'tool_use', id: 'u3', name: 'Grep', input: { pattern: 'x', path: '/w' } }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: 'u1r', sessionId: name, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'u1', content: 'r'.repeat(readChars) }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: 'u2r', sessionId: name, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'u2', content: 'b'.repeat(bashChars) }] } }));
+    L.push(JSON.stringify({ type: 'user', uuid: 'u3r', sessionId: name, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'u3', content: 'g'.repeat(1000) }] } }));
+    L.push(JSON.stringify({ type: 'assistant', requestId: 'q2', uuid: 'q2', sessionId: name, cwd: '/w',
+      message: { model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: 'text', text: 'done' }] } }));
+    const f = join(dir, name + '.jsonl'); writeFileSync(f, L.join('\n') + '\n'); return f;
+  };
+  const twoA = mk2('twoa0000', 40000, 8000), twoB = mk2('twob0000', 1200, 8000);   // B: the Read shrank (cap); shell and the untrimmed Grep did not
+  const facts = T.sessionFacts(T.parseTranscript(twoA), []);
+  t('sessionFacts.byClass separates Read / shell / other, leaves MCP empty',
+    facts.byClass.Read.n === 1 && facts.byClass.shell.n === 1 && facts.byClass.other.n === 1 && facts.byClass.MCP.n === 0
+    && facts.byClass.Read.entered > facts.byClass.shell.entered, JSON.stringify(facts.byClass));
+  const cmp2 = T.renderCompare(T.parseTranscript(twoA), T.parseTranscript(twoB), []);
+  t('--compare splits BOTH entered and carried by tool class; present classes shown, MCP omitted',
+    /entered: Read/.test(cmp2) && /carried: Read/.test(cmp2) && /entered: shell/.test(cmp2) && /carried: shell/.test(cmp2)
+    && /entered: other/.test(cmp2) && /carried: other/.test(cmp2)
+    && !/entered: MCP/.test(cmp2) && !/carried: MCP/.test(cmp2),
+    cmp2.split('\n').filter(l => /entered:|carried:/.test(l)).join(' | '));
+  // change() must not render a signed zero: a sub-percent shrink (10000 -> 9995 tokens) rounds to +0%, not -0%
+  const zeroA = mk('zeroa000', 'claude-opus-5', { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }, 40000);
+  const zeroB = mk('zerob000', 'claude-opus-5', { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }, 39980);
+  const cmpz = T.renderCompare(T.parseTranscript(zeroA), T.parseTranscript(zeroB), []);
+  t('--compare: a sub-percent decrease renders +0%, never a signed -0%', !/-0%/.test(cmpz), cmpz.split('\n').find(l => /tool results entered/.test(l)));
   const r = cli(['report', '--compare', 'arma0000', 'armb0000'], PROJ);
   t('cli: report --compare resolves session prefixes', r.status === 0 && /Change is B against A/.test(r.stdout), (r.stdout + r.stderr).slice(0, 200));
   const r2 = cli(['report', '--compare', 'arma0000'], PROJ);
