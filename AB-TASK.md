@@ -3162,3 +3162,63 @@ direction — reads the first out/ path in a command, and leaves a Grep TOOL cal
 
 No default changed and no flag was added — a report reads the ledger, it does not
 touch what the guard withholds. tests +4 (639 → 643).
+
+## Measurement epoch — the harness previews Bash output, so the ledger's `saved` overstates CONTEXT saving above ~2 KB, 2026-09-17
+
+Not a run and not a guard change — this moves how we READ the ledger's savings on
+the shell path, after a live blobElide measurement (single user-scope install,
+guard `613517357d15`) exposed the mechanism.
+
+**The observation.** `cat` of a 71,473-byte minified bundle, the same file, twice:
+
+| | blobElide on | base trim only (blobElide + dedup off) |
+|---|---|---|
+| chars the guard SAW | 30,046 | 30,046 |
+| kept | 395 | 6,158 |
+| branch | `blob` | base shell trim (maxChars char-cut) |
+| what reached CONTEXT | the full 395-char descriptor | ~2 KB of raw minified head — identical to no guard |
+
+Two facts fall out. (1) **The guard never sees the whole file.** `chars` is 30,046
+against 71,473 bytes both times: the harness caps the Bash payload handed to the
+PostToolUse hook at ~30 K (the ceiling `guard.js` already notes) and persists the
+raw output to its own tool-results file. Every shell-path saving on this page is
+measured against that pre-truncated stream, not the original. (2) **The harness
+also previews the FINAL (post-guard) tool result to ~2 KB in context** and keeps
+the rest in the persisted file. The 6,158-char base trim showed in context as the
+same ~2 KB of minified head as no guard at all — invisible. blobElide's 395-char
+descriptor showed in full only because it is UNDER that ~2 KB floor.
+
+**The corrected blobElide figure.** The ledger books `saved = chars − kept =
+30,046 − 395 = 29,651 chars ≈ 7,413 tokens`. That is the guard's OUTPUT reduction,
+not its context reduction. What actually leaves context per call is bounded by the
+~2 KB preview floor (~512 tokens): no-guard and base-trim both spend ~512 tokens
+(previewed), blobElide spends ~99 (395 chars, under the floor). So blobElide's real
+per-call context saving is ~512 − 99 ≈ **~400 tokens** (compounding per carried
+turn), and the ledger `saved` overstates it by ~18×. blobElide's edge over the base
+trim is not the 15.6× output ratio — it is that it is the only shaper that gets
+UNDER the preview floor at all, swapping ~2 KB of unreadable minified head for a
+readable "withheld ~29 KB, saved to <path>" descriptor. A real but modest win, and
+largely qualitative (readable vs raw bytes) rather than a big token cut.
+
+**The question to resolve for brake 1.** If the harness previews any Bash result
+above ~2 KB, the always-on base shell trim also buys little IN CONTEXT for large
+Bash output: the harness would have previewed the raw output to ~2 KB anyway, and a
+trim that stays above the floor is invisible (run 2). A shell trim wins in context
+only when it (a) gets UNDER the floor, or (b) makes the visible ~2 KB more useful
+than the raw head — head/tail/flagged lines on a MULTI-line log, not a one-line
+blob. So where do the pooled brake-1 savings on this page actually come from — the
+**Bash trim**, or the **Read cap**? The Read cap (`readMaxBytes`, the "65 KB →
+60,359 chars" case) is a different path with no 2 KB preview: a capped Read
+genuinely keeps bytes out of context. Hypothesis to confirm before trusting the
+Bash side of the headline number: **brake 1's real context value in this harness
+lives mostly in Read-capping; the Bash trim's context win is largely subsumed by
+the harness preview except for under-floor cases like blobElide.** Resolve it by
+splitting a pooled `report --compare` result by tool — Read-path vs Bash-path
+carried tokens — rather than reading one blended saving.
+
+**Caveats.** (1) The ~2 KB preview is THIS harness/surface's Bash-output handling
+(cloud, Claude Code as run here); another surface may inject full Bash output,
+where the trim's context saving is real — a per-surface fact, not a universal one,
+so a `--compare` should record the surface. (2) n is tiny (one file, two runs); the
+MECHANISM is what this epoch records, not a rate. No default changed, no flag added
+— this is how to READ the ledger on the shell path, not what the guard withholds.
