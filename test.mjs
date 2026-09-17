@@ -1668,6 +1668,31 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('net is gross saved-carried minus what was pulled back', a.net === a.savedCarried - a.recoveredCarried, JSON.stringify({ net: a.net, s: a.savedCarried, r: a.recoveredCarried }));
   t('a pull-back with a positive net verdicts net positive', a.verdict === 'net positive', a.verdict + ' net=' + a.net);
 
+  /* The pull-back can come through a SHELL command, not just the Read tool. readFileOf lifts the single-file
+     read shapes EXCERPT_CMD recognises (bare cat / sed -n / head / tail / non-recursive grep) into `file`, so
+     OUT_FILE already caught those. The gap was every OTHER shell read of the out/ file -- piped or compound,
+     where the pipe makes EXCERPT_CMD reject the command, so `file` is null and the path rides only in `what`,
+     tested against SHOW_CMD alone. The harness pipes by default, so this was the wide leak, scored as clean.
+     Each fixture is built through the real readFileOf/describe and asserts file === null, so it reproduces what
+     parseTranscript emits for a piped read -- failing the pre-fix loop (backfired 0), passing now. */
+  const shellPull = (cmd) => { const b = JSON.parse(JSON.stringify(base));
+    b.results[3] = { id: 'toolu_SH', name: 'Bash', file: T.readFileOf('Bash', { command: cmd }),
+      what: T.describe('Bash', { command: cmd }), marker: false, tokens: 3000, afterReq: 3 };
+    return { audit: T.backfireAudit(b, ledger), file: b.results[3].file, what: b.results[3].what }; };
+  for (const cmd of ["sed -n '1,40p' " + outPath(B) + ' | head', 'grep hunk ' + outPath(B) + ' | head -20', 'cat ' + outPath(B) + ' | tail -5']) {
+    const { audit: as, file, what } = shellPull(cmd);
+    t('a piped shell read of the saved out/ file is a pull-back, not clean: ' + cmd.slice(0, 14),
+      file === null && /tokenbrake[\\/]out[\\/]/.test(what)   // faithful: readFileOf lifts nothing, the path is only in `what`
+      && as.backfired === 1 && as.withholds.find(w => w.id === B).recovered && !as.withholds.find(w => w.id === A).recovered
+      && as.recoveredEvents === 1 && as.recoveredCarried > 0,
+      JSON.stringify({ file, backfired: as.backfired, recoveredCarried: as.recoveredCarried }));
+  }
+  /* And a piped shell read of an out/ path whose stem is no withhold's attributes to nothing -- counted as an
+     unmatched pull-back (the cautious direction), never cross-attributed to A/B/C. */
+  const asMiss = shellPull('sed -n 1,5p /cfg/tokenbrake/out/' + stem(B).slice(0, -1) + 'Z.txt | head').audit;
+  t('a shell read of an unknown out/ stem is counted but not cross-attributed',
+    asMiss.backfired === 0 && asMiss.unmatchedEvents === 1, JSON.stringify({ b: asMiss.backfired, u: asMiss.unmatchedEvents }));
+
   /* An out/ read whose stem differs by even one char attributes to nothing -- exact equality, no containment. */
   const near = JSON.parse(JSON.stringify(base));
   near.results[3] = { id: 'toolu_R', name: 'Read', file: '/cfg/tokenbrake/out/' + stem(B).slice(0, -1) + 'Z.txt', what: '', marker: false, tokens: 3000, afterReq: 3 };

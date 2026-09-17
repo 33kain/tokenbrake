@@ -746,6 +746,10 @@ function recoveryReads(parsed) {
    instead. Read caps are reported apart too, as a softer signal: a bounded re-read after a cap is partly the
    behaviour the cap asks for, and trimSavings never counted a saving for them to net against. */
 const OUT_FILE = /(?:^|[\\/])tokenbrake[\\/]out[\\/]([^\\/]+?)\.txt$/;
+/* The same saved-output path embedded in a shell command rather than standing alone as a Read's path: no `$`
+   anchor (the path sits mid-line, e.g. `sed -n '1,40p' <path> | head`), a leading boundary so a stray
+   `xtokenbrake` cannot match, and the stem in the guard's own sanitized charset ([A-Za-z0-9_-], per saveOut). */
+const OUT_IN_CMD = /(?:^|[\s'"=([\\/])tokenbrake[\\/]out[\\/]([A-Za-z0-9_-]+)\.txt/;
 const SHOW_CMD = /(?:tokenbrake|cli\.js)\s+show\s+(\S+)/;
 const MIN_WITHHOLDS = 3;   // a chosen confidence floor: below it a "rate" is not asserted, only a measured loss
 function backfireVerdict(n, net, backfired, min) {
@@ -787,19 +791,28 @@ function backfireAudit(parsed, ledgerRecs, opts) {
       stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
   }
 
-  /* A pull-back: a later result that read a saved output back into context. Two shapes, both the guard's own
-     doing -- the out/ file it wrote (ref = its stem), or `tokenbrake show <arg>` (ref = the argument, which
-     may be a stem, a prefix, or a full path, exactly as `show` itself accepts). `foot` is the token-read
-     footprint on the same basis as savedCarried: what re-entered (tokens) plus what it was then carried
-     through. This is a LOWER bound on pull-backs: a Grep TOOL call on the saved file names the path in the
-     tool's `path` input, which parseTranscript does not surface as `file`, so that one door is not counted
-     -- which biases the net optimistic, the direction a gate should be cautious about, so treat a clean
-     result as "none seen", not "none happened". */
+  /* A pull-back: a later result that read a saved output back into context. Three shapes, all the guard's own
+     doing -- the out/ file read by the Read/Edit tool (path in `file`), the out/ file read by a SHELL command
+     whose shape EXCERPT_CMD does not recognise (path in the command text `what`), or `tokenbrake show <arg>`
+     (ref = the argument, a stem, a prefix, or a full path, exactly as `show` accepts). readFileOf lifts the
+     single-file read shapes EXCERPT_CMD DOES match -- a bare cat / `sed -n 'N,Mp'` / head / tail / non-recursive
+     grep -- into `file`, so OUT_FILE already caught those; what stayed uncounted was every OTHER way a shell
+     reads the file: piped or compound (`sed ... | head`, `cat ... | tail`), a recursive grep, a sed/grep form
+     outside that narrow set. For those `file` is null and only `what` carries the path, and the harness pipes by
+     default, so this was a wide leak -- a real backfire scored as clean. `foot` is the token-read footprint on
+     the same basis as savedCarried: what re-entered (tokens) plus what it was then carried through. Still a
+     LOWER bound, tighter now, and where it is not exact it errs the cautious way: the shell match keys on the
+     out/ path being NAMED in the command, which is a read wherever the model holds that path (that is why it
+     holds it), so it counts the real pull-backs and over-counts only a rare non-read reference (`rm`/`ls`/`echo`
+     of the path) -- an over-count, never an under-count, there. It reads the FIRST out/ path in a command, so a
+     single command pulling back two withheld out/ files counts one; and a Grep TOOL call on the saved file,
+     whose `path` input surfaces as neither `file` nor `what`, is still uncounted. Both are optimistic residuals,
+     so a clean result still means "none seen", not "none happened". */
   const recoveries = [];
   for (const r of parsed.results) {
     let ref = null, kind = null;
-    const mf = r.file && OUT_FILE.exec(String(r.file));
-    if (mf) { ref = mf[1]; kind = 'out-file'; }
+    const m = (r.file && OUT_FILE.exec(String(r.file))) || OUT_IN_CMD.exec(String(r.what || ''));   // out/ file read: Read tool, or a shell command that names it
+    if (m) { ref = m[1]; kind = 'out-file'; }
     else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]); kind = 'show'; } }
     if (!kind) continue;
     recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false });
