@@ -678,10 +678,18 @@ function handlePost(input, cfg) {
       const prior = h ? dedupLookup(input.session_id, h) : null;
       if (prior) {
         const pointer = `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
-        const updated = isMcp ? mcp.rebuild(pointer) : wrapShell(pointer);
-        log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
-        emit(payload(evName, updated));
-        return;
+        /* The pointer is ~110 characters, but the PAYLOAD carrying it need not be small: for MCP,
+           rebuild() keeps every non-text sibling block (an image, a resource) and spreads the original
+           response around it. Measured, a duplicate screenshot result emitted 40,306 characters against a
+           9,500 ceiling -- dropped silently, the whole duplicate entering context while the ledger booked
+           chars - kept as saved. So this branch measures like every other rewrite, and when the pointer
+           cannot be delivered it claims nothing and falls through to the ordinary handling below. */
+        const dedupPayload = payload(evName, isMcp ? mcp.rebuild(pointer) : wrapShell(pointer));
+        if (fitsCap(dedupPayload)) {
+          log({ ...rec, chars: dtext.length, dedup: true, sameAs: prior.id, kept: pointer.length });
+          emit(dedupPayload);
+          return;
+        }
       }
       if (h) { const saved = saveOut(input, dtext); if (saved) dedupRecord(input.session_id, { h, id: path.basename(saved).replace(/\.txt$/, ''), chars: dtext.length }); }
     }
@@ -740,7 +748,6 @@ function handlePost(input, cfg) {
     if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
       const saved = saveOut(input, text);
       const keep = cfg.blobKeepChars;   // the ceiling is emitFitted's job alone; blobKeepChars means what it says
-      const head = text.slice(0, keep);
       const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
       /* Measured like the others. This branch's kept head is base64 or minified source BY CONSTRUCTION, so it
          is the most escape-dense body the guard ever emits -- `blobKeepChars` is 160 by default, which is why
@@ -806,8 +813,23 @@ function handlePost(input, cfg) {
          11,751. Shaping is the one rewrite that can be reached with a single knob on stock defaults, and a
          dropped shaping is exactly the "measurement of something the model never received" the note above
          warns about -- so it is measured too. The text is already below maxChars, so the fold only ever
-         engages on escaping. */
-      emitFitted(evName, wrapShell, (b) => text.slice(0, b));
+         engages on escaping.
+         When it does engage it must SAY so. A bare slice delivered a build log that stopped mid-token with
+         no marker, no out/ copy and a ledger row claiming shapedTo -- measured, 943 characters gone from a
+         9,428-character shaped body, the silent loss this whole change exists to remove, inverted from
+         "emitted nothing" into "emitted less than it claimed". The note is charged against the budget, so
+         the body plus its note still fits, and out/ is written only on the pass that actually cuts. */
+      let shapeSaved = null;
+      const renderShaped = (b) => {
+        if (text.length <= b) return text;
+        if (shapeSaved === null) shapeSaved = saveOut(input, text) || '';
+        const note = `\n\n[tokenbrake] ${(text.length - b).toLocaleString()} characters cut to fit the hook output cap.`
+          + (shapeSaved ? ` Full output saved to ${shapeSaved} — Read it if you need the rest.` : '');
+        const body = text.slice(0, Math.max(0, b - note.length)) + note;
+        return body;
+      };
+      const shapedOut = emitFitted(evName, wrapShell, renderShaped);
+      log({ ...rec, shaped: true, saved: shapeSaved || null, ...outcome(shapedOut) });
     }
     return;
   }
@@ -832,7 +854,7 @@ function handlePost(input, cfg) {
        measure the real payload and cut the body by the overage. The note is rebuilt each pass, never
        sliced: a note claiming 300 lines while delivering 117 tells the model something false about its own
        context, and a note cut in half tells it nothing. Bounded passes, and a body that will not shrink
-       emits as-is -- this is the guard, it fails open. */
+       emits NOTHING -- the original passes through untouched, which is how this fails open. */
 /* The note counts CHARACTERS as well as lines. Lines alone are a lie on output that has few of them:
        a 100,000-char minified bundle read whole is one line, the fold cuts it to ~9,000 chars mid-line, and
        a lines-only note reads "the first 1 of 1 lines" -- telling the model the whole file is present while

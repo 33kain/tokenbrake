@@ -9,7 +9,7 @@
    full-size while `status` said "installed". Nothing in a sandbox could see
    that; this file pins the shape so it cannot regress unnoticed. */
 
-import { spawnSync, spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -2054,6 +2054,60 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const onCr = run(cr, { shapeFilters: true });
   t('a carriage-return redraw keeps its last frame only',
     onCr.includes('100% done') && !onCr.includes('  5%'), onCr.split('\n').filter(l => /progress/.test(l)).join(' | ').slice(0, 120));
+}
+
+/* Two branches that rewrote a body without measuring what they were about to emit. Both were found by
+   /code-review on the cap fix itself and both are the same class it exists to close: the model receives
+   something other than what the ledger says it received. */
+{
+  console.log('\n-- rewrites that must measure, and say what they cut');
+
+  /* SHAPED: the only rewrite reachable with one knob on stock defaults. It cuts only when escaping pushes an
+     under-maxChars body past the ceiling -- and when it cut, it cut silently. Measured before the fix: a
+     9,428-character shaped body delivered 8,485 characters, ending mid-token, with no marker, no out/ copy,
+     and a ledger row still claiming shapedTo: 9,428. */
+  const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shapecut-'));
+  writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify({ shapeFilters: true, maxChars: 100000 }));
+  const redraw = Array.from({ length: 40 }, (_, i) => `\x1b[32m[${'='.repeat(Math.max(3, i)).padEnd(40)}] ${i * 2}% - loading package ${i}\x1b[0m`);
+  const quoteDense = Array.from({ length: 70 }, (_, i) => `[build] "module" "${i}" resolved "node_modules/@scope/pkg-${i}/dist/index.js" -> "ok" "hash=${'x'.repeat(40)}"`);
+  const rs = spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: 'shapecut', tool_use_id: 'toolu_shapecut_1', tool_name: 'Bash',
+      tool_input: { command: 'npm run build' }, tool_response: bashResp(redraw.concat(quoteDense).join('\n')) }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+  const so = parse(rs.stdout);
+  const sOut = so && so.hookSpecificOutput && so.hookSpecificOutput.updatedToolOutput;
+  const sBody = sOut && typeof sOut.stdout === 'string' ? sOut.stdout : '';
+  t('a shaped body cut to fit the ceiling says so, rather than stopping mid-token',
+    /\[tokenbrake\] [\d,]+ characters cut to fit the hook output cap\./.test(sBody), JSON.stringify(sBody.slice(-120)));
+  t('and the whole emitted payload is under the ceiling', rs.stdout.length <= 9500, `emitted=${rs.stdout.length}`);
+  const sRows = readFileSync(join(dir, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  const sRow = sRows[sRows.length - 1];
+  t('and the ledger records what was DELIVERED, not just what shaping produced',
+    sRow.kept === sBody.length && sRow.shapedTo > sRow.kept, JSON.stringify({ shapedTo: sRow.shapedTo, kept: sRow.kept }));
+  t('and names a saved copy the model can read back', !!sRow.saved && existsSync(sRow.saved), String(sRow.saved));
+  rmSync(dir, { recursive: true, force: true });
+
+  /* DEDUP: the pointer is ~110 characters, but for MCP rebuild() keeps every non-text sibling block, so the
+     PAYLOAD carrying it need not be small. Measured before the fix: a repeated screenshot result emitted
+     40,306 characters against the 9,500 ceiling -- dropped silently by the host, the whole duplicate
+     entering context, while the ledger booked chars - kept as a saving. */
+  const ddir = mkdtempSync(join(tmpdir(), 'tokenbrake-dedupcap-'));
+  writeFileSync(join(ddir, 'tokenbrake.json'), JSON.stringify({ dedup: true }));
+  const mcpResp = { content: [
+    { type: 'text', text: 'the same tool result, twice in one session.\n'.repeat(40) },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(40000) } } ] };
+  const callMcp = (n) => spawnSync(process.execPath, ['./guard.js', 'post'], {
+    input: JSON.stringify({ session_id: 'dedupcap', tool_use_id: 'toolu_dedupcap_' + n,
+      tool_name: 'mcp__screenshot__capture', tool_input: {}, tool_response: mcpResp }),
+    encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: ddir } });
+  callMcp(1);
+  const r2 = callMcp(2);
+  t('a dedup pointer whose payload cannot fit is not emitted over the ceiling',
+    r2.stdout.length <= 9500, `emitted=${r2.stdout.length}`);
+  const dRows = readFileSync(join(ddir, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  t('and no saving is booked for a pointer the model never received',
+    !dRows.some(r => r.dedup && r.kept != null), JSON.stringify(dRows.filter(r => r.dedup)));
+  rmSync(ddir, { recursive: true, force: true });
 }
 
 /* Binary-Blob Elider (narrowing 3, off by default): shell output that is one long encoded/minified run --
