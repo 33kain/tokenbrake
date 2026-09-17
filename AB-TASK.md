@@ -3126,3 +3126,39 @@ tell a host spill from a refused emission.
 
 No default changed and no flag was added — both fixes restore behaviour the code
 already documented, and the excerpt fix is a no-op at shipped defaults. 641 checks.
+
+## Measurement epoch — the backfire audit now counts piped shell pull-backs, 2026-09-17
+
+Not a run, and not a guard change — this one moves the AUDIT, not what enters
+context. The backfire auditor's recovery detection scored a pull-back only when
+the withheld out/ file was read back through the Read tool, through `tokenbrake
+show`, or through a shell read shape `EXCERPT_CMD` recognises (a bare cat /
+`sed -n 'N,Mp'` / head / tail / non-recursive grep, which populate `file`). A read
+through a PIPED or compound shell command — `sed ... | head`, `cat ... | tail`, a
+recursive grep — carries the out/ path only in the command text and went
+uncounted. Since the harness pages a file with sed/grep by default, that was the
+common way a withheld output comes back, so the audit undercounted pull-backs and
+overstated net.
+
+Measured live on this machine: an 8,273 → 4,892 char withhold, then ~3,513 chars
+pulled back through `sed` on the out/ file, reported as "clean — backfire rate
+0%". Roughly a wash, plausibly net negative, booked as a clean saving.
+
+**What this invalidates.** Only the backfire audit's verdict and net, not any
+saving. `trimSavings` and `savedCarried` are unchanged. What moves is
+`recoveredCarried` (up, as real pull-backs are now netted) and therefore `net`
+(down) and the `clean` / `net positive` / `backfired` verdict. So a backfire
+verdict taken before this fix is only a lower bound on pull-backs: **re-run
+`report --backfire` / `tune` over the SAME ledger post-fix before acting on a
+"clean".** Because this page gates default-flips on measured net, an old "clean"
+is not evidence a feature did not backfire — it is evidence no pull-back was
+SEEN, and the seen set just widened.
+
+**What it still does not reach.** The match keys on the out/ path being NAMED, so
+it over-counts a rare non-read reference (`rm`/`echo` of the path) — the cautious
+direction — reads the first out/ path in a command, and leaves a Grep TOOL call's
+`path` input uncounted; all optimistic residuals, so a clean result still means
+"none seen", not "none happened".
+
+No default changed and no flag was added — a report reads the ledger, it does not
+touch what the guard withholds. tests +4 (639 → 643).
