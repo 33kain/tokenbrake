@@ -2747,6 +2747,107 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       R({ name: 'Bash', what: 'base64', chars: 6000, lines: 1, carried: 9999 })] };
   t('a measured backfire wins over heavy opportunity (leave-off, not try)', fBlob(T.autotune([mixed], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
 
+  /* The two READ narrowings log ev:'read-delta' / 'read-reread', which backfireAudit counts as fired but never
+     turns into a withhold (those come from ev:'post' rows, which carry a saved copy to price). So `withholds`
+     alone reads as "nothing has fired" in a session where a narrowing fired three times, and the caller printed
+     "Nothing withheld yet ... no context-narrowing feature has fired here" directly above "fired 3x". */
+  const rrLedger = ['/w/a.js', '/w/b.js', '/w/c.js'].map((f, i) => ({ ev: 'read-reread', session: sid, tool: 'Read', what: f, limit: 5, t: 100 + i }));
+  const rrTune = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [], results: [] }], rrLedger, { reReadElide: true });
+  t('a session where only read narrowings fired is not reported as nothing having fired',
+    rrTune.withholds === 0 && rrTune.narrowings === 3, `withholds=${rrTune.withholds} narrowings=${rrTune.narrowings}`);
+  t('a session with neither is still nothing withheld', (() => { const z = T.autotune([blobby(1, 100, 1)], [], {}); return z.withholds === 0 && z.narrowings === 0; })());
+
+  /* guard.js toolConfig() shallow-merges cfg.tools[<tool>] over every knob, so a knob can be ON for one tool
+     and absent at the top level. Reading only the top level called such a feature "off", credited it with the
+     measured record its own firings produced, and recommended a TOP-LEVEL true -- widening a deliberately
+     tool-scoped setting to every other tool on that one tool's evidence. */
+  const scopedOn = T.autotune([cleanBlob()], cleanLedger, { tools: { Bash: { blobElide: true } } });
+  t('a knob set only under tools.<tool> reads as ON, not off', fBlob(scopedOn).on === true && fBlob(scopedOn).scoped === true,
+    `on=${fBlob(scopedOn).on} scoped=${fBlob(scopedOn).scoped}`);
+  t('and so its clean record is keep, never a turn-on that would flatten it', fBlob(scopedOn).status === 'keep', fBlob(scopedOn).status);
+  t('and the summary reports it as excluded rather than offering it, or filing it under keep',
+    !scopedOn.summary.turnOn.includes('Binary-Blob Elider') && !scopedOn.summary.excluded.includes('Binary-Blob Elider'),
+    JSON.stringify({ turnOn: scopedOn.summary.turnOn, excluded: scopedOn.summary.excluded }));
+  t('a tools entry turning a globally-on knob OFF still reads as on where it is on',
+    fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: true, tools: { Read: { blobElide: false } } })).on === true);
+  t('a plain top-level knob is not marked scoped', fBlob(onKeep).scoped === false && fBlob(onClean).scoped === false);
+
+  /* A knob you set to false keeps its clean MEASURED record -- those firings happened while it was on, before
+     you turned it off -- so the status stays the truth about what the feature did, and `disabled` carries the
+     decision separately. The caller uses it to stop offering, and --write to stop applying, a turn-on. */
+  const offByHand = T.autotune([cleanBlob()], cleanLedger, { blobElide: false }, { disabled: ['blobElide'] });
+  t('a knob written false is marked disabled while keeping its measured record',
+    fBlob(offByHand).disabled === true && fBlob(offByHand).status === 'turn-on' && fBlob(offByHand).measured.fired === 3,
+    `disabled=${fBlob(offByHand).disabled} status=${fBlob(offByHand).status}`);
+  t('a knob merely absent from the file is not marked disabled', fBlob(onClean).disabled === false);
+  /* The footer is the line people act on, so it cannot say "Turn on: X" for a knob the per-feature line marks
+     [off] and --write refuses to set. It gets its OWN bucket: folding it into `keep` would make that list mean
+     "already on, keep it" and "off, not being offered" at the same time, which reads exactly backwards. */
+  t('the summary does not offer a knob the person turned off, and does not file it under keep',
+    !offByHand.summary.turnOn.includes('Binary-Blob Elider')
+    && offByHand.summary.excluded.includes('Binary-Blob Elider')
+    && !offByHand.summary.keep.includes('Binary-Blob Elider'),
+    JSON.stringify({ turnOn: offByHand.summary.turnOn, excluded: offByHand.summary.excluded, keep: offByHand.summary.keep }));
+  t('and `offer` carries why, so every caller answers the precedence question the same way',
+    offByHand.features.find((f) => f.key === 'blobElide').offer === 'user-off'
+    && onClean.features.find((f) => f.key === 'blobElide').offer === 'turn-on'
+    && onKeep.features.find((f) => f.key === 'blobElide').offer === null,
+    JSON.stringify(offByHand.features.map((f) => f.key + ':' + f.offer)));
+
+  /* `status === 'turn-on' && scoped` is reachable only when a tools entry sets the knob FALSE with no
+     top-level key: a tools entry setting it true makes on() true, which makes decide() return 'keep'. The
+     fixture that used the true shape never reached the exclusion at all. */
+  const scopedOff = T.autotune([cleanBlob()], cleanLedger, { tools: { Bash: { blobElide: false } } });
+  t('a knob scoped false for one tool with no top-level key is a scoped turn-on, the case --write declines',
+    fBlob(scopedOff).status === 'turn-on' && fBlob(scopedOff).scoped === true && fBlob(scopedOff).offer === 'scoped',
+    JSON.stringify({ status: fBlob(scopedOff).status, scoped: fBlob(scopedOff).scoped, offer: fBlob(scopedOff).offer }));
+  t('autotune without the opts argument still works (disabled defaults to none)',
+    fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: false })).disabled === false);
+
+  /* capOver decides the "read-pre hook may be missing" verdict, so it must rest on evidence that the read hook
+     could have run. A transcript MARKER proves only that the PostToolUse hook fired -- the two are separate
+     entries in settings.json -- so a marker-only session (ledger rotated or deleted) cannot tell a missing
+     read hook from missing evidence, and calling it "missing" is the phantom defect the gate exists to stop. */
+  /* Over readMaxBytes (60,000) but under 0.9 x HOST_READ_CEILING (90,000): past that a read is classified
+     'near' the host's own ceiling and excluded from `over`, so a bigger number would test nothing. */
+  const hugeRead = R({ name: 'Read', file: '/w/huge.js', what: '/w/huge.js', whole: true, chars: 80000, tokens: 20000 });
+  const markerOnly = { sessionId: 'marker01', cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: 'toolu_M1', what: 'cat x', marker: true, tokens: 10, afterReq: 0 }), hugeRead] };
+  const markerTune = T.autotune([markerOnly], [], {});
+  /* Not "missing", and not "dormant" either: capOver is gated on ledger evidence and capFired is structurally
+     0 without it, so nothing here examined the reads at all -- and this session holds an 80,000-char uncapped
+     whole-file read, which "dormant: no read reached readMaxBytes" would flatly deny. */
+  t('a marker-only session reports the read cap as unmeasured, not missing and not dormant',
+    markerTune.guarded === 1 && markerTune.readCap.verdict === 'unmeasured' && markerTune.readCap.over === 0,
+    `guarded=${markerTune.guarded} verdict=${markerTune.readCap.verdict} over=${markerTune.readCap.over}`);
+  /* The two ways to reach `unmeasured` want opposite advice -- install the guard, versus the ledger evidence
+     is gone and re-installing changes nothing -- and "no pooled session ran the guard" would contradict the
+     "N with the guard" the header prints for a marker-only pool. */
+  t('and says which kind of unmeasured it is', markerTune.readCap.why === 'no-ledger', String(markerTune.readCap.why));
+  /* The same session WITH a ledger row is real evidence, and must still raise it. */
+  const withLedger = T.autotune([{ ...markerOnly, sessionId: 'ledger01' }],
+    [{ ev: 'post', session: 'ledger01', id: 'toolu_M1', tool: 'Bash', chars: 30000, kept: 200 }], {});
+  t('the same session with ledger evidence still reports the cap verdict from it',
+    withLedger.guarded === 1 && withLedger.readCap.over === 1 && withLedger.readCap.verdict === 'missing', `verdict=${withLedger.readCap.verdict} over=${withLedger.readCap.over}`);
+  t('a malformed tools value cannot throw', (() => {
+    for (const bad of [null, 'x', 5, [], { Bash: null }, { Bash: 'x' }, { Bash: [] }]) {
+      const r = T.autotune([cleanBlob()], cleanLedger, { tools: bad });
+      if (!r || !r.features.length) return false;
+    }
+    return true;
+  })());
+
+  /* The read cap's three verdicts are all statements about a guard that RAN. With no guarded session pooled --
+     a fresh install, or --cwd onto a project where it was never installed -- capOver is 0 by its own gate and
+     capFired is 0 because no cap could fire, so the fall-through claimed "dormant: no read reached
+     readMaxBytes", asserting a measurement nothing performed. */
+  const unguarded = T.autotune([blobby(4, 6000, 25)], [], { blobElide: false });
+  t('with no guarded session pooled the read cap is unmeasured, not dormant',
+    unguarded.guarded === 0 && unguarded.readCap.verdict === 'unmeasured' && unguarded.readCap.why === 'no-guard',
+    `guarded=${unguarded.guarded} verdict=${unguarded.readCap.verdict} why=${unguarded.readCap.why}`);
+  t('a guarded session whose reads all stayed under readMaxBytes is still dormant',
+    onKeep.guarded > 0 && onKeep.readCap.verdict === 'dormant', `guarded=${onKeep.guarded} verdict=${onKeep.readCap.verdict}`);
+
   // ---- opportunity estimators (units) ----
   const P = (results) => ({ cwd: '/w', results });
   const bo = T.blobOpportunity(P([
@@ -2895,7 +2996,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const malformed = '{ "maxChars": 5000, oops }';
   writeFileSync(cfg3Path, malformed);
   const rwBad = cli3(['tune', '--write']);
+  /* A read failure is not a parse failure: reporting EISDIR as "is not valid JSON" sends the person to edit a
+     file that is well-formed, or in this case is not a file at all. */
+  const dirAsCfg = join(cfg3, 'tokenbrake.json');
+  rmSync(dirAsCfg, { force: true });
+  mkdirSync(dirAsCfg, { recursive: true });
+  const rwDir = cli3(['tune', '--write']);
+  t('tune --write names a read failure as a read failure, not as invalid JSON',
+    rwDir.status === 0 && /could not be read/.test(rwDir.stdout) && !/is not valid JSON/.test(rwDir.stdout),
+    rwDir.stdout.split('\n').find((l) => /could not be read|not valid JSON/.test(l)) || '(no refusal)');
+  rmSync(dirAsCfg, { recursive: true, force: true });
+  writeFileSync(cfg3Path, malformed);   // restore what this block displaced: the next assertion reads it back
+
   t('tune --write aborts on a malformed config instead of wiping it', rwBad.status === 0 && /not valid JSON/.test(rwBad.stdout) && readFileSync(cfg3Path, 'utf8') === malformed, rwBad.stdout.split('\n').find(l => /valid JSON/.test(l)) || '(no abort)');
+
+  /* Valid JSON is not enough: every one of these parses, and each spreads into an empty (or index-keyed)
+     merge base, so before the type check --write replaced the file with nothing but the flipped knobs --
+     the same data loss the malformed-file abort above exists to prevent, through a different door. */
+  for (const bad of ['null', '[]', '"blobElide"', '5']) {   // the distinct shapes: null, array, string, number
+    writeFileSync(cfg3Path, bad);
+    const r = cli3(['tune', '--write']);
+    t(`tune --write refuses a config whose JSON root is not an object: ${bad}`,
+      r.status === 0 && /is not a JSON object/.test(r.stdout) && readFileSync(cfg3Path, 'utf8') === bad,
+      readFileSync(cfg3Path, 'utf8') === bad ? (r.stdout.split('\n').find(l => /JSON object/.test(l)) || '(no refusal)') : 'FILE WAS REWRITTEN: ' + readFileSync(cfg3Path, 'utf8'));
+  }
 
   writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));   // a pre-existing key that must survive the merge
   const rw = cli3(['tune', '--write']);
@@ -2919,8 +3043,110 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const rw3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune', '--write'], { encoding: 'utf8', env: e4 });
   t('tune --write writes nothing when there is only opportunity, no measured record', rw3.status === 0 && /No feature has a clean MEASURED record to turn on/.test(rw3.stdout) && !existsSync(join(cfg4, 'tokenbrake.json')), rw3.stdout.split('\n')[1] || '');
 
+  /* --write can only set the TOP-LEVEL key, so a knob the person scoped to one tool must be left alone rather
+     than flattened onto every other tool from that one tool's evidence. And because the config it writes is
+     global, a pool narrowed by --cwd has to say so in the header. */
+  /* The tools entry must set it FALSE: setting it true makes the feature read as on, which makes the verdict
+     `keep`, which never reaches --write's plan at all. The earlier fixture used the true shape, so this branch
+     and its message were never executed and the assertion passed against unmodified code. */
+  writeFileSync(cfg3Path, JSON.stringify({ tools: { Bash: { blobElide: false } } }));
+  const rwScoped = cli3(['tune', '--write']);
+  t('tune --write leaves a tool-scoped knob alone instead of flattening it to the top level',
+    rwScoped.status === 0 && JSON.parse(readFileSync(cfg3Path, 'utf8')).blobElide === undefined,
+    readFileSync(cfg3Path, 'utf8'));
+  t('and says why it left it', /Left alone: "blobElide" is set per-tool/.test(rwScoped.stdout),
+    rwScoped.stdout.split('\n').find((l) => /Left alone|No feature/.test(l)) || '(no line)');
+  /* `[ON]` beside "--write will not set this" is the same contradiction the user-off case was fixed for: a
+     scoped turn-on is reachable only when a tools entry sets the knob false, so it is off too. */
+  const scopedPrev = cli3(['tune']).stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('a tool-scoped turn-on is not marked [ON] either, and points at the tools entry',
+    !/\[ON\]/.test(scopedPrev) && /set per-tool under "tools"/.test(scopedPrev), scopedPrev.trim());
+
+  /* The firings that earn a clean record happened while the feature was ON, so a knob you then set to false
+     still looks like a turn-on candidate. --write must not flip it back, and the preview must not offer it --
+     recommending what --write declines is the tuner disagreeing with itself. */
+  writeFileSync(cfg3Path, JSON.stringify({ blobElide: false, maxChars: 5000 }));
+  const rwOff = cli3(['tune', '--write']);
+  t('tune --write does not re-enable a feature the person set to false',
+    rwOff.status === 0 && JSON.parse(readFileSync(cfg3Path, 'utf8')).blobElide === false,
+    readFileSync(cfg3Path, 'utf8'));
+  t('and says it left it alone, and why', /Left alone: "blobElide" is set to false in your config/.test(rwOff.stdout),
+    rwOff.stdout.split('\n').find((l) => /Left alone|No feature/.test(l)) || '');
+  const rPrev = cli3(['tune']);
+  const prevLine = rPrev.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('and the preview reports it rather than recommending it',
+    !/Set "blobElide": true/.test(prevLine) && /false in your config/.test(prevLine), prevLine.trim());
+  /* Routing an excluded turn-on out of summary.turnOn is only half the fix: the footer is the line people act
+     on, and before this it said nothing at all about a feature with a clean measured record. */
+  t('and the summary footer still names it, rather than dropping it silently',
+    /Would turn on, but your config says otherwise: Binary-Blob Elider/.test(rPrev.stdout),
+    (rPrev.stdout.split('\n').find((l) => /Would turn on, but|Turn on:|Nothing to change/.test(l)) || '(no summary line)').trim());
+
+  /* An empty plan because everything qualified and was then excluded is a different situation from nothing
+     qualifying, and the advice for the second ("go enable a try feature and measure it") is wrong for the
+     first -- it printed directly under "Left alone: ... ITS CLEAN RECORD is from before you turned it off". */
+  t('an empty plan from exclusions does not claim no feature has a clean record',
+    /Nothing left to write: every feature with a clean measured record is one of the above/.test(rwOff.stdout)
+    && !/No feature has a clean MEASURED record/.test(rwOff.stdout),
+    rwOff.stdout.split('\n').find((l) => /Nothing left to write|No feature has/.test(l)) || '');
+
+  /* --session narrows the evidence exactly as --cwd does, and the header claimed to cover both. */
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
+  const rwSess = cli3(['tune', '--session=tunewrite01', '--write']);
+  t('tune --session ... --write discloses the narrowing too',
+    /evidence narrowed to --session=tunewrite01; the config it writes is global/.test(rwSess.stdout),
+    rwSess.stdout.split('\n')[0] || '');
+  /* And the preview, which --write's comment claims already carries the filter. */
+  t('tune --session discloses the narrowing in the preview header too',
+    /\(--session=tunewrite01\)/.test(cli3(['tune', '--session=tunewrite01']).stdout),
+    cli3(['tune', '--session=tunewrite01']).stdout.split('\n')[0] || '');
+
+  /* `disabled` reads the top-level key, `on` also reads cfg.tools -- so the shell-scoped elider is both, and
+     it IS running. The mark and the hint must follow `on`, not the raw key. */
+  writeFileSync(cfg3Path, JSON.stringify({ blobElide: false, tools: { Bash: { blobElide: true } } }));
+  const rScoped = cli3(['tune']);
+  const scopedLine = rScoped.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('a knob turned off at the top level but on for a tool is not rendered as off',
+    !/\[off\]/.test(scopedLine) && /a "tools" entry turns it on/.test(scopedLine), scopedLine.trim());
+
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
+  const rwCwd = cli3(['tune', '--cwd=/work/tw', '--write']);
+  t('tune --cwd ... --write says the evidence was narrowed while the config it writes is global',
+    /evidence narrowed to --cwd=\/work\/tw; the config it writes is global/.test(rwCwd.stdout),
+    rwCwd.stdout.split('\n')[0] || '');
+  t('and an unfiltered --write does not claim a narrowing', !/evidence narrowed/.test(cli3(['tune', '--write']).stdout));
+
+  /* The opportunity estimators count what a feature WOULD have acted on had it been running, so attaching one
+     to a feature that is already ON asserts the guard would have touched output it demonstrably did not touch.
+     Before the fix this printed, live on a real machine: `[on]  MCP output trim (mcpTrim)` / `not fired; would
+     act on ~ 1 MCP result(s) over maxChars`. */
+  const cfg5 = mkdtempSync(join(tmpdir(), 'tokenbrake-tuneon-'));
+  const e5 = { ...process.env, CLAUDE_CONFIG_DIR: cfg5 };
+  const w5 = join(cfg5, 'projects', 'tuneon'); mkdirSync(w5, { recursive: true });
+  writeFileSync(join(w5, 'tuneon01.jsonl'), [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: 'tuneon01', timestamp: '2026-01-01T00:00:00Z', cwd: '/work/tuneon', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_BLOB', name: 'Bash', input: { command: 'base64 payload.bin' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_BLOB', content: 'A'.repeat(9000) }] } }),
+  ].join('\n'));
+  writeFileSync(join(cfg5, 'tokenbrake.json'), JSON.stringify({ blobElide: true }));   // ON, and it never fired here
+  const rOn = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e5 });
+  const blobLine = rOn.stdout.split('\n').findIndex((l) => /Binary-Blob Elider/.test(l));
+  const blobEvidence = blobLine >= 0 ? (rOn.stdout.split('\n')[blobLine + 1] || '') : '';
+  t('tune does not describe an already-ON feature with its off-state opportunity estimate',
+    rOn.status === 0 && /\[on\]/.test(rOn.stdout.split('\n')[blobLine] || '')
+    && /on, but has not fired/.test(blobEvidence) && !/would act on/.test(blobEvidence),
+    blobEvidence.trim() || '(no evidence line)');
+  t('and an off feature still gets its opportunity estimate', (() => {
+    writeFileSync(join(cfg5, 'tokenbrake.json'), JSON.stringify({ blobElide: false }));
+    const rOff = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e5 });
+    const i = rOff.stdout.split('\n').findIndex((l) => /Binary-Blob Elider/.test(l));
+    return i >= 0 && /would act on/.test(rOff.stdout.split('\n')[i + 1] || '');
+  })());
+  t('and the read cap reports unmeasured, not dormant, when no pooled session ran the guard',
+    /Read cap .*not measured here -- no pooled session ran the guard/.test(rOn.stdout),
+    (rOn.stdout.split('\n').find((l) => /Read cap/.test(l)) || '').trim());
   rmSync(cfg3, { recursive: true, force: true });
   rmSync(cfg4, { recursive: true, force: true });
+  rmSync(cfg5, { recursive: true, force: true });
 }
 
 rmSync(CFG, { recursive: true, force: true });
