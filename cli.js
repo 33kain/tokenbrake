@@ -54,6 +54,11 @@ function isOurs(group) {
   return Array.isArray(group.hooks) && group.hooks.some(h =>
     String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
 }
+/* Hash guard.js by CONTENT, not raw bytes: a Windows checkout with core.autocrlf=true (the default) has a CRLF
+   working tree while the git blob and the npm tarball are LF -- identical code, different bytes. Hashing raw
+   bytes reported a false STALE on every such checkout, on the very platform tokenbrake ships to. Normalize
+   CRLF/CR -> LF first, so the staleness check measures code drift, not line endings. */
+function guardSha(p) { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p, 'utf8').replace(/\r\n?/g, '\n')).digest('hex'); } catch { return null; } }
 
 function init() {
   fs.mkdirSync(guardDir, { recursive: true });
@@ -144,9 +149,8 @@ function status() {
      all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its
      ledger is read as evidence about the current one. That matters most exactly when the ledger is being
      collected on purpose, which is what a user-scope install is for. */
-  const sha = (p2) => { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p2)).digest('hex'); } catch { return null; } };
-  const srcSha = sha(path.join(__dirname, 'guard.js'));
-  const copySha = sha(guardFile);
+  const srcSha = guardSha(path.join(__dirname, 'guard.js'));
+  const copySha = guardSha(guardFile);
   const drift = srcSha && copySha && srcSha !== copySha;
   console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
   console.log(`  guard build: ${!copySha ? 'no copy installed'
@@ -1023,9 +1027,8 @@ function doctor() {
   if (missing.length === EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
   else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
 
-  const sha = (p) => { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex'); } catch { return null; } };
-  const srcSha = sha(path.join(__dirname, 'guard.js'));
-  const copySha = sha(guardFile);
+  const srcSha = guardSha(path.join(__dirname, 'guard.js'));
+  const copySha = guardSha(guardFile);
   if (!copySha) problems.push({ sev: has('PostToolUse') ? 'error' : 'warn', msg: `guard file missing (${guardFile})`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
   else if (srcSha && srcSha !== copySha) {
     if (FIX) {

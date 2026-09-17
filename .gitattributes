@@ -1,0 +1,4 @@
+# guard.js ships LF via npm and its git blob is LF; without this, a Windows checkout with core.autocrlf=true
+# (the default) rewrites the working tree to CRLF -- identical code, different bytes -- which used to read as a
+# false "STALE" guard build in `tokenbrake status`/`doctor`. Force LF on checkout so the tree matches what ships.
+* text=auto eol=lf
