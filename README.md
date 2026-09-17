@@ -517,7 +517,8 @@ npx tokenbrake tune --write         # apply the MEASURED recommendation to token
 ```
 
 It prints, per feature, that verdict and the **exact knob to set**. Plain `tune` is a preview — it changes
-nothing. It also reports the Read cap's health (firing / dormant / missing — the exact value still comes from
+nothing. It also reports the Read cap's health (firing / dormant / missing / unmeasured — the last is what a
+fresh install sees, meaning no pooled session ran the guard, so nothing watched the reads; the exact value still comes from
 `report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache,
 never dollars — `--cost` is where dollars live.
 

@@ -1242,7 +1242,13 @@ function tuneReport() {
   const found = transcript.findTranscripts(CFG_DIR);
   if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
 
-  const cfg = { ...transcript.TUNE_DEFAULTS, ...readJson(path.join(CFG_DIR, 'tokenbrake.json'), {}) };
+  const rawCfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), {});
+  const cfg = { ...transcript.TUNE_DEFAULTS, ...(rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg) ? rawCfg : {}) };
+  /* A knob written `false` is a decision; a knob that is absent is just a default. The merged cfg above cannot
+     tell them apart (TUNE_DEFAULTS sets every feature knob false), so the distinction is taken from the raw
+     file here and handed to autotune. */
+  const disabled = (rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg))
+    ? Object.keys(rawCfg).filter((k) => rawCfg[k] === false) : [];
 
   const parsed = [], skipped = [];
   for (const f of found) {
@@ -1258,7 +1264,7 @@ function tuneReport() {
   }
   if (!parsed.length) { console.log('No usable session(s) to tune from' + (want ? ' for --session=' + want : '') + (only ? ' under --cwd=' + only : '') + '.'); return; }
 
-  const t = transcript.autotune(parsed, ledger, cfg);
+  const t = transcript.autotune(parsed, ledger, cfg, { disabled });
 
   /* `--write`: apply the recommendation to tokenbrake.json. This is the one part of the tuner that changes what
      the guard withholds next session, so it only ever turns a feature ON, and only on a clean MEASURED record
@@ -1271,8 +1277,22 @@ function tuneReport() {
      contract. The plain `tokenbrake tune` is the preview; this is the deliberate apply. */
   if (flag('--write')) {
     const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
-    console.log('Auto-tune --write -- ' + t.sessions + ' session(s), ' + t.guarded + ' with the guard');
-    const plan = t.features.filter((f) => f.status === 'turn-on');
+    /* --write changes ONE global tokenbrake.json, so when the evidence behind it was narrowed by --cwd or
+       --session the header has to say so -- the preview render carries the filter and the apply must not
+       drop it. `tune --cwd=oneproject --write` otherwise reads as a verdict on everything. */
+    console.log('Auto-tune --write -- ' + t.sessions + ' session(s), ' + t.guarded + ' with the guard'
+      + (only ? '  (evidence narrowed to --cwd=' + only + '; the config it writes is global)' : ''));
+    /* A tool-scoped knob is left alone: its measured record comes from the tools it is on for, and the only
+       key --write knows how to set is the top-level one, which would turn it on everywhere else too. */
+    const flatten = t.features.filter((f) => f.status === 'turn-on' && f.scoped);
+    /* A clean measured record is exactly what a knob you turned OFF will have -- the firings that earned it
+       happened while it was on, before you disabled it. Without this, --write read those old firings as fresh
+       evidence and flipped the knob straight back, so the only way to keep a feature off was never to run
+       --write again. */
+    const turnedOff = t.features.filter((f) => f.status === 'turn-on' && !f.scoped && f.disabled);
+    const plan = t.features.filter((f) => f.status === 'turn-on' && !f.scoped && !f.disabled);
+    for (const f of flatten) console.log('  Left alone: "' + f.knob + '" is set per-tool under "tools" -- --write only sets the top-level key, which would turn it on for every other tool too. Edit the tools entry yourself.');
+    for (const f of turnedOff) console.log('  Left alone: "' + f.knob + '" is set to false in your config. Its clean record is from before you turned it off, and --write does not re-enable what you turned off -- delete the line, or set it true, to take it back.');
     const review = t.features.filter((f) => f.status === 'review');
     const reviewNote = review.length ? ' It does not auto-disable: ' + review.map((f) => f.knob).join(', ')
       + ' measurably backfired -- turn ' + (review.length > 1 ? 'those' : 'it') + ' off by hand if you want (`tokenbrake tune` shows the backfire).' : '';
@@ -1285,12 +1305,20 @@ function tuneReport() {
        MISSING file starts fresh; a MALFORMED file is NOT overwritten -- readJson would swallow the parse error
        and hand back {}, and writing that would wipe every real setting the merge exists to preserve. Abort and
        let the person fix it instead. */
+    /* One refusal, whichever way the file is unusable: name what is wrong and change nothing. */
+    const refuse = (why) => console.log('  ' + cfgPath + ' ' + why + ' -- fix or remove it before --write, so its other settings are not lost. Nothing written.');
     let current;
     try { current = JSON.parse(fs.readFileSync(cfgPath, 'utf8')); }
     catch (e) {
       if (e && e.code === 'ENOENT') current = {};
-      else { console.log('  ' + cfgPath + ' is not valid JSON -- fix or remove it before --write, so its other settings are not lost. Nothing written.'); return; }
+      else { refuse('is not valid JSON'); return; }
     }
+    /* Parsing is not enough. `null`, `[]`, `"x"` and `5` are all VALID JSON, and spreading any of them into
+       the merge base below yields {} (or index keys, for a string) -- so the write would replace the file
+       with nothing but the flipped knobs. That is the same wipe the abort above exists to prevent, reached
+       through a different door. The guard treats such a file as inert (loadConfig spreads it over DEFAULTS
+       and gets DEFAULTS back, silently); here the identical shape is destructive, so it refuses instead. */
+    if (!current || typeof current !== 'object' || Array.isArray(current)) { refuse('is not a JSON object'); return; }
     /* Every plan feature is off (decide() returns 'turn-on' only when the feature is off), so each is a real
        false -> true flip -- there is no "already matches" case (a matching feature is 'keep' and never here). */
     const next = { ...current };
@@ -1310,7 +1338,10 @@ function tuneReport() {
   console.log('Auto-tune -- ' + t.sessions + ' session(s) pooled, ' + t.guarded + ' with the guard, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
   if (t.thin) console.log('  Few guarded sessions -- a weak base; treat these as provisional and run more sessions to firm them up.');
-  if (!t.withholds) console.log('  Nothing withheld yet in these sessions (no context-narrowing feature has fired here).');
+  /* Only claim nothing has fired when nothing has. The read narrowings fire without producing a withhold the
+     backfire audit can net (see autotune), so they get their own line rather than being counted as silence. */
+  if (!t.withholds && !t.narrowings) console.log('  Nothing withheld yet in these sessions (no context-narrowing feature has fired here).');
+  else if (!t.withholds) console.log('  ' + t.narrowings + ' read narrowing(s) fired here. They narrow a read rather than replace a saved output, so the backfire audit cannot price them -- see the per-feature lines below for how often they sent the model back.');
   else if (t.netCarried >= 0) console.log('  Net so far: ~ ' + fmt(t.netCarried) + ' token-reads saved across the features already on, after any pull-backs (backfire audit).');
   else console.log('  Net so far: ~ ' + fmt(-t.netCarried) + ' token-reads LOST across the features already on -- pull-backs cost more than was saved. See tokenbrake report --backfire.');
 
@@ -1325,6 +1356,11 @@ function tuneReport() {
         + (f.status === 'try' ? '  -- clean, but too few firings to be sure; run a few more sessions' : '')
         + (f.status === 'review' ? '  -- it backfired; reconsider leaving it on' : '');
     }
+    /* The opportunity estimators measure the OFF state -- they count results the feature would have acted on
+       had it been running. For a feature that is already ON, "would act on N result(s)" asserts the guard
+       would have touched output it demonstrably did not touch, which is the one kind of claim this tuner is
+       built not to make. An on-but-silent feature gets the plain fact instead. */
+    if (f.on) return 'on, but has not fired in these sessions -- nothing here matched it yet';
     const o = f.opportunity;
     if (!o || !o.n) return 'not fired, and no off-state signal seen here -- turn it on for a session to measure (a feature\'s wins can be invisible until it runs)';
     const bound = f.bound === 'upper' ? 'up to ' : '~ ';   // upper-bound estimators say "up to"; the under-counting ones "~"
@@ -1337,15 +1373,20 @@ function tuneReport() {
   };
   console.log('\n  Off-by-default features:');
   for (const f of t.features) {
-    const set = (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
+    /* Consistent with --write above: a knob you set to false is reported, not recommended. Offering
+       `Set "x": true` for something --write then declines to apply is the tuner disagreeing with itself. */
+    const set = f.disabled ? '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)'
+      : (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
       : f.status === 'measure' ? '   Set "' + f.knob + '": true to measure it'
       : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
-    console.log('    ' + (mark[f.status] || '     ') + ' ' + f.label + ' (' + f.knob + ')' + set);
+    /* `[ON]` next to "you set this to false" is the same contradiction the set-line just lost. */
+    console.log('    ' + (f.disabled ? '[off]' : (mark[f.status] || '     ')) + ' ' + f.label + ' (' + f.knob + ')' + set);
     console.log('        ' + evidence(f));
   }
 
   const rc = t.readCap;
-  const capLine = rc.verdict === 'firing' ? 'firing -- capped ' + rc.fired + ' read(s) in these sessions'
+  const capLine = rc.verdict === 'unmeasured' ? 'not measured here -- no pooled session ran the guard, so nothing watched the reads. Install it (tokenbrake init) and re-run after a session'
+    : rc.verdict === 'firing' ? 'firing -- capped ' + rc.fired + ' read(s) in these sessions'
     : rc.verdict === 'missing' ? 'check -- ' + rc.over + ' read(s) went over readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes) uncapped in a guarded session. If the guard was installed for the whole session (not added mid-run), the read-pre hook may be missing -- report --reads has the detail'
     : 'dormant -- no read reached readMaxBytes (' + fmt(rc.readMaxBytes) + ' bytes), so the cap had nothing to act on';
   console.log('\n  Read cap (always on): ' + capLine + '.');

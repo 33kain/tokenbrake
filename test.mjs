@@ -9,7 +9,7 @@
    full-size while `status` said "installed". Nothing in a sandbox could see
    that; this file pins the shape so it cannot regress unnoticed. */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -782,11 +782,30 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     tool_input: { command }, tool_response: bashResp(text) });
   let r = post("sed -n '1,120p' extension/content.js", src.slice(0, 9000));
   t('a 9k-char sed range of one file passes untouched', r.status === 0 && r.stdout === '', r.stdout.slice(0, 80));
-  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js']) {
+  for (const c of ['cat extension/content.js', 'cat -n build.mjs', 'head -200 worker/src/index.js', 'tail -n 120 worker/test.mjs', "sed -n 1500,2011p extension/content.js", 'sed -n "1,400p" a.js',
+    /* Quoted, a glob character is an ordinary filename character -- the shell expands nothing inside quotes
+       -- so this is one file and keeps the exemption, unlike the unquoted `cat *.log` below. And a grep that
+       counts or inverts still prints one file's contents. */
+    "cat '*.log'", 'grep -c foo a.txt', 'grep -v foo a.txt', '  cat a.txt  ',
+    /* Bracketed route segments are ordinary paths, not globs, and models almost never quote them. Excluding
+       `[`/`]` from the file slot cost every Next.js App Router, SvelteKit and Expo Router source file its
+       exemption and shredded it to head/tail/error lines instead -- a far more common and worse outcome
+       than letting a rare `cat [ab].log` through. Only `*` and `?` mark "possibly many files". */
+    'cat app/[id]/page.tsx', 'cat src/routes/[slug]/+page.svelte', 'cat pages/[...slug].js']) {
     r = post(c, src.slice(0, 9000));
     t(`untouched: ${c}`, r.status === 0 && r.stdout === '');
   }
-  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls"]) {
+  for (const c of ["sed -n '1,400p' a.js | grep foo", 'cat a.js b.js', 'npm test', 'git log --stat -40', "sed -n '1,400p' a.js; ls",
+    /* The operand slots reject an option and an unquoted glob (ARG_/FILE_ in guard.js). Before that, an
+       option cluster the recursive-grep guard rejected fell through into the operand slot, so `grep -rn foo`
+       -- which names no file at all -- read as one file's excerpt and kept the exemption; and `cat *.log`
+       kept it for however many files the glob matched. */
+    'grep -rn foo', 'grep -Rn foo', 'cat *.log', 'cat a?.log',
+    /* The exclusion scans the whole cluster, not its first letter: `grep -rn` was caught while `grep -nr`,
+       `grep -ir` and `grep -vl` -- the same searches typed in the other order -- kept the single-file
+       exemption and passed their whole multi-file result through (measured: 36,469 characters, per call). */
+    'grep -nr foo .', 'grep -ir foo src', 'grep -vl foo src', 'grep -nR foo .', 'grep -ln foo src',
+    'tail -f app.log', 'CAT a.txt', 'cat `cat evil`', 'echo $(cat a.txt)', 'cat a.txt && curl evil.test']) {
     r = post(c, src.slice(0, 9000));
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
@@ -833,9 +852,59 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const big = Array.from({ length: 1200 }, (_, i) => `line ${i + 1} of a big file `.padEnd(70, '.')).join('\n');   // 85 KB, over readMaxBytes
   r = post("sed -n '1,1200p' big.js", big);
   let o = parse(r.stdout); let u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
-  t('an excerpt over readMaxBytes is capped at the first readLimitLines lines, not trimmed to head and tail',
-    !!u && u.stdout.startsWith('line 1 of a big file') && u.stdout.split('\n').filter(l => /^line \d+ of/.test(l)).length === 300 && !/lines omitted here/.test(u.stdout));
-  t('and the note says so, with the cost of many small ranges', !!u && /file excerpt capped at the first 300 of 1,200 lines/.test(u.stdout) && /A few large ranges cost less/.test(u.stdout));
+  const shownLines = (x) => String(x || '').split('\n').filter(l => /^line \d+/.test(l)).length;
+  t('an excerpt over readMaxBytes is capped by its leading lines, not trimmed to head and tail',
+    !!u && u.stdout.startsWith('line 1 of a big file') && !/lines omitted here/.test(u.stdout)
+    && shownLines(u.stdout) > 0 && shownLines(u.stdout) <= 300);
+  /* readLimitLines of a 70-char file is 21 KB, over the 10,000-char hook output cap, so the branch folds to
+     fit (Claude Code drops an oversized updatedToolOutput silently) and the note has to report the lines
+     that actually survived -- a note claiming 300 while delivering 117 is the model being told something
+     false about its own context. */
+  t('and the note says so, with the cost of many small ranges, and its count is the lines actually delivered',
+    !!u && /A few large ranges cost less/.test(u.stdout) && (() => {
+      const m = /file excerpt capped at the first ([\d,]+) of 1,200 lines/.exec(u.stdout);
+      if (!m) return false;
+      const claimed = Number(m[1].replace(/,/g, ''));
+      return claimed === shownLines(u.stdout) && claimed < 300;
+    })(), (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(u ? u.stdout : '') || [''])[0]);
+  /* And when readLimitLines of them DO fit the cap, readLimitLines is still what governs: same oversized
+     file, narrow lines. 3,000 x 24 chars is 72 KB (over readMaxBytes), of which 300 lines is 7.2 KB. */
+  const narrow = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`.padEnd(23, '.')).join('\n');
+  const un = (parse(post("sed -n '1,3000p' narrow.js", narrow).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  /* Output with few lines is where a lines-only note lies: a minified bundle read whole is ONE line, the
+     fold cuts it mid-line, and "the first 1 of 1 lines" tells the model the whole file is present while
+     most of it is gone -- with saved:null, gone with no copy to go back to. Characters move whenever
+     anything is withheld. */
+  const bundle = 'x'.repeat(100000);
+  const ub = (parse(post('cat bundle.min.js', bundle).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+  t('a single-line excerpt reports the characters withheld, not just an unchanged line count', (() => {
+    if (!ub) return false;
+    const m = /capped at the first ([\d,]+) of ([\d,]+) lines, ([\d,]+) of ([\d,]+) characters/.exec(ub.stdout);
+    if (!m) return false;
+    const num = (x) => Number(x.replace(/,/g, ''));
+    return num(m[1]) === 1 && num(m[2]) === 1          // the line count genuinely cannot move here
+      && num(m[3]) < num(m[4]) && num(m[4]) === bundle.length   // and the character count does
+      && ub.stdout.length < 10000;
+  })(), (/capped at the first [^.]*\./.exec(ub ? ub.stdout : '') || [''])[0]);
+
+  /* And the line-boundary snap must not eat the excerpt. A minified bundle behind a one-line
+     `//# sourceMappingURL` header, or a lockfile behind its opening `{`, puts the last newline near the
+     START of the kept body -- snapping back to it delivered 34 characters of 200,035, and 1 of 150,002,
+     on exactly the huge single-line files this branch most often sees. */
+  for (const [label, body] of [
+    ['a sourceMappingURL header then one 200k line', '//# sourceMappingURL=bundle.js.map\n' + 'x'.repeat(200000)],
+    ['an opening brace then one 150k line', '{\n' + 'y'.repeat(150000)],
+  ]) {
+    const uu = (parse(post('cat bundle.min.js', body).stdout) || {}).hookSpecificOutput.updatedToolOutput;
+    const m = uu && /capped at the first [\d,]+ of [\d,]+ lines, ([\d,]+) of ([\d,]+) characters/.exec(uu.stdout);
+    t(`the line snap does not collapse the excerpt: ${label}`,
+      !!m && Number(m[1].replace(/,/g, '')) > 2000 && uu.stdout.length < 10000,
+      m ? m[0] : '(no excerpt note)');
+  }
+
+  t('an excerpt whose readLimitLines lines fit the cap keeps all 300 of them, and says 300',
+    !!un && shownLines(un.stdout) === 300 && /file excerpt capped at the first 300 of 3,000 lines/.test(un.stdout),
+    (/file excerpt capped at the first [\d,]+ of [\d,]+ lines/.exec(un ? un.stdout : '') || [''])[0]);
   r = guard('post', { session_id: 'ex', tool_use_id: 'toolu_ex_fail', hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
     tool_input: { command: "sed -n '1,120p' missing.js" }, error: 'Exit code 1\n' + noisy, is_interrupt: false });
   o = parse(r.stdout); u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
@@ -2747,6 +2816,77 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       R({ name: 'Bash', what: 'base64', chars: 6000, lines: 1, carried: 9999 })] };
   t('a measured backfire wins over heavy opportunity (leave-off, not try)', fBlob(T.autotune([mixed], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
 
+  /* The two READ narrowings log ev:'read-delta' / 'read-reread', which backfireAudit counts as fired but never
+     turns into a withhold (those come from ev:'post' rows, which carry a saved copy to price). So `withholds`
+     alone reads as "nothing has fired" in a session where a narrowing fired three times, and the caller printed
+     "Nothing withheld yet ... no context-narrowing feature has fired here" directly above "fired 3x". */
+  const rrLedger = ['/w/a.js', '/w/b.js', '/w/c.js'].map((f, i) => ({ ev: 'read-reread', session: sid, tool: 'Read', what: f, limit: 5, t: 100 + i }));
+  const rrTune = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [], results: [] }], rrLedger, { reReadElide: true });
+  t('a session where only read narrowings fired is not reported as nothing having fired',
+    rrTune.withholds === 0 && rrTune.narrowings === 3, `withholds=${rrTune.withholds} narrowings=${rrTune.narrowings}`);
+  t('and the re-read feature carries those firings as its measured record',
+    (rrTune.features.find((f) => f.key === 'reReadElide').measured || {}).fired === 3);
+  t('a session with neither is still nothing withheld', (() => { const z = T.autotune([blobby(1, 100, 1)], [], {}); return z.withholds === 0 && z.narrowings === 0; })());
+
+  /* guard.js toolConfig() shallow-merges cfg.tools[<tool>] over every knob, so a knob can be ON for one tool
+     and absent at the top level. Reading only the top level called such a feature "off", credited it with the
+     measured record its own firings produced, and recommended a TOP-LEVEL true -- widening a deliberately
+     tool-scoped setting to every other tool on that one tool's evidence. */
+  const scopedOn = T.autotune([cleanBlob()], cleanLedger, { tools: { Bash: { blobElide: true } } });
+  t('a knob set only under tools.<tool> reads as ON, not off', fBlob(scopedOn).on === true && fBlob(scopedOn).scoped === true,
+    `on=${fBlob(scopedOn).on} scoped=${fBlob(scopedOn).scoped}`);
+  t('and so its clean record is keep, never a turn-on that would flatten it', fBlob(scopedOn).status === 'keep', fBlob(scopedOn).status);
+  t('a tools entry turning a globally-on knob OFF still reads as on where it is on',
+    fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: true, tools: { Read: { blobElide: false } } })).on === true);
+  t('a plain top-level knob is not marked scoped', fBlob(onKeep).scoped === false && fBlob(onClean).scoped === false);
+
+  /* A knob you set to false keeps its clean MEASURED record -- those firings happened while it was on, before
+     you turned it off -- so the status stays the truth about what the feature did, and `disabled` carries the
+     decision separately. The caller uses it to stop offering, and --write to stop applying, a turn-on. */
+  const offByHand = T.autotune([cleanBlob()], cleanLedger, { blobElide: false }, { disabled: ['blobElide'] });
+  t('a knob written false is marked disabled while keeping its measured record',
+    fBlob(offByHand).disabled === true && fBlob(offByHand).status === 'turn-on' && fBlob(offByHand).measured.fired === 3,
+    `disabled=${fBlob(offByHand).disabled} status=${fBlob(offByHand).status}`);
+  t('a knob merely absent from the file is not marked disabled', fBlob(onClean).disabled === false);
+  t('autotune without the opts argument still works (disabled defaults to none)',
+    fBlob(T.autotune([cleanBlob()], cleanLedger, { blobElide: false })).disabled === false);
+
+  /* capOver decides the "read-pre hook may be missing" verdict, so it must rest on evidence that the read hook
+     could have run. A transcript MARKER proves only that the PostToolUse hook fired -- the two are separate
+     entries in settings.json -- so a marker-only session (ledger rotated or deleted) cannot tell a missing
+     read hook from missing evidence, and calling it "missing" is the phantom defect the gate exists to stop. */
+  /* Over readMaxBytes (60,000) but under 0.9 x HOST_READ_CEILING (90,000): past that a read is classified
+     'near' the host's own ceiling and excluded from `over`, so a bigger number would test nothing. */
+  const hugeRead = R({ name: 'Read', file: '/w/huge.js', what: '/w/huge.js', whole: true, chars: 80000, tokens: 20000 });
+  const markerOnly = { sessionId: 'marker01', cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: 'toolu_M1', what: 'cat x', marker: true, tokens: 10, afterReq: 0 }), hugeRead] };
+  const markerTune = T.autotune([markerOnly], [], {});
+  t('a marker-only session does not manufacture a "read cap missing" verdict',
+    markerTune.guarded === 1 && markerTune.readCap.verdict !== 'missing' && markerTune.readCap.over === 0,
+    `guarded=${markerTune.guarded} verdict=${markerTune.readCap.verdict} over=${markerTune.readCap.over}`);
+  /* The same session WITH a ledger row is real evidence, and must still raise it. */
+  const withLedger = T.autotune([{ ...markerOnly, sessionId: 'ledger01' }],
+    [{ ev: 'post', session: 'ledger01', id: 'toolu_M1', tool: 'Bash', chars: 30000, kept: 200 }], {});
+  t('the same session with ledger evidence still reports the cap verdict from it',
+    withLedger.guarded === 1 && withLedger.readCap.over === 1 && withLedger.readCap.verdict === 'missing', `verdict=${withLedger.readCap.verdict} over=${withLedger.readCap.over}`);
+  t('a malformed tools value cannot throw', (() => {
+    for (const bad of [null, 'x', 5, [], { Bash: null }, { Bash: 'x' }, { Bash: [] }]) {
+      const r = T.autotune([cleanBlob()], cleanLedger, { tools: bad });
+      if (!r || !r.features.length) return false;
+    }
+    return true;
+  })());
+
+  /* The read cap's three verdicts are all statements about a guard that RAN. With no guarded session pooled --
+     a fresh install, or --cwd onto a project where it was never installed -- capOver is 0 by its own gate and
+     capFired is 0 because no cap could fire, so the fall-through claimed "dormant: no read reached
+     readMaxBytes", asserting a measurement nothing performed. */
+  const unguarded = T.autotune([blobby(4, 6000, 25)], [], { blobElide: false });
+  t('with no guarded session pooled the read cap is unmeasured, not dormant',
+    unguarded.guarded === 0 && unguarded.readCap.verdict === 'unmeasured', `guarded=${unguarded.guarded} verdict=${unguarded.readCap.verdict}`);
+  t('a guarded session whose reads all stayed under readMaxBytes is still dormant',
+    onKeep.guarded > 0 && onKeep.readCap.verdict === 'dormant', `guarded=${onKeep.guarded} verdict=${onKeep.readCap.verdict}`);
+
   // ---- opportunity estimators (units) ----
   const P = (results) => ({ cwd: '/w', results });
   const bo = T.blobOpportunity(P([
@@ -2897,6 +3037,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const rwBad = cli3(['tune', '--write']);
   t('tune --write aborts on a malformed config instead of wiping it', rwBad.status === 0 && /not valid JSON/.test(rwBad.stdout) && readFileSync(cfg3Path, 'utf8') === malformed, rwBad.stdout.split('\n').find(l => /valid JSON/.test(l)) || '(no abort)');
 
+  /* Valid JSON is not enough: every one of these parses, and each spreads into an empty (or index-keyed)
+     merge base, so before the type check --write replaced the file with nothing but the flipped knobs --
+     the same data loss the malformed-file abort above exists to prevent, through a different door. */
+  for (const bad of ['null', '[]', '["blobElide"]', '"blobElide"', '5', 'true']) {
+    writeFileSync(cfg3Path, bad);
+    const r = cli3(['tune', '--write']);
+    t(`tune --write refuses a config whose JSON root is not an object: ${bad}`,
+      r.status === 0 && /is not a JSON object/.test(r.stdout) && readFileSync(cfg3Path, 'utf8') === bad,
+      readFileSync(cfg3Path, 'utf8') === bad ? (r.stdout.split('\n').find(l => /JSON object/.test(l)) || '(no refusal)') : 'FILE WAS REWRITTEN: ' + readFileSync(cfg3Path, 'utf8'));
+  }
+
   writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));   // a pre-existing key that must survive the merge
   const rw = cli3(['tune', '--write']);
   const after = JSON.parse(readFileSync(cfg3Path, 'utf8'));
@@ -2919,8 +3070,294 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const rw3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune', '--write'], { encoding: 'utf8', env: e4 });
   t('tune --write writes nothing when there is only opportunity, no measured record', rw3.status === 0 && /No feature has a clean MEASURED record to turn on/.test(rw3.stdout) && !existsSync(join(cfg4, 'tokenbrake.json')), rw3.stdout.split('\n')[1] || '');
 
+  /* --write can only set the TOP-LEVEL key, so a knob the person scoped to one tool must be left alone rather
+     than flattened onto every other tool from that one tool's evidence. And because the config it writes is
+     global, a pool narrowed by --cwd has to say so in the header. */
+  writeFileSync(cfg3Path, JSON.stringify({ tools: { Bash: { blobElide: true } } }));
+  const rwScoped = cli3(['tune', '--write']);
+  t('tune --write leaves a tool-scoped knob alone instead of flattening it to the top level',
+    rwScoped.status === 0 && JSON.parse(readFileSync(cfg3Path, 'utf8')).blobElide === undefined,
+    readFileSync(cfg3Path, 'utf8'));
+  t('and says why it left it', /Left alone: "blobElide" is set per-tool/.test(rwScoped.stdout) || /No feature has a clean MEASURED record/.test(rwScoped.stdout),
+    rwScoped.stdout.split('\n').find((l) => /Left alone|No feature/.test(l)) || '');
+
+  /* The firings that earn a clean record happened while the feature was ON, so a knob you then set to false
+     still looks like a turn-on candidate. --write must not flip it back, and the preview must not offer it --
+     recommending what --write declines is the tuner disagreeing with itself. */
+  writeFileSync(cfg3Path, JSON.stringify({ blobElide: false, maxChars: 5000 }));
+  const rwOff = cli3(['tune', '--write']);
+  t('tune --write does not re-enable a feature the person set to false',
+    rwOff.status === 0 && JSON.parse(readFileSync(cfg3Path, 'utf8')).blobElide === false,
+    readFileSync(cfg3Path, 'utf8'));
+  t('and says it left it alone, and why', /Left alone: "blobElide" is set to false in your config/.test(rwOff.stdout),
+    rwOff.stdout.split('\n').find((l) => /Left alone|No feature/.test(l)) || '');
+  const rPrev = cli3(['tune']);
+  const prevLine = rPrev.stdout.split('\n').find((l) => /Binary-Blob Elider/.test(l)) || '';
+  t('and the preview reports it rather than recommending it',
+    !/Set "blobElide": true/.test(prevLine) && /false in your config/.test(prevLine), prevLine.trim());
+
+  writeFileSync(cfg3Path, JSON.stringify({ maxChars: 5000 }));
+  const rwCwd = cli3(['tune', '--cwd=/work/tw', '--write']);
+  t('tune --cwd ... --write says the evidence was narrowed while the config it writes is global',
+    /evidence narrowed to --cwd=\/work\/tw; the config it writes is global/.test(rwCwd.stdout),
+    rwCwd.stdout.split('\n')[0] || '');
+  t('and an unfiltered --write does not claim a narrowing', !/evidence narrowed/.test(cli3(['tune', '--write']).stdout));
+
+  /* The opportunity estimators count what a feature WOULD have acted on had it been running, so attaching one
+     to a feature that is already ON asserts the guard would have touched output it demonstrably did not touch.
+     Before the fix this printed, live on a real machine: `[on]  MCP output trim (mcpTrim)` / `not fired; would
+     act on ~ 1 MCP result(s) over maxChars`. */
+  const cfg5 = mkdtempSync(join(tmpdir(), 'tokenbrake-tuneon-'));
+  const e5 = { ...process.env, CLAUDE_CONFIG_DIR: cfg5 };
+  const w5 = join(cfg5, 'projects', 'tuneon'); mkdirSync(w5, { recursive: true });
+  writeFileSync(join(w5, 'tuneon01.jsonl'), [
+    JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: 'tuneon01', timestamp: '2026-01-01T00:00:00Z', cwd: '/work/tuneon', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_BLOB', name: 'Bash', input: { command: 'base64 payload.bin' } }] } }),
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_BLOB', content: 'A'.repeat(9000) }] } }),
+  ].join('\n'));
+  writeFileSync(join(cfg5, 'tokenbrake.json'), JSON.stringify({ blobElide: true }));   // ON, and it never fired here
+  const rOn = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e5 });
+  const blobLine = rOn.stdout.split('\n').findIndex((l) => /Binary-Blob Elider/.test(l));
+  const blobEvidence = blobLine >= 0 ? (rOn.stdout.split('\n')[blobLine + 1] || '') : '';
+  t('tune does not describe an already-ON feature with its off-state opportunity estimate',
+    rOn.status === 0 && /\[on\]/.test(rOn.stdout.split('\n')[blobLine] || '')
+    && /on, but has not fired/.test(blobEvidence) && !/would act on/.test(blobEvidence),
+    blobEvidence.trim() || '(no evidence line)');
+  t('and an off feature still gets its opportunity estimate', (() => {
+    writeFileSync(join(cfg5, 'tokenbrake.json'), JSON.stringify({ blobElide: false }));
+    const rOff = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e5 });
+    const i = rOff.stdout.split('\n').findIndex((l) => /Binary-Blob Elider/.test(l));
+    return i >= 0 && /would act on/.test(rOff.stdout.split('\n')[i + 1] || '');
+  })());
+  t('and the read cap reports unmeasured, not dormant, when no pooled session ran the guard',
+    /Read cap .*not measured here -- no pooled session ran the guard/.test(rOn.stdout),
+    (rOn.stdout.split('\n').find((l) => /Read cap/.test(l)) || '').trim());
+
   rmSync(cfg3, { recursive: true, force: true });
   rmSync(cfg4, { recursive: true, force: true });
+  rmSync(cfg5, { recursive: true, force: true });
+}
+
+{
+  console.log('\n-- concurrency: parallel guards on one session share the append-only state');
+  /* guard.js says of its JSONL state, in two places, that it appends rather than rewrites "so two tool calls
+     landing at once cannot lose each other's line". Nothing tested it, and Claude Code runs tools in parallel:
+     one session, one ledger, N hook processes in flight at once. The failure mode is quiet -- a torn or
+     interleaved append does not throw, it produces a line `report` skips, so the symptom is a wrong number
+     rather than a crash. Own config dir so the row count can be asserted exactly. */
+  const cdir = mkdtempSync(join(tmpdir(), 'tokenbrake-conc-'));
+  const cenv = { ...process.env, CLAUDE_CONFIG_DIR: cdir };
+  writeFileSync(join(cdir, 'tokenbrake.json'), JSON.stringify({ dedup: true }));  // exercises dedup/<session>.jsonl, the other append path, alongside the ledger
+  const N = 24;
+  const guardAsync = (input) => new Promise((res) => {
+    const p = spawn(process.execPath, ['./guard.js', 'post'], { env: cenv });
+    let out = '', err = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => res({ code, out, err }));
+    p.stdin.end(JSON.stringify(input));
+  });
+
+  /* Distinct bodies, so every call is a first sighting and each must write one dedup line and one ledger row.
+     Identical bodies would race by design -- dedup is best-effort, a lookup that misses just means no pointer
+     -- and the count would not be assertable. */
+  const conc = await Promise.all(Array.from({ length: N }, (_, i) => guardAsync({
+    session_id: 'conc-1', tool_use_id: 'toolu_CONC' + String(i).padStart(4, '0'), tool_name: 'Bash',
+    tool_input: { command: `run ${i}` }, tool_response: bashResp(`${noisy}\n#unique-${i}`) })));
+
+  t('every parallel guard exits 0', conc.every(r => r.code === 0), 'codes=' + [...new Set(conc.map(r => r.code))].join(','));
+  t('no parallel guard writes to stderr', conc.every(r => r.err === ''), conc.map(r => r.err).filter(Boolean)[0] || '');
+  t('every parallel guard returns the object-shaped trim', conc.every(r => {
+    const h = (parse(r.out) || {}).hookSpecificOutput;
+    return h && h.updatedToolOutput && typeof h.updatedToolOutput === 'object' && typeof h.updatedToolOutput.stdout === 'string';
+  }));
+
+  const led = readFileSync(join(cdir, 'tokenbrake', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean);
+  t('the ledger has one row per parallel guard, none lost', led.length === N, `${led.length} of ${N}`);
+  t('every ledger line is valid JSON (no interleaved or torn append)', led.every(l => parse(l) !== null),
+    (led.find(l => parse(l) === null) || '').slice(0, 80));
+  const ledIds = new Set(led.map(l => (parse(l) || {}).id).filter(Boolean));
+  t('every tool_use_id appears exactly once in the ledger', ledIds.size === N, String(ledIds.size));
+
+  const ded = readFileSync(join(cdir, 'tokenbrake', 'dedup', 'conc-1.jsonl'), 'utf8').split('\n').filter(Boolean);
+  t('the dedup state has one line per distinct result, none lost', ded.length === N, `${ded.length} of ${N}`);
+  t('every dedup line is valid JSON and carries a hash', ded.every(l => { const o = parse(l); return o && typeof o.h === 'string' && o.h.length > 0; }),
+    (ded.find(l => parse(l) === null) || '').slice(0, 80));
+  /* Matched by tool_use_id, not by row order: parallel appends land in whatever order the OS interleaves
+     them, which is the whole point of the block. */
+  t('the N saved full outputs are all present and intact', (() => {
+    const rows = led.map(l => parse(l)).filter(o => o && o.saved);
+    if (rows.length !== N) return false;
+    return rows.every(o => {
+      const i = Number(String(o.id).replace('toolu_CONC', ''));
+      return Number.isInteger(i) && existsSync(o.saved) && readFileSync(o.saved, 'utf8').endsWith('#unique-' + i);
+    });
+  })());
+
+  /* The same result arriving on several guards at once: dedup may or may not win the race (best-effort by
+     design), but the state must stay readable either way -- no torn line, no crash, no lost ledger row. */
+  const same = `${noisy}\n#identical`;
+  const race = await Promise.all(Array.from({ length: 12 }, (_, i) => guardAsync({
+    session_id: 'conc-2', tool_use_id: 'toolu_RACE' + String(i).padStart(4, '0'), tool_name: 'Bash',
+    tool_input: { command: 'same' }, tool_response: bashResp(same) })));
+  t('identical results racing: every guard still exits 0', race.every(r => r.code === 0));
+  const led2 = readFileSync(join(cdir, 'tokenbrake', 'ledger.jsonl'), 'utf8').split('\n').filter(Boolean);
+  t('identical results racing: every ledger line is still valid JSON', led2.every(l => parse(l) !== null));
+  t('identical results racing: all 12 rows landed', led2.length === N + 12, `${led2.length} of ${N + 12}`);
+  const ded2 = readFileSync(join(cdir, 'tokenbrake', 'dedup', 'conc-2.jsonl'), 'utf8').split('\n').filter(Boolean);
+  t('identical results racing: dedup state is readable, one hash, 1..12 lines (the race is allowed, corruption is not)',
+    ded2.length >= 1 && ded2.length <= 12 && ded2.every(l => parse(l) !== null)
+    && new Set(ded2.map(l => parse(l).h)).size === 1, `${ded2.length} lines`);
+
+  rmSync(cdir, { recursive: true, force: true });
+}
+
+{
+  /* The excerpt/trim boundary itself is pinned in "-- a file excerpt is a read" above, which owns that table.
+     What is left here is what that block cannot express: the guard's behaviour on UNTRUSTED, GENERATED
+     commands. It must fail open on every one of them, and whatever it emits has to be the tool's own response
+     shape and fit inside Claude Code's hook output ceiling. */
+  const fdir = mkdtempSync(join(tmpdir(), 'tokenbrake-cls-'));
+  const fenv = { ...process.env, CLAUDE_CONFIG_DIR: fdir };
+  /* Bodies over readMaxBytes (60,000), so the excerpt branch caps rather than passes through, and over
+     maxChars, so the non-excerpt branch trims. THREE shapes, not one, because the hook output ceiling applies
+     to the emitted JSON and JSON escaping costs a character per quote, backslash and newline: a corpus of
+     plain `x` lines holds the cap green while quote-heavy content -- `cat package-lock.json` -- goes straight
+     through it. Measured on this branch before the fold started measuring the real payload: 8.6 KB emitted
+     from plain lines, 10.0 KB from JSON, 10.1 KB from Windows paths, 16.5 KB from quote-dense content,
+     against a 10,000 ceiling. A fixed reserve cannot cover a cost proportional to content. */
+  const BODIES = [
+    Array.from({ length: 3000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(60)).join('\n'),
+    Array.from({ length: 3000 }, (_, i) => `  {"key_${i}": "value_${i}", "nested": {"n": ${i}}},`).join('\n'),
+    Array.from({ length: 3000 }, (_, i) => `C:\\Users\\Q\\proj\\src\\mod_${i}\\file.js`).join('\n'),
+    /* Wide quote lines: trimText keeps ~40 head + ~40 tail lines, so line WIDTH decides how close the trimmed
+       body sits to maxChars, and escaping doubles it from there. At 60 chars the trim path stayed green while
+       the ceiling was already broken at 75 -- the corpus, not the code, was holding the assertion up. */
+    Array.from({ length: 3000 }, (_, i) => '"'.repeat(120) + i).join('\n'),
+  ];
+
+  /* Line width, not size, is what pushes a trim over the ceiling: the head+tail lines trimText keeps scale
+     with it, and escaping doubles what they hold. Swept directly, because a fuzz corpus can only ever cover
+     the widths someone thought to include. */
+  for (const w of [50, 75, 100, 200, 400]) {
+    const dense = Array.from({ length: 700 }, (_, i) => '"'.repeat(w) + i).join('\n');
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { encoding: 'utf8', env: fenv,
+      input: JSON.stringify({ session_id: 'cap', tool_use_id: 'toolu_CAP' + w, tool_name: 'Bash',
+        tool_input: { command: 'node build.js' }, tool_response: bashResp(dense) }) });
+    /* Either note is a pass: past a certain width the budget fold replaces `N lines omitted here` with
+       `further trimmed to fit hook output cap`. What must hold is that something was delivered, it was
+       marked as trimmed, and the emitted JSON fits. */
+    t(`a quote-dense trim stays under the hook output cap at line width ${w}`,
+      r.status === 0 && r.stdout.length > 0 && r.stdout.length < 10000 && /\[tokenbrake\]/.test(r.stdout),
+      String(r.stdout.length) + ' chars emitted');
+  }
+
+  console.log('\n-- classifier: fail-open and shape under generated commands');
+  /* The command is untrusted text and the regex is nested alternation over unbounded input, so the two things
+     that must hold for every shape are: the hook exits 0 (fail open -- a guard that throws takes the tool call
+     with it), and whatever it emits is the tool's own response shape. Seeded, so a failure is reproducible. */
+  let seed = 20260917;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = (a) => a[Math.floor(rnd() * a.length) % a.length];
+  const PREFIX = ['', 'cd /x && ', "cd 'a dir' && ", 'echo hi && ', 'echo "a b" ; ', 'cd ../.. && '];
+  const VERB = ['cat', 'cat -n', "sed -n '1,50p'", 'sed -n 1,999p', 'head -20', 'head', 'tail -n 5', 'tail -f',
+    'grep -i foo', 'grep -rn foo', 'grep -l x', 'node', 'npm run', 'rm -rf', 'git diff', 'curl', 'powershell -Command'];
+  const PATHS = ['a.txt', "'a file.txt'", '"a file.txt"', '/etc/passwd', '../../x', 'C:\\Users\\Q\\a.txt',
+    '\u0444\u0430\u0439\u043b.txt', 'a&b.txt', 'a;b.txt', 'a|b.txt', "a'b.txt", 'a"b.txt', '*.log', '$(cat x)', '`cat x`',
+    'x'.repeat(300), '', '-', '--', '-rn'];
+  const SUFFIX = ['', ' | grep x', ' > out.txt', ' && echo done', '; rm -rf b', ' 2>&1', ' &', ' && cat b.txt',
+    " ; echo 'unterminated", ' '.repeat(50)];
+  const cmds = Array.from({ length: 140 }, () => pick(PREFIX) + pick(VERB) + ' ' + pick(PATHS) + pick(SUFFIX));
+  cmds.push('', ' ', '\n', '\u0000cat a.txt', 'cat\ta.txt', 'cat a.txt\n', '\u202ecat a.txt',
+    'echo ' + 'a '.repeat(3000) + '!', 'cat' + ' -n'.repeat(3000) + ' f!', 'cd ' + 'x'.repeat(60000) + ' && cat y |',
+    "cat '" + 'x'.repeat(60000), 'cat f' + ' && echo x'.repeat(2000) + ' |', '|;&<>'.repeat(12000));
+
+  const fuzzAsync = (command, i) => new Promise((res) => {
+    const body = BODIES[i % BODIES.length];
+    const t0 = Date.now();
+    const p = spawn(process.execPath, ['./guard.js', 'post'], { env: fenv });
+    let out = '', err = '';
+    p.stdout.on('data', (d) => { out += d; });
+    p.stderr.on('data', (d) => { err += d; });
+    p.on('close', (code) => res({ command, code, out, err, body, ms: Date.now() - t0 }));
+    /* A distinct tool_use_id per command, as Claude Code sends: saveOut names the out/ file after it, so
+       one shared id would have every command overwrite the same saved copy -- invisible while the fuzz
+       body was a single constant, wrong as soon as it varies. */
+    p.stdin.end(JSON.stringify({ session_id: 'fz', tool_use_id: 'toolu_FZ' + String(i).padStart(4, '0'), tool_name: 'Bash',
+      tool_input: { command }, tool_response: bashResp(body) }));
+  });
+  const pool = async (items, n, fn) => {   // bounded concurrency: 150 sequential spawns would dominate the suite
+    const out = []; let i = 0;
+    await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
+    return out;
+  };
+  const fz = await pool(cmds, 8, fuzzAsync);
+
+  t(`every generated command leaves the guard exit 0 (${fz.length} commands, seeded)`,
+    fz.every(r => r.code === 0), (fz.find(r => r.code !== 0) || {}).command || '');
+  t('no generated command writes to stderr', fz.every(r => r.err === ''),
+    ((fz.find(r => r.err !== '') || {}).err || '').slice(0, 120));
+  t('every emission is valid JSON with hookSpecificOutput', fz.every(r => {
+    if (r.out === '') return true; const o = parse(r.out); return !!(o && o.hookSpecificOutput); }),
+    ((fz.find(r => r.out !== '' && !(parse(r.out) || {}).hookSpecificOutput) || {}).out || '').slice(0, 120));
+  t('every emission keeps the Bash response object with all five keys (a bare string is dropped silently by Claude Code)',
+    fz.every(r => { if (r.out === '') return true;
+      const u = ((parse(r.out) || {}).hookSpecificOutput || {}).updatedToolOutput;
+      return u && typeof u === 'object' && ['stdout', 'stderr', 'interrupted', 'isImage', 'noOutputExpected'].every(k => k in u); }),
+    (fz.find(r => { if (r.out === '') return false;
+      const u = ((parse(r.out) || {}).hookSpecificOutput || {}).updatedToolOutput;
+      return !(u && typeof u === 'object' && 'noOutputExpected' in u); }) || {}).command || '');
+  /* Both paths measure the EMITTED JSON, not the text. trimText's own fold counts characters, which is a
+     different quantity: escaping costs one per quote, backslash and newline, so a 6,000-character trim of
+     quote-dense output emitted 11,788 characters and a wide one 16,446, against a 10,000 ceiling -- and
+     Claude Code drops an oversized updatedToolOutput SILENTLY, so the trim was discarded and the FULL result
+     entered context, with nothing in the ledger to say so. */
+  const trimEmissions = fz.filter(r => /omitted here/.test(r.out));
+  const largestTrim = Math.max(0, ...trimEmissions.map(r => r.out.length));
+  t(`every trim-path emission stays under the 10,000-char hook output cap (${trimEmissions.length} of ${fz.length})`,
+    trimEmissions.every(r => r.out.length < 10000), String(largestTrim));
+  /* The excerpt branch does not call trimText, so it folds to the cap itself. It used to emit
+     readLimitLines lines straight out: 15.6 KB at 40-char lines, 21.6 KB at 60, 39.6 KB at 120, against a
+     10,000-char ceiling -- the same failure class as the string-vs-object regression this file was written
+     for, where an over-large or wrong-shaped updatedToolOutput is dropped silently and nothing says so.
+     It had never fired in production: of 554 real ledger rows, 21 were classified as excerpts and 0 were
+     capped, because readMaxBytes (60,000) sits ABOVE Claude Code's own ~30,000-char shell ceiling. What kept
+     it dormant was a threshold, not the code, and lowering readMaxBytes under ~30,000 -- exactly what
+     scripts/sweep-readmax.mjs sweeps and `tune` recommends -- would have woken it. Hence the assertion on
+     the path itself rather than on whether the default happens to reach it. */
+  const excerptEmissions = fz.filter(r => /file excerpt capped at the first/.test(r.out));
+  const largestExc = Math.max(0, ...excerptEmissions.map(r => r.out.length));
+  t(`every excerpt-path emission stays under the cap too, folded against real JSON escaping (${excerptEmissions.length} commands over ${BODIES.length} body shapes, largest ${largestExc.toLocaleString()} chars)`,
+    excerptEmissions.length > 0 && excerptEmissions.every(r => r.out.length < 10000), String(largestExc));
+  t('the excerpt note reports what actually survived -- lines and characters -- not what was asked for',
+    excerptEmissions.every(r => {
+      const m = /file excerpt capped at the first ([\d,]+) of ([\d,]+) lines, ([\d,]+) of ([\d,]+) characters/.exec(r.out);
+      if (!m) return false;
+      const num = (x) => Number(x.replace(/,/g, ''));
+      return num(m[1]) > 0 && num(m[1]) <= 300 && num(m[1]) < num(m[2]) && num(m[3]) < num(m[4]);
+    }), (/file excerpt capped at the first [^.]*\./.exec(excerptEmissions[0] ? excerptEmissions[0].out : '') || [''])[0]);
+  /* Nothing withheld is unrecoverable: either the note names a saved copy that exists and holds the original,
+     or it is the excerpt/read cap, whose subject is still on disk. */
+  t('nothing is cut without a route back: a saved copy that exists and matches, or the excerpt cap', fz.every(r => {
+    if (r.out === '') return true;
+    const u = ((parse(r.out) || {}).hookSpecificOutput || {}).updatedToolOutput;
+    const s = String((u || {}).stdout || '');
+    if (!/\[tokenbrake\]/.test(s)) return true;
+    if (/file excerpt capped at the first/.test(s)) return true;
+    const p = (s.match(/Full output saved to (\S+\.txt)/) || [])[1];
+    return !!p && existsSync(p) && readFileSync(p, 'utf8') === r.body;
+  }), (fz.find(r => { if (r.out === '') return false;
+    const u = ((parse(r.out) || {}).hookSpecificOutput || {}).updatedToolOutput;
+    const s = String((u || {}).stdout || '');
+    if (!/\[tokenbrake\]/.test(s) || /file excerpt capped/.test(s)) return false;
+    const p = (s.match(/Full output saved to (\S+\.txt)/) || [])[1];
+    return !(p && existsSync(p)); }) || {}).command || '');
+  /* Catastrophic backtracking would show as one command far off the spawn-cost baseline. The bound is loose
+     on purpose (CI runners are noisy); a real blowup on these shapes is seconds, not milliseconds. */
+  const slowest = fz.reduce((a, b) => (b.ms > a.ms ? b : a));
+  t('no generated command takes pathologically long (no catastrophic backtracking in the classifier)',
+    slowest.ms < 5000, `slowest ${slowest.ms}ms on ${JSON.stringify(slowest.command.slice(0, 60))}`);
+
+  rmSync(fdir, { recursive: true, force: true });
 }
 
 rmSync(CFG, { recursive: true, force: true });

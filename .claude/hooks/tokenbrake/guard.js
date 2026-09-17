@@ -89,11 +89,40 @@ const PASS = /^\s*(?:ok|pass(?:ed)?|✓|✔|√)\b/i;
 
    Pipes and redirects stay excluded on purpose: `sed -n '1,50p' f | grep x` no longer prints the file, it
    prints a filter over it, and trimming that is fair game. Recursive and list-only greps are excluded for
-   the same reason — they are a search across files, not one file's contents. */
-const PATH_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+   the same reason -- they are a search across files, not one file's contents.
+
+   That exclusion scans the WHOLE option cluster, not its first letter. `(?![rRlL])` only looked at the
+   character after the `-`, so `grep -rn` was caught while `grep -nr`, `grep -ir` and `grep -vl` -- the same
+   searches with the flags typed in the other order -- kept the single-file exemption and passed their whole
+   multi-file result through untouched (measured: 36,469 characters, whole, per call). `[a-zA-Z]*[rRlL]`
+   rejects the cluster wherever the r/R/l sits. */
+/* The three operand slots below differ only in what they exclude, so the quoted forms live once: a change
+   to shell quoting has to land in one place, not three, or the slots silently disagree -- which is the bug
+   this section fixes. A quoted operand keeps its glob characters literal, which is why FILE_ excludes `*`
+   and `?` only when unquoted. Note this is exact for '...' and approximate for "...": double quotes still
+   expand `$VAR`, `$(...)` and backticks, so `cat "$FILES"` can print several files and still reads as one
+   file's excerpt. That is a known and deliberate limit -- the guard classifies text it never executes, and
+   the failure is the same fail-open direction as any other command shape it does not understand. */
+const Q_ = String.raw`'[^']+'|"[^"]+"`;
+const PATH_ = String.raw`(?:${Q_}|[^|;&<>'"\s]+)`;
 const LABEL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
+/* An operand, not an option. The leading `-` is what separates `grep -rn foo` -- a recursive search whose
+   pattern sits in the operand slot and which names no file at all -- from `grep -i foo a.txt`. Without this,
+   an option cluster the `(?![rRlL])` guard rejects falls through into the operand slots instead, and the
+   recursive grep reads as one file's excerpt: the exemption the paragraph above says it does not get.
+   ARG_ still allows globs because a grep PATTERN may legitimately contain `*`, `?` or `[]`. */
+const ARG_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s]+)`;
+/* The read target: ONE file. Not an option either, and unquoted it carries no `*` or `?` -- `cat *.log`
+   prints many files run together, which is the oversized output the trim exists for, not one file's
+   contents. Quoted, they are ordinary filename characters, so `cat '*.log'` stays an excerpt.
+   `[` and `]` are deliberately NOT excluded. They are a bracket glob perhaps once in a thousand commands
+   and route-segment syntax constantly -- `app/[id]/page.tsx`, `routes/[slug]/+page.svelte`,
+   `pages/[...slug].js` -- and models rarely quote paths. Excluding them cost every Next.js/SvelteKit route
+   file its excerpt exemption and handed the model a head/tail/error-line shred of its own source instead,
+   which is a far worse and far more frequent outcome than letting `cat [ab].log` through. */
+const FILE_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s*?]+)`;
 const READ_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
-  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![rRlL])[a-zA-Z]+)*\s+${PATH_})\s+${PATH_}`;
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+${FILE_}`;
 const EXCERPT = new RegExp(
   String.raw`^\s*(?:cd\s+${PATH_}\s*&&\s*)?(?:${LABEL_}\s*(?:&&|;)\s*)?${READ_}` +
   String.raw`(?:\s*(?:&&|;)\s*${LABEL_})*\s*$`);
@@ -390,7 +419,7 @@ function mcpBody(resp) {
   return null;
 }
 
-function trimText(text, cfg, savedPath) {
+function trimText(text, cfg, savedPath, cap = HOOK_OUTPUT_CAP) {
   const lines = text.split('\n');
   const note = savedPath ? ` Full output saved to ${savedPath} — Read or Grep it if you need more.` : '';
   let out;
@@ -453,8 +482,8 @@ function trimText(text, cfg, savedPath) {
     out = text.slice(0, half) + `\n\n[tokenbrake] ${(text.length - 2 * half).toLocaleString()} chars omitted here.${note}\n\n` + text.slice(-half);
   }
 
-  if (out.length > HOOK_OUTPUT_CAP) {
-    const half = Math.floor((HOOK_OUTPUT_CAP - 120) / 2);
+  if (out.length > cap) {
+    const half = Math.floor((cap - 120) / 2);
     out = out.slice(0, half) + `\n\n[tokenbrake] further trimmed to fit hook output cap.${note}\n\n` + out.slice(-half);
   }
   return out;
@@ -684,24 +713,78 @@ function handlePost(input, cfg) {
   }
   if (excerpt) {
     const all = text.split('\n');
-    const kept = all.slice(0, cfg.readLimitLines).join('\n');
-    const trimmedExcerpt = `${kept}\n\n[tokenbrake] file excerpt capped at the first ${cfg.readLimitLines} of ${all.length.toLocaleString()} lines (${text.length.toLocaleString()} chars). A few large ranges cost less than many small ones: each call is a request that re-reads the whole context. Use a narrower range, or Grep to locate the section first.`;
-    log({ ...rec, excerpt: true, kept: trimmedExcerpt.length, saved: null });
-    const updatedExcerpt = (resp && typeof resp === 'object') ? { ...resp, stdout: trimmedExcerpt, stderr: '' } : trimmedExcerpt;
-    emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: updatedExcerpt } });
+/* Fit the hook output cap, which trimText applies to the trim path and this branch has to apply to
+       itself: Claude Code validates updatedToolOutput and drops an oversized one SILENTLY, so 300 lines of
+       a wide file would lose the cap altogether instead of applying it (15 KB at 40-char lines, 40 KB at
+       120, against a 10,000-char ceiling).
+       The ceiling is a property of the emitted JSON, not of the text, and JSON escaping costs a character
+       for every quote, backslash and newline -- so a fixed reserve cannot cover it. Measured on this
+       branch, 8.1 KB of text emits 8.6 KB of JSON from plain lines but 10.0 KB from quote-heavy JSON
+       (`cat package-lock.json`), 10.1 KB from Windows paths and 16.5 KB from quote-dense content. So
+       measure the real payload and cut the body by the overage. The note is rebuilt each pass, never
+       sliced: a note claiming 300 lines while delivering 117 tells the model something false about its own
+       context, and a note cut in half tells it nothing. Bounded passes, and a body that will not shrink
+       emits as-is -- this is the guard, it fails open. */
+/* The note counts CHARACTERS as well as lines. Lines alone are a lie on output that has few of them:
+       a 100,000-char minified bundle read whole is one line, the fold cuts it to ~9,000 chars mid-line, and
+       a lines-only note reads "the first 1 of 1 lines" -- telling the model the whole file is present while
+       91% of it is gone and, with saved:null, gone with no copy to go back to. Characters move whenever
+       anything is withheld, whatever the line structure. */
+    const noteFor = (body) => `\n\n[tokenbrake] file excerpt capped at the first ${(body ? body.split('\n').length : 0).toLocaleString()} of ${all.length.toLocaleString()} lines, ${body.length.toLocaleString()} of ${text.length.toLocaleString()} characters. A few large ranges cost less than many small ones: each call is a request that re-reads the whole context. Use a narrower range, or Grep to locate the section first.`;
+    const wrap = (t) => (resp && typeof resp === 'object') ? { ...resp, stdout: t, stderr: '' } : t;
+    const payloadFor = (body) => ({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedToolOutput: wrap(body + noteFor(body)) } });
+    let kept = all.slice(0, cfg.readLimitLines).join('\n');
+    for (let pass = 0; pass < 4; pass++) {
+      const size = JSON.stringify(payloadFor(kept)).length;
+      const over = size - HOOK_OUTPUT_CAP;
+      if (over <= 0 || !kept) break;
+      /* Cut proportionally to the MEASURED expansion, not by the raw overage: where every byte escapes
+         to two, dropping `over` characters of body removes twice that much payload and collapses the
+         excerpt to nothing. Scaling by size/kept keeps the cut honest on both plain and escape-dense
+         content, and the remaining passes absorb the rounding. */
+      kept = kept.slice(0, Math.max(0, kept.length - Math.ceil(over * kept.length / size)));
+      /* Snap back to a line boundary only when that is CHEAP. When the last newline sits near the start of
+         the body -- a minified bundle behind a one-line `//# sourceMappingURL` header, a lockfile behind its
+         opening `{` -- snapping throws away everything after it: measured before this guard, 34 characters
+         delivered of 200,035, and 1 of 150,002, on exactly the huge single-line files this branch most often
+         sees. Past the halfway mark the snap costs at most a partial line and is worth it; before it, the
+         mid-line cut stands. The note counts characters, so a body ending mid-line is still described
+         honestly. */
+      const nl = kept.lastIndexOf('\n');
+      if (nl > 0 && nl >= kept.length / 2) kept = kept.slice(0, nl);
+    }
+    /* Built from the FINAL body, after the loop, so the payload emitted and the length logged are the same
+       text: assigning inside the loop emitted the body from the pass before the last cut. */
+    log({ ...rec, excerpt: true, kept: (kept + noteFor(kept)).length, saved: null });
+    emit(payloadFor(kept));
     return;
   }
 
   const saved = saveOut(input, text);
 
-  const trimmed = trimText(text, cfg, saved);
-  log({ ...rec, kept: trimmed.length, saved });
   // Claude Code validates updatedToolOutput against the tool's own response schema. For Bash that is
   // { stdout, stderr, interrupted, isImage } — a bare string is rejected (silently, in the debug log only)
   // and the original output goes through untouched. Keep the object shape, put the trimmed text in stdout.
   // On failure the output Claude sees is the error string itself, so the replacement is a string too.
-  const updated = (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: trimmed, stderr: '' } : trimmed;
-  emit({ hookSpecificOutput: { hookEventName: failed ? 'PostToolUseFailure' : 'PostToolUse', updatedToolOutput: updated } });
+  const evName = failed ? 'PostToolUseFailure' : 'PostToolUse';
+  const wrapTrim = (t) => (!failed && resp && typeof resp === 'object') ? { ...resp, stdout: t, stderr: '' } : t;
+  const payloadOfTrim = (t) => ({ hookSpecificOutput: { hookEventName: evName, updatedToolOutput: wrapTrim(t) } });
+  /* The ceiling is a property of the EMITTED JSON, and trimText measures the text. JSON escaping costs a
+     character per quote, backslash and newline, so the two diverge exactly on the output most worth
+     trimming: measured, a 6,000-character trim of quote-dense build output emits 11,788 characters, and a
+     wide one 16,446, against a 10,000 ceiling. Claude Code drops an oversized updatedToolOutput SILENTLY --
+     so the trim is discarded and the FULL untrimmed result enters context, the precise inverse of the
+     intent, with nothing in the ledger to say it happened. Re-trim to a budget shrunk by the measured
+     overage until the real payload fits. Bounded passes, and the last text emitted is the one logged. */
+  let budget = HOOK_OUTPUT_CAP, trimmed = trimText(text, cfg, saved);
+  for (let pass = 0; pass < 4; pass++) {
+    const size = JSON.stringify(payloadOfTrim(trimmed)).length;
+    if (size <= HOOK_OUTPUT_CAP || !trimmed) break;
+    budget = Math.max(400, Math.floor(budget * HOOK_OUTPUT_CAP / size));
+    trimmed = trimText(text, cfg, saved, budget);
+  }
+  log({ ...rec, kept: trimmed.length, saved });
+  emit(payloadOfTrim(trimmed));
 }
 
 /* Lines in a file, by counting newline bytes -- the ledger's `lines` convention throughout, so a file with no

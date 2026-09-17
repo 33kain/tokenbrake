@@ -13,6 +13,9 @@
   "bin": {
     "tokenbrake": "cli.js"
   },
+  "scripts": {
+    "test": "node test.mjs"
+  },
   "files": [
     "cli.js",
     "guard.js",
