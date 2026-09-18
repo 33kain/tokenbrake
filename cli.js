@@ -431,7 +431,7 @@ function capsReport() {
    carries the rule and the thresholds, fixed before this was ever run.
 
    The share reported is of CARRIED tokens, not of results: a result costs its size times the later requests
-   that re-read it, so counting results answers a different question from the one about the bill. */
+   that re-read it, so counting results answers a different question from the one about the tokens. */
 function reachReport() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
@@ -528,7 +528,7 @@ function reachReport() {
           + '\n    against Read\'s ' + pc(b.all.carried / r.total.carried) + '.'
         : '.'));
     console.log('    A ranged read is excluded BY DESIGN: 0.2.3 stopped trimming single-file excerpts because');
-    console.log('    doing it taught the model to read in 80-line chunks and doubled the bill on one task. So');
+    console.log('    doing it taught the model to read in 80-line chunks and doubled the tokens on one task. So');
     console.log('    this is not a defect list. It is the size of what the product declines to touch, and the');
     console.log('    honest moves on it withhold nothing the model does not already have -- reReadElide is the');
     console.log('    one with a measured record here; `tokenbrake tune` says whether it has fired for you.');
@@ -830,7 +830,7 @@ function readsReport() {
   console.log('\n  A whole-file read -- an unbounded Read, or a bare cat -- is what readMaxBytes acts on. head,');
   console.log('  tail, sed -n and grep are bounded requests and are not counted. The grid above is arithmetic and');
   console.log('  is exact for what it measures; what it cannot say is whether the model comes back for what a cap');
-  console.log('  withholds, which is behavioural and has cost money to find out before (AB-TASK.md).');
+  console.log('  withholds, which is behavioural and has taken real sessions to find out before (AB-TASK.md).');
 }
 
 function report() {
@@ -839,7 +839,9 @@ function report() {
   if (flag('--caps')) return capsReport();
   if (flag('--reads')) return readsReport();
   if (flag('--reach')) return reachReport();
-  if (flag('--cost')) return costReport();
+  /* --cost (and its --model repricing) was retired on 2026-09-18: tokenbrake states everything in tokens,
+     never money. Say so and exit non-zero, so a script that relied on it does not read the plain report as it. */
+  if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
@@ -1134,13 +1136,7 @@ function doctor() {
   process.exitCode = errors.length ? 1 : 0;
 }
 
-/* Cost (feature 8): the picked session(s) at list price, broken down by token type and by model, with the
-   guard's saving in dollars, and a --model=<id> what-if that reprices the same tokens at another model's
-   rate. Built on transcript.js's priceOf / usage / trimSavings -- the same figures the report's one-line
-   cost rests on. --all pools every session; --session=<prefix>/--transcript=<path> pick one. */
-const MODEL_ALIASES = { opus: 'claude-opus-5', sonnet: 'claude-sonnet-5', haiku: 'claude-haiku-4-5', fable: 'claude-fable-5-1' };
-
-/* Pick the session transcript(s) a report runs on, shared by --cost and --backfire so the two cannot drift.
+/* Pick the session transcript(s) a report runs on, for --backfire.
    --transcript=<path> and --all take precedence over --session=<prefix>; with none, the last session the
    ledger saw (whose transcript still exists), else the newest transcript on disk. Returns { ledger, found,
    files } or null after printing the reason -- a caller returns on null. */
@@ -1165,81 +1161,12 @@ function pickSessions() {
   return { ledger, found, files };
 }
 
-function costReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
-  const usd = (x) => x == null ? 'n/a' : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
-  const picked = pickSessions();
-  if (!picked) return;
-  const { ledger, files } = picked;
-
-  const modelArg = opt('--model');
-  let forced = null;
-  if (modelArg) {
-    forced = MODEL_ALIASES[modelArg.toLowerCase()] || modelArg;
-    if (!transcript.priceOf(forced)) { console.log('unpriced model "' + modelArg + '". Try: ' + Object.keys(MODEL_ALIASES).join(', ') + ', or a full claude-* id the price table knows.'); process.exitCode = 1; return; }
-  }
-
-  const type = { input: { tok: 0, usd: 0, label: 'input' }, output: { tok: 0, usd: 0, label: 'output' },
-    read: { tok: 0, usd: 0, label: 'cache read' }, write: { tok: 0, usd: 0, label: 'cache write' } };
-  const byModel = {}; const unpriced = new Set();
-  let reqsPriced = 0, forcedUsd = 0, sessions = 0, savedTok = 0, savedCarried = 0, savedUsd = 0, anySaving = false;
-
-  for (const file of files) {
-    let p; try { p = transcript.parseTranscript(file); transcript.carry(p); } catch { continue; }
-    sessions++;
-    for (const q of p.requests) {
-      const u = q.usage; if (!u) continue;
-      const pr = transcript.priceOf(q.model);
-      if (!pr) { unpriced.add(q.model || '?'); continue; }
-      reqsPriced++;
-      const inp = u.input_tokens || 0, o = u.output_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
-      type.input.tok += inp; type.input.usd += inp * pr.in / 1e6;
-      type.output.tok += o; type.output.usd += o * pr.out / 1e6;
-      type.read.tok += cr; type.read.usd += cr * pr.read / 1e6;
-      type.write.tok += cw; type.write.usd += cw * pr.write / 1e6;
-      byModel[q.model] = (byModel[q.model] || 0) + (inp * pr.in + o * pr.out + cr * pr.read + cw * pr.write) / 1e6;
-      if (forced) { const f = transcript.priceOf(forced); forcedUsd += (inp * f.in + o * f.out + cr * f.read + cw * f.write) / 1e6; }
-    }
-    const sv = transcript.trimSavings(p, ledger);
-    savedTok += sv.saved; savedCarried += sv.savedCarried;
-    if (sv.usd != null) savedUsd += sv.usd;
-    if (sv.count > 0) anySaving = true;
-  }
-
-  const total = type.input.usd + type.output.usd + type.read.usd + type.write.usd;
-  console.log('Cost -- ' + sessions + ' session(s)' + (forced ? '  (what-if model: ' + forced + ')' : ''));
-  if (!reqsPriced) {
-    console.log('  No priced requests' + (unpriced.size ? ' (models seen: ' + [...unpriced].join(', ') + ' -- not in the price table)' : ' (no API usage in the transcript)') + '.');
-    return;
-  }
-  console.log('  Total (list price):  ' + usd(total) + '   over ' + fmt(reqsPriced) + ' priced request(s)');
-  console.log('  By token type:');
-  for (const k of ['input', 'output', 'read', 'write']) {
-    const b = type[k];
-    console.log('    ' + b.label.padEnd(12) + fmt(b.tok).padStart(13) + ' tok   ' + usd(b.usd).padStart(8) + '   ' + String(total ? Math.round(100 * b.usd / total) : 0).padStart(3) + '%');
-  }
-  const models = Object.entries(byModel).sort((a, b) => b[1] - a[1]);
-  if (models.length > 1) { console.log('  By model:'); for (const [m, c] of models) console.log('    ' + m.padEnd(22) + usd(c).padStart(8)); }
-  else console.log('  Model: ' + models[0][0]);
-  console.log('  Per request:  ~ ' + usd(total / reqsPriced) + ' averaged over ' + fmt(reqsPriced) + ' request(s)');
-  if (unpriced.size) console.log('  Unpriced (excluded from the total): ' + [...unpriced].join(', '));
-  if (anySaving) console.log('  Guard saving:  ~ ' + fmt(savedTok) + ' tokens kept out, ~ ' + fmt(savedCarried) + ' token-reads not carried'
-    + (savedUsd ? ' -- ~ ' + usd(savedUsd) + ' off at list price' : ''));
-  else if (ledger.length) console.log('  Guard saving:  none credited in these session(s)');
-  if (forced) {
-    const delta = total ? Math.round(100 * (total - forcedUsd) / total) : 0;
-    console.log('  What-if on ' + forced + ':  ~ ' + usd(forcedUsd) + '  (same tokens at ' + forced + ' rates) -- '
-      + (delta > 0 ? delta + '% less' : delta < 0 ? (-delta) + '% more' : 'about the same'));
-  }
-  console.log('\n  Dollar figures use the API usage recorded in the transcript, at list price (cache writes at the 1h rate); a model not in the price table is excluded.');
-}
-
 /* The Backfire Auditor (roadmap Step 0): the gate a narrowing has to pass before its default can move. For
    the picked session(s) it counts what the guard withheld (trims, MCP, dedup), how much of that the model
    then pulled back the two ways the guard itself created (its saved out/ file, or `tokenbrake show`), and
-   the NET -- token-reads saved minus token-reads carried back in. Tokens only, never dollars: this is a
-   measurement gate, and ab10's lesson is that the count of trims does not predict the saving, so it reads
-   the net. Selection matches --cost: --all pools, --session=<prefix>/--transcript=<path> pick one. */
+   the NET -- token-reads saved minus token-reads carried back in. Tokens only: this is a measurement gate,
+   and ab10's lesson is that the count of trims does not predict the saving, so it reads the net. --all
+   pools, --session=<prefix>/--transcript=<path> pick one. */
 function auditReport() {
   const picked = pickSessions();
   if (!picked) return;
@@ -1305,7 +1232,7 @@ function auditReport() {
   narrowingLines();
   console.log('\n  A withhold backfires when the model retrieves what was withheld -- the two ways the guard creates it: reading the'
     + '\n  saved out/ file, or `tokenbrake show`. This is the gate for turning a narrowing on: a narrowing whose net is'
-    + '\n  negative is spending tokens, not saving them. Token-reads only; --cost is where dollars live.');
+    + '\n  negative is spending tokens, not saving them. Token-reads only.');
 }
 
 /* The Personalized Auto-Tuner (`tokenbrake tune`). Pools your recent real sessions -- the same population and
@@ -1436,7 +1363,7 @@ function tuneReport() {
       console.log('    "' + f.knob + '": false -> true   (measured clean: ' + ev + ')');
     }
     if (review.length) console.log(' ' + reviewNote);
-    console.log('  Revert any line by editing ' + cfgPath + '. Re-run `tokenbrake tune` after more sessions to re-check. Tokens, never dollars.');
+    console.log('  Revert any line by editing ' + cfgPath + '. Re-run `tokenbrake tune` after more sessions to re-check. Tokens only.');
     return;
   }
 
@@ -1566,7 +1493,7 @@ function tuneReport() {
   console.log('\n  A "turn on" is a MEASURED, clean record. A "try" is an ESTIMATE from what the model read -- built to under-count,');
   console.log('  so turn the feature on and run `tokenbrake report --backfire` to confirm before trusting it. "Measure" means the');
   console.log('  off state shows no signal either way (some wins are invisible until the feature runs); only a measured backfire is');
-  console.log('  a real "leave off". Recommendations only: nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens, never dollars.');
+  console.log('  a real "leave off". Recommendations only: nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens only.');
 }
 
 function help() {
@@ -1596,9 +1523,6 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets
                                       sit as a share of the file. The evidence for readMaxBytes
-      --cost [--model=<id>]           the session at list price, broken down by token type and model, with
-                                      the guard's saving in dollars; --model reprices the same tokens at
-                                      another model's rate (opus|sonnet|haiku|fable, or a full claude-* id)
       --backfire                      the Backfire Auditor: what the guard withheld, how much the model then
                                       pulled back (its saved out/ file, or 'show'), and the NET token-reads
                                       saved. The gate a narrowing passes before its default moves. Tokens only

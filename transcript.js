@@ -17,7 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const CHARS_PER_TOKEN = 4;   // the same estimate the extension and the HANDOFF use; a warning, not a bill
+const CHARS_PER_TOKEN = 4;   // the same estimate the extension and the HANDOFF use; an estimate, not a count
 
 function readJsonl(file) {
   const out = [];
@@ -520,34 +520,6 @@ function repeatReads(parsed) {
   return out;
 }
 
-/* List prices, USD per million tokens, first-party Claude API. Cache writes are priced for the one-hour TTL
-   Claude Code uses (2x input; the five-minute TTL would be 1.25x). Checked against the session records of the
-   A/B arms: on the Opus 5 feature arms the formula reproduces $2.381214 and $2.452951 to the sixth decimal.
-   Prices change; a model not listed here is reported as unpriced rather than guessed. */
-const PRICES = [
-  [/^claude-fable-5-1/, { in: 10, out: 50, read: 0.25, write: 20 }],
-  [/^claude-fable-5/, { in: 10, out: 50, read: 1, write: 20 }],
-  [/^claude-opus-5/, { in: 5, out: 25, read: 0.5, write: 10 }],
-  [/^claude-opus-4-[678]/, { in: 5, out: 25, read: 0.5, write: 10 }],
-  [/^claude-sonnet-5/, { in: 2, out: 10, read: 0.2, write: 4 }],
-  [/^claude-sonnet-4-6/, { in: 3, out: 15, read: 0.3, write: 6 }],
-  [/^claude-haiku-4-5/, { in: 1, out: 5, read: 0.1, write: 2 }],
-];
-function priceOf(model) { for (const [re, p] of PRICES) if (re.test(String(model || ''))) return p; return null; }
-
-/* The session at list price, request by request, each at its own model's rate. */
-function costOf(parsed) {
-  let usd = 0; const byModel = {}; const unpriced = new Set();
-  for (const q of parsed.requests) {
-    const u = q.usage; if (!u) continue;
-    const p = priceOf(q.model);
-    if (!p) { unpriced.add(q.model || '?'); continue; }
-    const c = ((u.input_tokens || 0) * p.in + (u.output_tokens || 0) * p.out
-      + (u.cache_read_input_tokens || 0) * p.read + (u.cache_creation_input_tokens || 0) * p.write) / 1e6;
-    usd += c; byModel[q.model] = (byModel[q.model] || 0) + c;
-  }
-  return { usd, byModel, unpriced: [...unpriced] };
-}
 
 const TRIM_CHARS = 6000;
 /* The share of a session's carried tokens inside the trim's window at which a report tells someone without the
@@ -665,7 +637,7 @@ function commandTool(cmd) {
    person's own sessions are a better sample of "an agent with decent tools" than any fixture.
 
    The share that matters is of CARRIED tokens, not of results: ab10 established that a result's cost is its
-   size times the later requests that re-read it, so a count of results says nothing about the bill. */
+   size times the later requests that re-read it, so a count of results says nothing about the tokens. */
 /* The results the guard actually rewrote AND the model saw, which is what `reach` needs to classify a
    trimmed result as in-window by proof rather than by its post-trim size. Extracted from renderReport so a
    pooled view can use the same rule rather than a second, quietly different one. */
@@ -680,11 +652,10 @@ function trimmedResults(parsed, ledgerRecs) {
   return parsed.results.filter((r) => r.marker && offered(r));
 }
 
-/* The guard's saving on one session, in tokens and dollars: for each result that carries the trim marker AND
-   matches a ledger row, the removed tokens (original chars - kept, over CHARS_PER_TOKEN), and those tokens
-   re-read through every later request they no longer sit in (carriedTurns + 1). Priced at the session's
-   dominant model, cache-write + cache-read as usdOfTokens splits them. The report's savings line and
-   `report --cost` both call this, so both report the same number. */
+/* The guard's saving on one session, in tokens: for each result that carries the trim marker AND matches a
+   ledger row, the removed tokens (original chars - kept, over CHARS_PER_TOKEN), and those tokens re-read
+   through every later request they no longer sit in (carriedTurns + 1). Tokens only, never money -- the
+   project states every saving in tokens entered and carried. */
 function trimSavings(parsed, ledgerRecs) {
   const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
   const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
@@ -696,8 +667,7 @@ function trimSavings(parsed, ledgerRecs) {
     saved += tok;
     savedCarried += tok * (r.carriedTurns + 1);
   }
-  const price = priceOf(dominantModel(parsed));
-  return { count: trimmed.length, saved, savedCarried, usd: usdOfTokens(saved, savedCarried, price), priced: !!price };
+  return { count: trimmed.length, saved, savedCarried };
 }
 
 /* The second half is the OTHER side of the same table, and it lives in this one loop for the reason the
@@ -711,7 +681,7 @@ function trimSavings(parsed, ledgerRecs) {
    So `read` sizes what that lever can even be eligible for. The cap fires on an UNBOUNDED read of a file over
    `readMaxBytes`, leaving three groups, which on the same pool ran 63.8% / 33.2% / 3.0% of Read carry --
    the cap is eligible for about a thirtieth of the largest block in the report. A ranged read is excluded BY
-   DESIGN (0.2.3: shredding one taught the model to read in 80-line chunks and doubled the bill), so this is
+   DESIGN (0.2.3: shredding one taught the model to read in 80-line chunks and doubled the tokens), so this is
    not a defect list; it is the size of what the product declines to touch, which the report owes the reader
    plainly rather than as a 41% residue.
 
@@ -769,24 +739,6 @@ function reachPooled(sessions, opts) {
     tools: rank(byTool), nonShellTools: rank(nonShellByTool) };
 }
 
-/* Money, not token counts. ab10 (AB-TASK.md) measured where a hook's effect actually lands: not in the
-   size of any one result but in `carried` -- a result is paid for again in every later request that
-   re-reads it. So price the first appearance once at the cache-write rate and every re-read at the
-   cache-read rate, at the session's own model and at list price. A token count is not a bill, and this
-   package's whole claim is about the bill. */
-function dominantModel(parsed) {
-  const n = {};
-  for (const q of parsed.requests) if (q.model) n[q.model] = (n[q.model] || 0) + 1;
-  let best = null, most = 0;
-  for (const m of Object.keys(n)) if (n[m] > most) { best = m; most = n[m]; }
-  return best;
-}
-function usdOfTokens(first, carriedTotal, price) {
-  if (!price) return null;
-  const later = Math.max(0, (carriedTotal || 0) - (first || 0));
-  return ((first || 0) * price.write + later * price.read) / 1e6;
-}
-const usd = (x) => x == null ? null : (x >= 0.01 ? '$' + x.toFixed(2) : '<$0.01');
 
 /* The guard's own cost, and the reason ab10's pair 5 saved only 8%: a trim can send the model back for
    what was cut. A recovery read is a read of a file this session had already read at a different offset
@@ -822,12 +774,12 @@ function recoveryReads(parsed) {
    earlier session's file, a different session id) matches nothing here, which is the point of doing it whole
    rather than by containment.
 
-   The NET is the gross saving (the same removed-tokens x carried basis trimSavings and --cost rest on) minus
+   The NET is the gross saving (the same removed-tokens x carried basis trimSavings rests on) minus
    what those pull-backs carried, measured on the SAME footprint (size x (its own later requests + 1), so
    entry and every re-read count on both sides). The verdict reads the net, not the count: ab10 established
-   that the number of trims does not predict the bill, so a measured net loss is called a backfire at any
+   that the number of trims does not predict the saving, so a measured net loss is called a backfire at any
    sample size, and only the "did it help" labels wait for MIN_WITHHOLDS results before a rate is asserted.
-   Money is deliberately absent -- this is a token gate. Only a MATCHED pull-back nets against the saving: a
+   Only a MATCHED pull-back nets against the saving: a
    read of a save this audit did not count as a withhold (an earlier session's out/ file, or a capped or
    over-ceiling output that carries no marker) is a real cost but not THIS saving coming back, so netting it
    would let the rate say "nothing backfired" while the net was silently docked -- it is reported apart
@@ -1332,7 +1284,7 @@ function capFrontier(rows, opts) {
   const med = (xs) => { const a = [...xs].sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : 0; };
   /* Two ways to say what a cap costs, and they are not the same question. `withheld` is the median SHARE of a
      file's lines, which weights a 200-line file the same as a 2,000-line one. `withheldTokens` is the share of
-     all the tokens these reads represent, which is what a bill is made of -- and it is the measure that decides
+     all the tokens these reads represent, which is what a session's total is made of -- and it is the measure that decides
      whether a fractional cap's extra saving on short files is saving worth having. AB-TASK.md, "A fractional
      Read cap", Step A. Reads whose bytes-per-line could not be established are outside the token measure and
      are counted, never estimated into it. */
@@ -1387,7 +1339,7 @@ function frontierVerdict(front, opts) {
 
 /* What each candidate trigger would catch, and what each candidate limit would then withhold. Pure
    arithmetic over the reads -- the half of the readMaxBytes question that needs no session. The half it
-   cannot answer is whether the model comes back for what was withheld, which is behavioural and costs money
+   cannot answer is whether the model comes back for what was withheld, which is behavioural and costs a session
    to find out (AB-TASK.md, "The Read cap's trigger"). */
 /* Whether the guard reaches the Read cap on a read at all: a shell read (via the POST hook) at or under maxChars
    is returned on before any cap logic (guard.js:272); an unbounded Read has no floor. A null maxChars is no floor. */
@@ -1739,7 +1691,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
 
   /* One decision, applied to every feature. Measured beats opportunity: a feature that fired is judged on what
      happened, never on an estimate. A measured backfire is disqualifying whatever the count (ab10: the count of
-     withholds does not predict the bill, so one real pull-back is evidence) -- and it is the ONLY thing that
+     withholds does not predict the saving, so one real pull-back is evidence) -- and it is the ONLY thing that
      earns a definitive "leave off". A clean measured record earns "turn it on" only past the confidence floor;
      below it, "try". With no firings, material opportunity earns at most a "try" (never a "turn it on":
      backfire is behavioural and must be measured), and NO material opportunity earns "measure" -- not "leave
@@ -1910,10 +1862,6 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
     const pct = u.processed ? Math.round(100 * u.cacheRead / u.processed) : 0;
     lines.push(`  Context processed: ${kfmt(u.processed)} tokens across ${fmt(u.requestsWithUsage)} requests (${pct}% read from cache); output ${kfmt(u.out)}`);
     lines.push(`  Context now: ~ ${kfmt(u.contextNow)} tokens -- what the next request re-reads`);
-    const c = costOf(parsed);
-    const models = Object.keys(c.byModel);
-    if (models.length) lines.push(`  At list price: ~ $${c.usd.toFixed(2)} (${models.join(', ')}; cache writes at the 1h rate)`
-      + (c.unpriced.length ? ` -- ${c.unpriced.join(', ')} unpriced` : ''));
   }
   const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
@@ -1929,11 +1877,9 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   const trimmedOf = (r) => (r.marker ? offeredOf(r) : null);
   const trimmed = parsed.results.filter(trimmedOf);
   const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
-  const price = priceOf(dominantModel(parsed));
   const sv = trimSavings(parsed, ledger);
   if (trimmed.length) {
-    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried`
-      + (sv.usd == null ? '' : ` -- ~ ${usd(sv.usd)} off this session at list price`));
+    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried`);
   } else if (ran) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
@@ -1980,20 +1926,18 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
         ? `  No sign of tokenbrake in this session (no ledger row, no trim marker). The brake could have acted on ${rc.window.n} result${rc.window.n === 1 ? '' : 's'}, ${pct(rc.window.carried)}% of what it carried -- if it is not installed, \`npx tokenbrake init\` installs it.`
         : `  No sign of tokenbrake in this session (no ledger row, no trim marker), and ${pct(rc.window.carried)}% of what it carried is in the brake's reach -- too little to install it for work like this.`);
     } else lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` -- ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
-    /* What is left on the table, in money. The share of *carried* is the honest weight: ab10 found the
+    /* What is left on the table, in token-reads. The share of *carried* is the honest weight: ab10 found the
        count of trims does not predict the saving -- two trims beat seven -- because which result is cut,
        and how early, decides how many later requests re-read it. */
     if (ran && rc.untouched.n) {
-      const left = usdOfTokens(rc.untouched.tokens, rc.untouched.carried, price);
-      lines.push(`  Still within reach: ${rc.untouched.n} result${rc.untouched.n === 1 ? '' : 's'} the guard could have trimmed and did not (~ ${kfmt(rc.untouched.carried)} carried${left == null ? '' : `, ~ ${usd(left)}`})`);
+      lines.push(`  Still within reach: ${rc.untouched.n} result${rc.untouched.n === 1 ? '' : 's'} the guard could have trimmed and did not (~ ${kfmt(rc.untouched.carried)} carried)`);
     }
   }
 
   /* The guard's own cost, reported next to its saving and never omitted when the saving is shown. */
   const rec = recoveryReads(parsed);
   if (rec.n) {
-    const cost = usdOfTokens(rec.tokens, rec.carried, price);
-    lines.push(`  Recovery reads: ${rec.n} -- the model came back for more of a file it had already read (~ ${kfmt(rec.tokens)} tokens re-entered, ~ ${kfmt(rec.carried)} carried${cost == null ? '' : `, ~ ${usd(cost)}`})`
+    lines.push(`  Recovery reads: ${rec.n} -- the model came back for more of a file it had already read (~ ${kfmt(rec.tokens)} tokens re-entered, ~ ${kfmt(rec.carried)} carried)`
       + (trimmed.length ? ` -- some of these are what the trim sent it back for` : ''));
   }
 
@@ -2058,7 +2002,7 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
    they differ; that is the caller's protocol. The change column is B against A. */
 function sessionFacts(parsed, ledger) {
   carry(parsed);
-  const u = usageTotals(parsed), c = costOf(parsed), rep = repeatReads(parsed);
+  const u = usageTotals(parsed), rep = repeatReads(parsed);
   const idx = ledgerIndex(ledger || [], parsed.sessionId);
   let trimmed = 0, keptOut = 0;
   for (const r of parsed.results) {
@@ -2078,8 +2022,7 @@ function sessionFacts(parsed, ledger) {
   for (const r of parsed.results) { const cls = byClass[classOf(r.name)]; cls.n++; cls.entered += r.tokens; cls.carried += r.carried; }
   return {
     session: String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8),
-    model: Object.keys(c.byModel).join('+') || (parsed.requests.find(q => q.model) || {}).model || '?',
-    cost: c.usd, unpriced: c.unpriced.length > 0,
+    model: [...new Set(parsed.requests.filter((q) => q.usage && q.model && q.model !== '<synthetic>').map((q) => q.model))].join('+') || (parsed.requests.find(q => q.model) || {}).model || '?',
     requests: parsed.requests.length, results: parsed.results.length, compactions: parsed.compactions.length,
     processed: u.processed, cacheRead: u.cacheRead, cacheWrite: u.cacheWrite, input: u.input, out: u.out,
     entered: parsed.results.reduce((s, r) => s + r.tokens, 0),
@@ -2090,7 +2033,6 @@ function sessionFacts(parsed, ledger) {
 
 function renderCompare(A, B, ledger) {
   const a = sessionFacts(A, ledger), b = sessionFacts(B, ledger);
-  const money = (x, f) => f.unpriced ? '$' + x.toFixed(2) + '*' : '$' + x.toFixed(2);
   /* Break the entered and carried totals out by tool class, so the change column says which of the guard's
      domains (read cap vs shell trim) moved. entered is the guard's lever; carried is entered x turns, so a
      shorter arm B drops carried in every class at once regardless of the guard -- read entered per class to
@@ -2101,7 +2043,6 @@ function renderCompare(A, B, ledger) {
     .filter((k) => a.byClass[k].n || b.byClass[k].n)
     .map((k) => [`  ${metric}: ${k}`, kfmt(a.byClass[k][metric]), kfmt(b.byClass[k][metric]), a.byClass[k][metric], b.byClass[k][metric]]);
   const rows = [
-    ['API cost, list price', money(a.cost, a), money(b.cost, b), a.cost, b.cost],
     ['requests', fmt(a.requests), fmt(b.requests), a.requests, b.requests],
     ['context processed', kfmt(a.processed), kfmt(b.processed), a.processed, b.processed],
     ['cache-read tokens', kfmt(a.cacheRead), kfmt(b.cacheRead), a.cacheRead, b.cacheRead],
@@ -2126,9 +2067,9 @@ function renderCompare(A, B, ledger) {
   lines.push(`${''.padEnd(w0)}  ${'A'.padStart(w1)}  ${'B'.padStart(w2)}  change`);
   for (const r of rows) lines.push(`${r[0].padEnd(w0)}  ${r[1].padStart(w1)}  ${r[2].padStart(w2)}  ${change(r[3], r[4])}`);
   lines.push('');
-  lines.push('Change is B against A. Cost is list price, cache writes at the 1h rate' + ((a.unpriced || b.unpriced) ? '; * a model without a listed price was left out' : '') + '.');
+  lines.push('Change is B against A. Every row is tokens or a count -- never money.');
   lines.push('The entered:/carried: rows split those totals by tool class -- Read (read cap), shell (the trim: Bash/PowerShell), MCP (mcp trim), other (untrimmed, the task-variance baseline). entered is the guard\'s lever; carried is entered x turns, so a shorter arm drops carried everywhere -- read entered per class to credit the guard.');
-  lines.push('Two sessions differ by more than their configuration: on one task, identical arms came out 21% apart in cost (AB-TASK.md).');
+  lines.push('Two sessions differ by more than their configuration: identical OFF/OFF arms have come out up to 42.6% apart on tokens entered (EVIDENCE.md).');
   return lines.join('\n');
 }
 
@@ -2147,9 +2088,9 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets, dominantModel,
+module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };

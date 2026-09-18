@@ -1157,3 +1157,15 @@ text now overstates: the reach share (11.6% / 7.5% with excerpts counted apart, 
 no money, no cost percentages): anyone publishing a token-saving percentage owes a control pair; the OFF/OFF
 pairs here were up to 42.6% apart on tokens entered, and carried rose in two of six brake pairs, once by 72.6%. Links to `EVIDENCE.md` are absolute GitHub URLs so they work on the
 npm page, where `EVIDENCE.md` is not shipped. Next: item 5 (shadow mode).
+
+### Tokens only, everywhere — 2026-09-18
+
+The user's hard rule, applied to everything on their decision: every figure is tokens (entered, carried, cache)
+or a count, never money. Code: the price table and `priceOf`/`costOf`/`usdOfTokens`/`dominantModel` are gone;
+`report --cost` and `--model` repricing print a removal message and exit 1; the report's list-price line and
+every dollar tail are gone; `--compare` dropped its cost row. Docs: every dollar and cost figure removed from
+EVIDENCE/AB-TASK/AB-RUNBOOK/CHANGELOG/FEATURES-PLAN/HANDOFF, token figures kept where the same record had them,
+cost-only results marked "(recorded in cost only; not restated here -- tokens-only record)". Two judgement
+calls left for the user: pre-registered decision rules whose third condition was written in cost are marked,
+not rewritten; and AB-TASK still calls the content-heavy mcpTrim result "a real backfire", a verdict that rested
+on +46% cost -- its remaining token figure (+19% cache reads) sits inside the 42.6% noise band.

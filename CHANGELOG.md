@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The report is the product: `npx tokenbrake report` needs no install, and says whether the brake is worth it.**
+  README, package description and `help` lead with the report; the brake is step two. A session with no sign of
+  the guard gets a verdict line instead of "Acted on: 0". Single-file excerpts are no longer counted in the
+  trim's reach (the guard reads them like a Read), so the reach share is honest: 11.6% of carried over 55
+  sessions on the machine this was written on, not ~18%. The person's own and per-tool `maxChars` are used.
+- **`tune` recommends `maxChars` and `readMaxBytes` per person** from their own sessions, recommend-only.
+- **`report --reach` splits Read** into ranged / whole-under / whole-over-the-trigger / unsized.
+- **Tokens only, never money.** `report --cost` and `--model` repricing are removed (they now say so and exit
+  1); the report's list-price line and every dollar figure on its saving, still-within-reach and recovery lines
+  are gone; `--compare` drops its cost row. Every figure tokenbrake prints is tokens or a count.
+- The evidence moved from the README to `EVIDENCE.md`; the README states why it quotes no percentage.
+
 ## 0.3.0 — 2026-09-17
 
 - **`tokenbrake tune` — read your own recent sessions and get told which off-by-default features to turn on.**

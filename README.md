@@ -7,7 +7,7 @@ npx tokenbrake report
 ```
 
 No install, no hooks, no config, nothing written anywhere: it reads the session transcripts Claude Code already
-keeps under `~/.claude/projects/` and ranks every tool result by what it actually cost you. That isn't its size.
+keeps under `~/.claude/projects/` and ranks every tool result by the tokens it actually took. That isn't its size.
 It's **carried**: its size times the number of later requests that re-read it, because a tool result is re-sent as
 context on every request until the session compacts. A 4k-token file read at request 3 of 100 is about 400k
 token-reads, and the ranking puts results like that at the top where you can see them. Then it tells you how much of
@@ -130,8 +130,6 @@ npx tokenbrake report --where             # where your ranged reads land -- the 
 npx tokenbrake report --caps              # every file the Read cap fired on
 npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
-npx tokenbrake report --cost              # the session in dollars, by token type and model, plus the saving
-npx tokenbrake report --cost --model=sonnet   # reprice the same tokens as if it had run on another model
 npx tokenbrake report --backfire          # what the guard withheld vs. what the model pulled back -- the net
 npx tokenbrake tune                       # read your recent sessions and recommend which off-by-default features to turn on
 ```
@@ -184,22 +182,16 @@ into a bucket. Sizes come from the guard's ledger and Claude Code's line numberi
 text, which on a capped read is the cap's own output. On the machine this was built on, Read was about a third
 of everything carried and the cap could act on about 1% of it.
 
-`--cost` puts the same session in dollars. It uses the API usage the transcript records — input, output, cache
-read, cache write — priced per request at its own model's list price (cache writes at the one-hour rate Claude
-Code uses), and breaks the total down by token type and by model, so the cache-read line shows what carried
-context actually costs. It adds the guard's saving in dollars (the trimmed tokens, priced across the requests
-they no longer sit in) and, with `--model=<id>` (`opus`/`sonnet`/`haiku`/`fable`, or a full `claude-*` id),
-reprices the very same tokens at another model's rate — the what-would-this-have-cost-on-X question. A model
-the price table does not know is excluded rather than guessed; prices change, so treat it as list price, not a
-bill.
+Everything tokenbrake reports is in tokens: tokens entered, token-reads carried, cache reads and writes. It
+never states a saving in money. `report --cost`, which stated sessions in money, was removed on 2026-09-18
+and now says so.
 
-`--backfire` is the honest counterweight to the saving line, and it is measured in **tokens only** — no
-dollars. A trim, MCP trim or dedup keeps content out of context, but a trim can also send the model back for
-what was cut, and a return trip that re-reads the whole saved output can cost more than the cut saved. This
+`--backfire` is the honest counterweight to the saving line, measured in token-reads like everything else. A trim, MCP trim or dedup keeps content out of context, but a trim can also send the model back for
+what was cut, and a return trip that re-reads the whole saved output can take more tokens than the cut saved. This
 view counts what the guard **withheld** (each result the model saw carrying the marker, matched to a ledger
 row for its original and kept size) against what the model then **pulled back** — the two ways the guard
 itself makes that possible: reading the `out/` file it saved, or `tokenbrake show`. Those are the guard's own
-cost by construction, unlike a plain re-read, which the ranking counts but cannot attribute. It reports the
+price by construction, paid in tokens, unlike a plain re-read, which the ranking counts but cannot attribute. It reports the
 **backfire rate** (how many withheld outputs were read back) and the **net** — token-reads saved minus
 token-reads carried back in, on the same footprint basis on both sides. A read of a saved output it can't tie
 to a withhold here (an earlier session's file, or a capped output that carries no marker) is reported apart,
@@ -257,15 +249,13 @@ npx tokenbrake report --compare <A> <B>
 ```
 
 Each argument is a session-id prefix (`tokenbrake report --all` lists them) or a transcript path. The output is
-the table `AB-TASK.md` built by hand: cost at list price, requests, cache reads and writes, output, what tool
-results entered and were carried, what the guard trimmed, repeat reads, with B's change against A. The cost
-line also appears in every single-session report; it is computed per request at that request's model's list
-price, cache writes at the one-hour rate Claude Code uses, and it reproduces the Opus 5 A/B arms' session
-records to the sixth decimal. A model without a listed price is reported as unpriced, not guessed.
+the table `AB-TASK.md` built by hand, in tokens and counts only: requests, context processed, cache reads and
+writes, output, what tool results entered and were carried (split by tool class), what the guard trimmed, repeat
+reads, with B's change against A.
 
-Two sessions differ by more than their configuration. On one task, identical arms came out 21% apart in cost on
-nothing but how the model planned; the table says what happened, the protocol in `AB-TASK.md` says what it
-means.
+Two sessions differ by more than their configuration. Identical OFF/OFF arms have come out up to 42.6% apart on
+tokens entered, on nothing but how the model planned; the table says what happened, the protocol in
+`AB-TASK.md` says what it means.
 
 ## Configure
 
@@ -438,8 +428,7 @@ npx tokenbrake tune --write         # apply the MEASURED recommendation to token
 It prints, per feature, that verdict and the **exact knob to set**. Plain `tune` is a preview — it changes
 nothing. It also reports the Read cap's health (firing / dormant / missing / unmeasured — the last is what a
 fresh install sees, meaning no pooled session ran the guard, so nothing watched the reads; the exact value still comes from
-`report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache,
-never dollars — `--cost` is where dollars live.
+`report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache only.
 
 It also recommends the two **thresholds**, `maxChars` and `readMaxBytes`, from your own sessions rather than
 one value for everyone: a grid of what each candidate value would reach and could withhold at most, with your
@@ -516,7 +505,7 @@ npx tokenbrake clean --days=7   # delete saved full outputs older than 7 days
   which tokenbrake has registered for since 0.2.2 and which Claude Code 2.1.261–2.1.267 ignores the
   replacement on, against its own hooks reference. So a failing command's output enters as Claude Code
   delivers it — capped by its own error ceiling, middle elided to about 7,500 characters — and the ledger
-  records what it cost. `AB-TASK.md`, "The failing command", has the measurements.
+  records its size. `AB-TASK.md`, "The failing command", has the measurements.
 - The guard fails open: any error exits 0 with no output and Claude Code proceeds unchanged.
 - One `node` process per tool call (~50–100 ms). Set the PostToolUse matcher to `Bash|PowerShell|Read` in
   settings.json if you want it lighter and don't need the full ledger.
