@@ -265,6 +265,14 @@ those your work looks like is not a thing to reason about either. It counts only
 recording in, because in a session without it "untouched" means the guard was absent rather than idle, and under
 10 such sessions or 200 shell results it prints no verdict instead of a number that looks like one.
 
+It also shows the other side of that table: what sits **out** of reach, broken out by tool. On most work that is
+mostly Read, and Read gets a split of its own -- ranged reads (left alone by design, since trimming excerpts
+taught the model to read in 80-line chunks), whole reads at or under `readMaxBytes`, whole reads over it (the
+only ones the Read cap can act on), and reads nothing could size, which are listed apart rather than guessed
+into a bucket. Sizes come from the guard's ledger and Claude Code's line numbering, never from the delivered
+text, which on a capped read is the cap's own output. On the machine this was built on, Read was about a third
+of everything carried and the cap could act on about 1% of it.
+
 `--cost` puts the same session in dollars. It uses the API usage the transcript records — input, output, cache
 read, cache write — priced per request at its own model's list price (cache writes at the one-hour rate Claude
 Code uses), and breaks the total down by token type and by model, so the cache-read line shows what carried

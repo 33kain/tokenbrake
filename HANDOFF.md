@@ -1083,8 +1083,8 @@ transcript recorded as the REWRITTEN (ranged, no-offset) input was filed as "ran
 ties its reconstructed cap row to that result's id and the split files it as the cap's; (3) the "size unknown"
 note blamed a missing guard for reads the guard cannot size either, and now names the real causes; (4) a null
 or empty `readMaxBytes` became a threshold of 0. `/security-review`: clean (no fs call, exec or eval takes
-transcript/ledger data; untrusted ids only key Maps). Remaining: the README's `--reach` paragraph (~line 259)
-still describes only the in-reach half, then item 2.
+transcript/ledger data; untrusted ids only key Maps). README `--reach` paragraph: done. Remaining:
+item 2.
 
 On this machine the view now prints: Read is 32.9% of everything carried, the cap can act on 1.2% (after the fixes). On the
 benchmark pool (`--cwd=tokenbrake-bench`) the same view prints Read at 73.6% with the opposite internal shape
