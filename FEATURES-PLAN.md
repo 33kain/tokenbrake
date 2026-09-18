@@ -282,3 +282,16 @@ grandfathered, to be cleaned up later, not extended).
   Projection; plus Instruction Diet Compiler, Deterministic Replay Simulator (rides the `trim.js` extraction).
   (The Personalized Auto-Tuner shipped — see above, `tune --write` included.) The blob elider's two deferred
   follow-ups (a `Read` of a one-line minified file; MCP base64 result blocks) also remain.
+- **Shadow mode (`shadow: true`) — NEXT, and it ships ON.** Priority set 2026-09-18; the card in `HANDOFF.md`
+  is the spec. Every off-by-default feature runs its decision logic, writes a ledger row tagged `shadow`, and
+  **emits nothing** — so it changes nothing that enters context and needs no default-OFF gate or A/B of its
+  own, the same standing as `report --backfire` and `tune`. It is the answer to the fact that eight features
+  are built and zero defaults have moved: it makes a feature's evidence free instead of costing a paid session
+  and a live backfire risk. It also satisfies the simulation invariant above ("calls the SAME trim function as
+  the guard") **by construction** — it *is* the guard — so it needs no `trim.js` extraction and lands before
+  Wave 3 rather than behind it, and it retires the `tune` opportunity estimators whose uneven tightness is the
+  deferred follow-up (3) directly above. Honest limit: it measures the withhold side exactly and the backfire
+  side only as a *prediction*, so it can kill a feature or size an opportunity but a flip still wants one
+  confirming live run. First cut is `blobElide` + `gitView` (pure content tests, no state); the state-carrying
+  features (`dedup`, the two Read narrowings) need the "does a shadow run still write its per-session state?"
+  question settled first — it must, or the second firing never sees the first.

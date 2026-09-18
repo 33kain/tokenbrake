@@ -1250,6 +1250,127 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       T.guardRan({ sessionId: 's2', results: [{ marker: false }, { marker: false }] }, [], 's2').ran === false);
   }
 
+  /* ---- the other side of the same table: what sits BEYOND the reach ---------
+     `reach` filed everything non-shell into one bucket and stopped, and on real sessions that bucket was
+     41% of carried tokens -- the second largest thing in the report, unnamed. It is almost entirely Read,
+     which the PostToolUse handler never touches (every branch is gated on shell/mcp), so the only lever is
+     the PreToolUse cap -- eligible for a ranged read never, and for a whole read only over readMaxBytes.
+     This lives in `reachPooled`'s own per-result loop rather than in a second pooling function, for the
+     reason the comment above `trimmedResults` gives: one rule, not a second quietly different one. */
+  {
+    const mk = (name, extra) => ({ name, chars: 4000, tokens: 1000, carried: 10000, isError: false,
+      marker: false, ...(extra || {}) });
+    const results = [
+      mk('Bash', { what: 'node tools/dump.js', chars: 20000, carried: 50000 }),   // shell: the other side
+      mk('Read', { id: 'ranged', file: '/w/a.js', whole: false, carried: 7000 }),
+      mk('Read', { id: 'small', file: '/w/b.js', whole: true, carried: 3000 }),
+      mk('Read', { id: 'big', file: '/w/c.js', whole: true, carried: 5000 }),
+      mk('Read', { id: 'nosize', file: '/w/d.js', whole: true, carried: 1000 }),
+      mk('Agent', { id: 'ag', carried: 2000 }),
+    ];
+    const sizes = new Map([['small', 10000], ['big', 90000]]);   // 'nosize' deliberately absent
+    const sess = { parsed: { cwd: '/w', sessionId: 'br', requests: [{}], compactions: [], results }, trimmed: [], sizes };
+    const b = T.reachPooled([sess], { readMaxBytes: 60000 });
+
+    t('the out-of-reach bucket is broken out by tool, heaviest first',
+      b.nonShellTools[0].tool === 'Read' && b.nonShellTools[0].n === 4 && b.nonShellTools[0].carried === 16000
+      && b.nonShellTools[1].tool === 'Agent', JSON.stringify(b.nonShellTools));
+    t('a shell result is on the other side of the table, not in the by-tool list',
+      !b.nonShellTools.some(x => x.tool === 'Bash') && b.tools[0].tool === 'node tools/dump.js',
+      JSON.stringify({ ns: b.nonShellTools.map(x => x.tool), s: b.tools.map(x => x.tool) }));
+    /* Computed in the same pass that produces the bucket, so this holds by construction rather than by two
+       classifications agreeing. It is a guard against a later edit adding a skip to one branch and not the
+       other -- it does NOT prove the per-tool split itself, which the rows above check. */
+    t('the by-tool rows sum to the nonShell bucket they expand',
+      b.nonShellTools.reduce((s, x) => s + x.carried, 0) === b.nonShell.carried,
+      JSON.stringify({ rows: b.nonShellTools.reduce((s, x) => s + x.carried, 0), bucket: b.nonShell.carried }));
+
+    t('a ranged read is its own line -- the cap leaves it alone by design (0.2.3)',
+      b.read.ranged.n === 1 && b.read.ranged.carried === 7000, JSON.stringify(b.read.ranged));
+    t('a whole read at or under the trigger is not the cap\'s either',
+      b.read.under.n === 1 && b.read.under.carried === 3000, JSON.stringify(b.read.under));
+    t('only a whole read OVER the trigger is a read the cap can act on',
+      b.read.over.n === 1 && b.read.over.carried === 5000, JSON.stringify(b.read.over));
+    /* The mistake unboundedReads documents at length is sizing a read by the cap's own output. A read no
+       ledger row and no line numbering could size is reported apart, never dropped into a bucket. */
+    t('a whole read with no size is reported as unsized, not guessed into a bucket',
+      b.read.unsized.n === 1 && b.read.unsized.carried === 1000
+      && b.read.ranged.n + b.read.over.n + b.read.under.n + b.read.unsized.n === b.read.all.n,
+      JSON.stringify(b.read.unsized));
+    /* The trigger is a live config value, not a constant: the same reads answer differently under it. */
+    t('the split moves with readMaxBytes, because the cap does',
+      T.reachPooled([sess], { readMaxBytes: 5000 }).read.over.n === 2
+      && T.reachPooled([sess], { readMaxBytes: 1e9 }).read.over.n === 0);
+    t('an explicit 0 is a real threshold, not an absent one -- the guard takes it literally',
+      T.reachPooled([sess], { readMaxBytes: 0 }).readTrigger === 0
+      && T.reachPooled([sess], { readMaxBytes: 0 }).read.over.n === 2);
+    t('with no trigger given, nothing is filed as over or under -- an absent knob is not a threshold of zero',
+      (() => { const nb = T.reachPooled([sess]);
+        return nb.read.over.n === 0 && nb.read.under.n === 0 && nb.read.unsized.n === 3 && nb.readTrigger === null; })());
+    /* Same precedence as reach: the rewrite is tested FIRST, so a trimmed non-shell result is acted-on and
+       must not also appear beyond reach, or the rows stop summing to the bucket. */
+    t('a rewritten non-shell result is acted-on, so it is not counted beyond reach as well',
+      (() => {
+        const mcp = mk('mcp__x__y', { id: 'm1', carried: 4000, marker: true });
+        const s2 = { parsed: { cwd: '/w', sessionId: 'br2', requests: [{}], compactions: [], results: [mcp] }, trimmed: [mcp] };
+        const p2 = T.reachPooled([s2], { readMaxBytes: 60000 });
+        return p2.nonShellTools.length === 0 && p2.acted.n === 1;
+      })());
+    t('a Read result with no file path is counted by tool but not split -- there is no read to size',
+      (() => {
+        const noFile = mk('Read', { id: 'nf', carried: 800 });
+        const s3 = { parsed: { cwd: '/w', sessionId: 'br3', requests: [{}], compactions: [], results: [noFile] }, trimmed: [] };
+        const r3 = T.reachPooled([s3], { readMaxBytes: 60000 });
+        return r3.nonShellTools[0].tool === 'Read' && r3.read.all.n === 0;
+      })());
+    t('a session with no sizes map at all reports its whole reads as unsized, not as under the trigger',
+      (() => {
+        const s4 = { parsed: { cwd: '/w', sessionId: 'br4', requests: [{}], compactions: [], results },
+          trimmed: [] };   // no `sizes`
+        const r4 = T.reachPooled([s4], { readMaxBytes: 60000 });
+        return r4.read.unsized.n === 3 && r4.read.under.n === 0 && r4.read.over.n === 0;
+      })());
+  }
+
+  /* The sizes map above is keyed by result id, so unboundedReads has to carry one. A row it reconstructs
+     from a ledger cap has no tool result behind it and carries null, which a caller keying by id skips. */
+  t('unboundedReads rows carry the result id the sizes map is keyed by',
+    (() => {
+      const p = { cwd: '/w', sessionId: 'ub', results: [
+        { id: 'w1', name: 'Read', file: '/w/a.js', whole: true, chars: 900, lines: 9, shape: null, isError: false }] };
+      const rows = T.unboundedReads(p, [], { sessionId: 'ub' }).reads;
+      return rows.length === 1 && rows[0].id === 'w1';
+    })());
+
+  /* A read the cap already acted on can sit in the transcript as the guard's REWRITTEN input -- ranged, no
+     offset. Counting it as "ranged" shrinks the cap's own share, the comparison the split exists to show. */
+  {
+    const cap = [{ t: 1, ev: 'read-cap', session: 'rw', tool: 'Read', what: '/w/big.js', bytes: 90000, lines: 2000, limit: 300, persisted: false }];
+    const res = [
+      { id: 'rw1', name: 'Read', file: '/w/big.js', whole: false, readFrom: null, chars: 9000, lines: 300, shape: null, isError: false,
+        tokens: 2250, carried: 6000, marker: false },
+      { id: 'rw2', name: 'Read', file: '/w/big.js', whole: false, readFrom: 400, chars: 900, lines: 30, shape: null, isError: false,
+        tokens: 225, carried: 500, marker: false }];
+    const p = { cwd: '/w', sessionId: 'rw', requests: [{}], compactions: [], results: res };
+    const rows = T.unboundedReads(p, cap, { sessionId: 'rw' }).reads;
+    t('a cap row recorded as the rewritten input is tied to the ranged read the rewrite produced',
+      rows.length === 1 && rows[0].id === 'rw1' && rows[0].bytes === 90000, JSON.stringify(rows));
+    const sizes = new Map(rows.filter(r => r.id != null && !r.ceiling).map(r => [r.id, r.bytes]));
+    const b = T.reachPooled([{ parsed: p, trimmed: [], sizes }], { readMaxBytes: 60000 });
+    t("and the split files it as the cap's own share, leaving the model's own ranged read as ranged",
+      b.read.over.n === 1 && b.read.over.carried === 6000 && b.read.ranged.n === 1 && b.read.ranged.carried === 500,
+      JSON.stringify(b.read));
+  }
+  /* A null or empty knob is absent, as unboundedReads treats it -- Number(null) is 0, a real threshold. */
+  t('a null or empty readMaxBytes is no threshold, not a threshold of zero',
+    (() => {
+      const s = { parsed: { cwd: '/w', sessionId: 'nz', requests: [{}], compactions: [], results: [
+        { id: 'n1', name: 'Read', file: '/w/a.js', whole: true, chars: 10, tokens: 3, carried: 3, isError: false, marker: false }] },
+        trimmed: [], sizes: new Map([['n1', 5000]]) };
+      return [null, ''].every(k => { const r = T.reachPooled([s], { readMaxBytes: k });
+        return r.readTrigger === null && r.read.over.n === 0 && r.read.unsized.n === 1; });
+    })());
+
   t('trimmedResults credits only a rewrite the model actually saw',
     (() => {
       const p2 = { sessionId: 'x', results: [

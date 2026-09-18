@@ -425,6 +425,7 @@ function reachReport() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
   const top = Number(opt('--top') || 12) || 12;
+  const cfg = guardCfg();
   const ledger = loadLedger();
   const found = transcript.findTranscripts(CFG_DIR);
   if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '.'); return; }
@@ -449,27 +450,82 @@ function reachReport() {
        third place today the same distinction decided everything. */
     const sid = p.sessionId || f.session;
     const g = transcript.guardRan(p, ledger, sid);
-    sessions.push({ parsed: p, trimmed, ran: g.ran, via: g.via });
+    /* File sizes for the Read split below, keyed by result id. Taken from `unboundedReads` -- the same
+       provenance chain `--reads` uses -- rather than from the delivered text, which is the cap's own output
+       on any read it already acted on. */
+    const sizes = new Map();
+    try {
+      for (const rd of transcript.unboundedReads(p, ledger, { sessionId: sid, readMaxBytes: cfg.readMaxBytes }).reads) {
+        /* A read at a ceiling (refused, errored, cut at the host's line limit, near its size limit) is sized
+           by what came back, not by the file -- leave it unsized rather than guess it into a bucket. */
+        if (rd && rd.id != null && rd.bytes != null && !rd.ceiling) sizes.set(rd.id, rd.bytes);
+      }
+    } catch { /* no sizes for this session; the split reports them as unsized rather than guessing */ }
+    sessions.push({ parsed: p, trimmed, sizes, ran: g.ran, via: g.via });
     pooled.push([id, p.results.length, cwd]);
   }
   const withGuard = sessions.filter((x) => x.ran);
-  const r = transcript.reachPooled(sessions);
-  const rg = transcript.reachPooled(withGuard);
+  const r = transcript.reachPooled(sessions, { readMaxBytes: cfg.readMaxBytes });
+  const rg = transcript.reachPooled(withGuard, { readMaxBytes: cfg.readMaxBytes });
   const shellN = r.window.n + r.under.n + r.failed.n + r.persisted.n;
   console.log('Where the trim can reach -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
   console.log('\n  ' + fmt(r.total.n) + ' tool results, ~ ' + fmt(r.total.carried) + ' carried tokens in total'
     + '  (' + fmt(shellN) + ' of them shell)');
-  const row = (label, b) => console.log('    ' + label.padEnd(34) + String(b.n).padStart(6)
-    + fmt(b.carried).padStart(12) + (r.carriedTotal ? (Math.round(1000 * b.carried / r.carriedTotal) / 10 + '%').padStart(8) : ''));
-  console.log('\n    bucket                            results     carried   share');
-  row('within the trim\'s reach', r.window);
-  row('  of those, it acted on', r.acted);
-  row('  of those, it did not', r.untouched);
-  row('under the threshold (too small)', r.under);
-  row('past the host ceiling (persisted)', r.persisted);
-  row('failed (host ignores a rewrite)', r.failed);
-  row('not shell at all', r.nonShell);
+  /* One printer and one percent, for both tables below. They differ only in their denominator -- a share is
+     always of some total -- and letting each table carry its own copy of the round-to-one-decimal formula is
+     how two tables in one view end up quietly disagreeing about what a percent is. */
+  const pc = (x) => (Math.round(1000 * x) / 10) + '%';
+  const row = (label, b, denom) => console.log('    ' + label.padEnd(38) + String(b.n).padStart(6)
+    + fmt(b.carried).padStart(12) + (denom ? pc(b.carried / denom).padStart(8) : ''));
+  console.log('\n    bucket                                    results     carried   share');
+  row('within the trim\'s reach', r.window, r.carriedTotal);
+  row('  of those, it acted on', r.acted, r.carriedTotal);
+  row('  of those, it did not', r.untouched, r.carriedTotal);
+  row('under the threshold (too small)', r.under, r.carriedTotal);
+  row('past the host ceiling (persisted)', r.persisted, r.carriedTotal);
+  row('failed (host ignores a rewrite)', r.failed, r.carriedTotal);
+  row('not shell at all', r.nonShell, r.carriedTotal);
+
+  /* The last row of that table, opened up. It was 41% of carried tokens on the sessions this was written
+     from and the view named none of it. Pooled over the SAME sessions as the table -- not the guarded subset
+     the verdict below uses -- because what a Read costs is a fact about the workload whether the guard ran or
+     not, and because these rows have to sum to the row above them. */
+  if (r.nonShellTools.length) {
+    console.log('\n  What that last row is, by tool:');
+    console.log('    results      carried   share  tool');
+    for (const t of r.nonShellTools.slice(0, top)) {
+      console.log('    ' + String(t.n).padStart(7) + fmt(t.carried).padStart(13) + '  '
+        + (r.nonShell.carried ? pc(t.carried / r.nonShell.carried).padStart(6) + '  ' : '') + t.tool);
+    }
+    if (r.nonShellTools.length > top) console.log('    (+ ' + (r.nonShellTools.length - top) + ' more; --top=N)');
+  }
+  const b = r.read;
+  if (b.all.n) {
+    console.log('\n  Read is the one the trim never sees: every branch of the PostToolUse handler is gated on'
+      + '\n  shell or mcp__*, so a Read result is not trimmed at all, ever. Its only lever is the PreToolUse'
+      + '\n  cap, which fires on an UNBOUNDED read of a file over readMaxBytes (' + fmt(cfg.readMaxBytes) + '). What that leaves:');
+    console.log('\n    of Read\'s carried tokens                    results     carried   share');
+    row('ranged -- the cap leaves these alone', b.ranged, b.all.carried);
+    row('whole, at or under the trigger', b.under, b.all.carried);
+    row('whole, over it  <- the cap\'s own share', b.over, b.all.carried);
+    if (b.unsized.n) row('whole, size unknown', b.unsized, b.all.carried);
+    console.log('\n    Only the third line is a read the cap can act on'
+      + (b.all.carried && r.total.carried
+        ? ' -- ' + pc(b.over.carried / r.total.carried) + ' of everything carried,'
+          + '\n    against Read\'s ' + pc(b.all.carried / r.total.carried) + '.'
+        : '.'));
+    console.log('    A ranged read is excluded BY DESIGN: 0.2.3 stopped trimming single-file excerpts because');
+    console.log('    doing it taught the model to read in 80-line chunks and doubled the bill on one task. So');
+    console.log('    this is not a defect list. It is the size of what the product declines to touch, and the');
+    console.log('    honest moves on it withhold nothing the model does not already have -- reReadElide is the');
+    console.log('    one with a measured record here; `tokenbrake tune` says whether it has fired for you.');
+    if (b.unsized.n) {
+      console.log('    "size unknown" is a whole read nothing could size: a failed read, one cut at the host\'s own');
+      console.log('    limit, a read of a spilled tool output, or one with no ledger row and no line numbering.');
+      console.log('    It is reported apart rather than guessed into a bucket.');
+    }
+  }
 
   /* Everything above pools sessions the guard never ran in, where "untouched" says nothing about the guard.
      The verdict is taken from the sessions it DID run in, because those are the only ones where a result

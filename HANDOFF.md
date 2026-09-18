@@ -956,3 +956,137 @@ unbraked until it is set (this session was braked only by the committed install 
 container is empty). Measurement note: A/B numbers taken inside the tokenbrake repo on a machine that still carries the
 old committed install (before pulling #70) are doubled and should be discarded; elsewhere the machine is single-scope
 and clean.
+
+## Priority set 2026-09-18 — the instrument is the product; five items, in order
+
+Standing decision, taken after a rating pass over the shipped product (5/10 overall: engineering 9, the
+instrument 8, the brake 3, positioning and distribution 2). These five are the number-one priority and
+everything else on the board waits behind them. Four are repositioning work over code that is already
+written and tested; the fifth is the one new guard feature.
+
+**The finding underneath all five.** Pooled over the 76 transcripts on this machine — 36,209,005 carried
+token-reads — the carry does not sit where the brake is:
+
+| tool | results | carried | share |
+|---|---|---|---|
+| Bash | 1,127 | 20,038,701 | 55.3% |
+| **Read** | **463** | **14,516,174** | **40.1%** |
+| Agent | 18 | 566,040 | 1.6% |
+| Grep | 53 | 140,722 | 0.4% |
+
+`handlePost` gates every branch on `isShell`/`isMcp`, so Read never enters the trim pipeline at all, and the
+PreToolUse cap is eligible for almost none of it: of that 14.5M, **63.8%** (9,264,130) is ranged reads the
+cap is designed not to touch, **33.2%** (4,816,454) is whole reads of files at or under `readMaxBytes`, and
+**3.0%** (435,590, 4 results) is whole reads over 60 KB — the entire addressable slice. `report --reach`
+says the same thing from the other side: `W = 11.5%` of carried tokens sit where the trim can act, it acted
+on 44% of those (≈5% of carry reduced), 42.2% sits under the 6,000-char gate (851 results, 13,669,541
+carried — more than the whole in-reach bucket), and 41% is "not shell at all", which is this Read block.
+
+Two candidate features were measured against the same pool and **killed before being proposed**, and they
+stay killed unless a different pool says otherwise: *overlap-aware ranged reads* (suppress re-delivery of
+already-sent lines) found 5 overlapping reads across 76 sessions, 19 lines, **0.1%** of ranged carry —
+models pick adjacent ranges, not overlapping ones; and *repeat-command shaping* (tighter budget on the 2nd+
+run of a command shape, the near-miss `dedup` cannot catch) found 9 repeats, 22,237 carried, **0.1%** of
+shell carry. Neither is worth building here.
+
+### 1. Ship the instrument as the product; the brake becomes step two
+
+`npx tokenbrake report` needs no install, no hooks, no config and no risk, reads transcripts the user
+already has, and produces the one metric nobody else in `LANDSCAPE.md` computes (`carried` = size x the
+requests that re-read a result). The pitch inverts: **find out what ate your context, then brake it if your
+report says there is anything to brake.** This is the fix for distribution (a zero-risk first run is the
+only thing that spreads in this category) and for the honesty problem at once — the measurement is a claim
+that can be substantiated today, where the saving is not, and the launch post stops waiting on the eight
+qualifying sessions the distribution table needs.
+
+### 2. Stop shipping one `maxChars` for everyone
+
+`maxChars` and `readMaxBytes` are global constants, and the pool says the right value is workload-dependent:
+42.2% of carry sits under the threshold here, where a `git status`-shaped workload has nearly everything
+under it. `tune` already recommends from a person's own sessions and `tune --write` already flips features
+on a measured record; extend both to the two threshold knobs, the way `--where` and `--reads` already
+produce the evidence for `readLimitLines`. Given that ab10 showed a global A/B **cannot** resolve a global
+default (±30.3% cost and ±42.6% tokens between identical OFF/OFF arms), "the default is what your own
+sessions say" is the only position left standing, and it turns the measurement problem into the feature.
+
+### 3. Say the Read number out loud in `report`
+
+`report --reach` labels 41% of carry "not shell at all" and stops. It is Read, and a user should see the
+table above without writing a script — the by-tool pool and the whole/ranged/over-60 KB split were both
+ad-hoc scripts over `transcript.parseTranscript` + `carry` in this session, which is exactly the gap: the
+product under-serves its largest bucket *and* does not report that it does. Folding them into `report`
+makes the finding reproducible, and the honest recommendation follows from it on its own — `reReadElide`
+withholds nothing the model does not already have and has the cleanest record of any off-by-default feature
+on this machine (`tune`: fired 9x, 0 sent the model back; against `blobElide` 1x/0 and `dedup` 1x/**1**).
+
+### 4. Move `## Limits, with the numbers` out of position two
+
+Keep every word; it is an asset in the wrong place. It currently sits between the pitch and `## Install`, so
+the second thing a prospect reads is that no repeatable saving has been demonstrated by any version on any
+workload. Put it in `EVIDENCE.md`, link it prominently, and promote the *argument* instead — **anyone
+publishing a percentage for this category owes a control pair alongside it** — which is citable,
+differentiating, unanswerable by the rest of the field, and arguably a better launch post than the brake's.
+
+### 5. Shadow mode — `shadow: true`, ships ON
+
+Every off-by-default feature runs its decision logic, writes a ledger row tagged `shadow`, and **emits
+nothing**. Nothing enters context differently, so it ships on by the existing rule — the same standing as
+`report --backfire` and `tune`, which ship on precisely because they change nothing that enters context —
+with no A/B gate and no `AB-TASK.md` flip.
+
+It exists because eight features are built and zero defaults have moved. `tune` on this machine says it
+plainly: `gitView`, `mcpTrim` and `readAfterEdit` are all "on, but has not fired in these sessions", and
+`dedup` and `reReadElide` have no A/B section in `AB-TASK.md` at all. Evidence currently costs a paid
+session and a real backfire risk in the user's own work. Shadow mode makes it free, satisfies
+`FEATURES-PLAN.md`'s simulation invariant ("calls the SAME trim function as the guard") by construction —
+it *is* the guard, so it needs no `trim.js` extraction and lands before Wave 3 rather than behind it — and
+retires `tune`'s opportunity estimators, which that file already admits sit at "different tightnesses". It
+gives the backfire auditor a counterfactual it cannot currently get: the shadow row records what *would*
+have been withheld, the transcript records what the model did next, and a later read into that region is a
+**predicted backfire**, measured with the feature off at zero cost. It is a within-session paired
+measurement — same session, same turn, same prompt, both arms — which is the lower-variance design the
+round-2 card says is needed, without a second paid session.
+
+**Its honest limit, which goes in the card rather than being discovered later:** it measures the withhold
+side exactly and the backfire side only as a *prediction*. It cannot observe how the model would have
+behaved having seen the trimmed output. So it can kill a feature outright and size an opportunity exactly,
+but a flip still wants one confirming live run. It shrinks the A/B queue from eight to the one or two that
+survive.
+
+Cheapest first cut: `blobElide` and `gitView` — both are pure content tests (`maxLineLen`, `GIT_DIFF` +
+`collapseGitDiff`) with no state and no emission, so shadowing them is an early return before `emitFitted`.
+`dedup` and the two Read narrowings carry per-session state, so shadowing them means deciding whether a
+shadow run still *writes* that state (it must, or the second firing never sees the first) while never
+reading it back into an emission — settle that before touching them.
+
+Order: 1, 3 and 4 are independent and can land in any order; 2 depends on 3's pooled numbers living in
+`transcript.js` rather than in a scratch script; 5 is independent of all four. Items 1-4 touch `README.md`,
+`cli.js` and `transcript.js`; items 2, 3 and 5 touch `guard.js`/`cli.js`/`transcript.js` and so run the full
+`/simplify` -> `/code-review` -> `/security-review` loop. Shadow mode changes nothing that enters context,
+so the default-OFF rule does not apply to it — that is the whole point of it.
+
+### Where item 3 stands — 2026-09-18
+
+Code complete and reviewed, suite green at 659 checks (from 642), all three hook spawns pass.
+
+Landed: the nonShell breakdown folded into `reachPooled` (NOT a second pooling function -- the first draft was
+a standalone `beyondReach` and `/simplify`'s altitude pass correctly called it the duplication the comment
+above `trimmedResults` exists to prevent, so the classification now happens once, in `reachPooled`'s own
+per-result loop); `read` buckets (ranged / whole-under / whole-over / unsized) + `readTrigger`; `id` on
+`unboundedReads` rows so a sized read ties back to its result; one `pc` and one `row(label, bucket, denom)`
+shared by both tables in the view; 14 new checks.
+
+The full loop is DONE. `/simplify` applied; `/code-review` found four real defects, all fixed with a
+check each (659 checks): (1) a read at a ceiling -- refused, errored, cut at the host's line limit, near its size
+limit -- was sized by what came back, not the file, and now stays unsized; (2) a read the cap acted on and the
+transcript recorded as the REWRITTEN (ranged, no-offset) input was filed as "ranged" -- `unboundedReads` now
+ties its reconstructed cap row to that result's id and the split files it as the cap's; (3) the "size unknown"
+note blamed a missing guard for reads the guard cannot size either, and now names the real causes; (4) a null
+or empty `readMaxBytes` became a threshold of 0. `/security-review`: clean (no fs call, exec or eval takes
+transcript/ledger data; untrusted ids only key Maps). Remaining: the README's `--reach` paragraph (~line 259)
+still describes only the in-reach half, then item 2.
+
+On this machine the view now prints: Read is 32.9% of everything carried, the cap can act on 1.2% (after the fixes). On the
+benchmark pool (`--cwd=tokenbrake-bench`) the same view prints Read at 73.6% with the opposite internal shape
+-- whole reads dominate there, ranged reads dominate on the real sessions. That contrast is the evidence
+item 2 (per-person thresholds) will act on, and it is worth keeping as the first argument for it.
