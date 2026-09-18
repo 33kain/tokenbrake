@@ -1619,6 +1619,10 @@ function shadowRecord(parsed, ledgerRecs) {
      shape change) is counted in `editsNoPatch` so a format change shows as coverage, not as a quiet zero.
    - Like every shadow, nothing here says whether the model would have come back for what was withheld. */
 const OFFLINE = ['dedup', 'reReadElide', 'readAfterEdit'];
+const OFFLINE_LABEL = { dedup: 'dedup (repeat results)', reReadElide: 'reReadElide (re-reads)', readAfterEdit: 'readAfterEdit (reads after an edit)' };
+/* On in a config: the top-level key, or any per-tool entry, as the guard's toolConfig would apply it. */
+const isOnIn = (cfg, k) => !!(cfg && (cfg[k] || (cfg.tools && typeof cfg.tools === 'object'
+  && Object.values(cfg.tools).some((v) => v && typeof v === 'object' && v[k]))));
 const LIVE_ROW = { dedup: (l) => l.dedup === true, reReadElide: (l) => l.ev === 'read-reread', readAfterEdit: (l) => l.ev === 'read-delta' };
 function offlineShadow(parsed, ledgerRecs, cfg) {
   const c = { ...GUARD.DEFAULTS, ...(cfg || {}) };
@@ -1660,8 +1664,9 @@ function offlineShadow(parsed, ledgerRecs, cfg) {
     /* dedup: a shell or MCP result over the floor, delivered whole (no marker), not protected by noTrim -- the
        guard's own noTrimmed, on the raw command for a shell result and the tool name for an MCP one */
     const mcpR = /^mcp__/.test(r.name);
-    if (!live.dedup && (shell(r) || mcpR) && !r.isError && !r.marker && r.hash && r.chars >= c.dedupMinChars
-      && !GUARD.noTrimmed(c, mcpR ? r.name : (r.cmd || r.what), mcpR)) {
+    const tc = GUARD.toolConfig(c, r.name);   // per-tool settings, merged the way the guard merges them per call
+    if (!live.dedup && (shell(r) || mcpR) && !r.isError && !r.marker && r.hash && r.chars >= tc.dedupMinChars
+      && !GUARD.noTrimmed(tc, mcpR ? r.name : (r.cmd || r.what), mcpR)) {
       if (seen.has(r.hash)) credit('dedup', r, Math.round((r.chars - GUARD.dedupPointer({ chars: r.chars, id: 'x'.repeat(19) }).length) / CHARS_PER_TOKEN));
       else seen.add(r.hash);
     }
@@ -1670,19 +1675,19 @@ function offlineShadow(parsed, ledgerRecs, cfg) {
        noTrim, not one it capped or narrowed, under the trigger, not a persisted output, not alwaysCap) */
     if (r.name !== 'Read' || !r.whole || r.isError || !key || guarded.has(key)) return;
     if (r.shape && r.shape.numbered && r.shape.from !== 1) return;
-    if (GUARD.matchesAny(c.noTrim, r.file) || GUARD.matchesAny(c.alwaysCap, r.file) || PERSISTED.test(r.file)) return;
+    if (GUARD.matchesAny(tc.noTrim, r.file) || GUARD.matchesAny(tc.alwaysCap, r.file) || PERSISTED.test(r.file)) return;
     const logged = trueSize.get(key);
     const bytes = (logged && logged.bytes) || (r.shape && r.shape.bytes) || r.chars;
     const nLines = (logged && logged.lines) || (r.shape && r.shape.lines) || r.lines;
-    if (!nLines || bytes > c.readMaxBytes) return;
+    if (!nLines || bytes > tc.readMaxBytes) return;
     const base = path.basename(String(r.file));
     if (!live.readAfterEdit) {
-      const w = GUARD.editWindow(edits.get(key), nLines, c);
+      const w = GUARD.editWindow(edits.get(key), nLines, tc);
       if (w) credit('readAfterEdit', r, Math.round(r.tokens * (1 - w.limit / nLines)) - noteTok(GUARD.deltaNote(base, w.from, w.to, nLines)));
     }
     if (!live.reReadElide) {
       const sig = shellGen + ':' + (fileGen.get(key) || 0) + ':' + compactionsBy(r.afterReq);
-      if (GUARD.reReadDecision(GUARD.priorReadIn(reads, key), sig, 0, nLines, c)) credit('reReadElide', r, Math.round(r.tokens * (1 - c.reReadKeepLines / nLines)) - noteTok(GUARD.reReadNote(base, c.reReadKeepLines, nLines)));
+      if (GUARD.reReadDecision(GUARD.priorReadIn(reads, key), sig, 0, nLines, tc)) credit('reReadElide', r, Math.round(r.tokens * (1 - tc.reReadKeepLines / nLines)) - noteTok(GUARD.reReadNote(base, tc.reReadKeepLines, nLines)));
       else reads.push({ file: key, size: sig, mtime: 0 });   // an elided read is not recorded, as in the guard
     }
   });
@@ -1969,7 +1974,7 @@ const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.rou
 
 /* The report, as lines. Pure: takes parsed data, returns text, so the test can read it without a
    console. `top` is how many results to name. */
-function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars: maxCharsOpt, toolMaxChars } = {}) {
+function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars: maxCharsOpt, toolMaxChars, userCfg } = {}) {
   const maxChars = limitOf(maxCharsOpt, toolMaxChars);
   const baseChars = limitOf(maxCharsOpt);   // the top-level value, for the one line that names a number
   /* Whether the guard was here at all decides what every "the guard did / did not" line below means. With it,
@@ -2065,6 +2070,26 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   if (rec.n) {
     lines.push(`  Recovery reads: ${rec.n} -- the model came back for more of a file it had already read (~ ${kfmt(rec.tokens)} tokens re-entered, ~ ${kfmt(rec.carried)} carried)`
       + (trimmed.length ? ` -- some of these are what the trim sent it back for` : ''));
+  }
+
+  /* The offline replay (offlineShadow) of the three stateful off-by-default features, for this one session and with
+     the person's own settings: what each would have withheld had it been on, in tokens -- nothing installed needed.
+     A feature ON in the config is named, never replayed: the live guard saw those results and passed on them, so
+     "would have acted" would contradict it. One that fired live here has its record in report --backfire. */
+  const os = offlineShadow(parsed, ledger, userCfg);
+  const onNow = OFFLINE.filter((k) => isOnIn(userCfg, k));
+  const liveHere = OFFLINE.filter((k) => os.live[k] && !onNow.includes(k));
+  const replayed = OFFLINE.filter((k) => !os.live[k] && !onNow.includes(k));
+  const acted = replayed.filter((k) => os[k].n), idle = replayed.filter((k) => !os[k].n);
+  if (replayed.length) {
+    const parts = acted.map((k) => `${OFFLINE_LABEL[k]} would have acted on ${os[k].n}, ~ ${kfmt(os[k].withheld)} tokens kept out (~ ${kfmt(os[k].carried)} carried)`);
+    if (idle.length) parts.push(`${idle.map((k) => OFFLINE_LABEL[k]).join(', ')}: nothing to act on in this session`);
+    const notes = [];
+    if (onNow.length) notes.push(`on in your config: ${onNow.join(', ')}`);
+    if (liveHere.length) notes.push(`ran live here: ${liveHere.join(', ')} -- report --backfire has its record`);
+    lines.push(`  Off-by-default features, replayed over this session with the guard's own decisions: ${parts.join('; ')}`
+      + (notes.length ? ` (${notes.join('; ')})` : ''));
+    if (acted.length) lines.push(`    Whether the model would have come back for what they withhold is not measured. To try one, set "${acted[0]}": true in ~/.claude/tokenbrake.json (tokenbrake init installs the guard).`);
   }
 
   /* The only line here that answers "should I change readLimitLines", and it answers it from this session
@@ -2218,5 +2243,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };

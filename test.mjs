@@ -3015,6 +3015,28 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     rmSync(dir, { recursive: true, force: true });
   }
 
+  /* In report: one line for the session, in tokens, the person's own settings honoured, live features named. */
+  const rp = sess([read('/w/a.js'), read('/w/b.js'), read('/w/a.js')], { file: '/w/OF.jsonl', requests: [{}, {}, {}, {}, {}, {}] });
+  const rt = T.renderReport(rp, []);
+  t('report carries the replay line for the session, in tokens, with its caveat and how to try it',
+    /Off-by-default features, replayed over this session with the guard's own decisions: reReadElide \(re-reads\) would have acted on 1, ~ \S+ tokens kept out/.test(rt)
+    && /dedup \(repeat results\), readAfterEdit \(reads after an edit\): nothing to act on in this session/.test(rt)
+    && /not measured/.test(rt) && /set "reReadElide": true/.test(rt) && !/\$\s?\d/.test(rt),
+    rt.split('\n').find(l => /Off-by-default features, replayed/.test(l)));
+  t('report names a feature that ran live and points at its record instead of replaying it',
+    /ran live here: reReadElide -- report --backfire has its record/.test(T.renderReport(rp, [{ ev: 'read-reread', session: 'OF', what: '/w/zz.js' }])));
+  /* A feature ON in the config saw those results live and passed on them; "would have acted" would contradict it. */
+  const onRt = T.renderReport(rp, [], { userCfg: { reReadElide: true } });
+  t('report never replays a feature that is on in the config, only names it',
+    /on in your config: reReadElide/.test(onRt) && !/reReadElide \(re-reads\) would have acted/.test(onRt), onRt.split('\n').find(l => /Off-by-default/.test(l)));
+  t('a feature on only under a tools entry counts as on, as the guard applies it',
+    /on in your config: reReadElide/.test(T.renderReport(rp, [], { userCfg: { tools: { Read: { reReadElide: true } } } })));
+  t("report honours the person's own settings in the replay (noTrim)",
+    /reReadElide \(re-reads\) would have acted/.test(rt)
+    && !/reReadElide \(re-reads\) would have acted/.test(T.renderReport(rp, [], { userCfg: { noTrim: ['a.js'] } })));
+  t('the replay applies per-tool settings the way the guard merges them (tools.Read.readMaxBytes)',
+    off(rp, [], { tools: { Read: { readMaxBytes: 1000 } } }).reReadElide.n === 0 && off(rp, [], {}).reReadElide.n === 1);
+
   /* In tune: the replay replaces the estimators, and a replay that saw nothing reads as nothing to act on. */
   const tp = sess([read('/w/a.js'), read('/w/b.js'), read('/w/a.js')], { file: '/w/OF.jsonl', requests: [{}, {}, {}, {}, {}, {}] });
   const at = T.autotune([tp], [], { reReadElide: false, readAfterEdit: false, dedup: false });

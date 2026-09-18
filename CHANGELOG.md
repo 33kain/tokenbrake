@@ -15,7 +15,8 @@
 - **Offline shadow for `dedup`, `reReadElide` and `readAfterEdit`.** `tune` replays your transcripts with the guard's
   own (now exported) decision functions, keeping the per-session memory in memory: no install, no runtime cost, every
   session on disk. Conservative where a transcript is blind (a shell command, edit or compaction between two reads
-  disqualifies a re-read). Replaces the old estimators for those three.
+  disqualifies a re-read). Replaces the old estimators for those three. `report` shows the same replay for the session,
+  in tokens, for features that are off in your config -- nothing installed needed.
 - **`guard.js` is importable.** Run as a hook it behaves as before; required, it hands over its own `DEFAULTS` and
   command patterns, so the report stops keeping copies. One copy had already drifted: the report's persisted-output
   pattern missed the `.json` outputs the guard recognises.

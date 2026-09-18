@@ -1134,4 +1134,4 @@ function main() {
    guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
    copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
 if (require.main === module) main();
-else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed };
+else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };

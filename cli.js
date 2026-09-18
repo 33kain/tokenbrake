@@ -198,9 +198,10 @@ const fmt = (n) => n.toLocaleString();
    readLimitLines. */
 function guardCfg() {
   const D = transcript.GUARD_DEFAULTS;   // the guard's own defaults, not copies
-  const cfg = { maxChars: D.maxChars, readMaxBytes: D.readMaxBytes, readLimitLines: D.readLimitLines, persistedLimitLines: D.persistedLimitLines };
+  const cfg = { maxChars: D.maxChars, readMaxBytes: D.readMaxBytes, readLimitLines: D.readLimitLines, persistedLimitLines: D.persistedLimitLines, raw: {} };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
+    if (c && typeof c === 'object' && !Array.isArray(c)) cfg.raw = c;   // the file as written, for the report's replay
     if (c.maxChars) cfg.maxChars = c.maxChars;
     if (c.readMaxBytes) cfg.readMaxBytes = c.readMaxBytes;
     if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
@@ -927,8 +928,10 @@ function report() {
   let parsed;
   try { parsed = transcript.parseTranscript(file); } catch (e) { console.log('Could not read ' + file + ': ' + e.message); return; }
   /* The report's "Where you read" line compares against the cap the user actually runs, not the default. */
-  const { readLimitLines, maxChars, toolMaxChars } = guardCfg();
-  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars }));
+  /* raw: the config as written, so the replay line applies the person's own settings (thresholds, noTrim,
+     alwaysCap, per-tool entries) the way the guard would. */
+  const { readLimitLines, maxChars, toolMaxChars, raw } = guardCfg();
+  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars, userCfg: raw }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
 
