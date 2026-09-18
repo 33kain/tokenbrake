@@ -292,6 +292,9 @@ it needs no install and works on every session already on disk. It is deliberate
 cannot see what the guard sees: a re-read counts only if no shell command, edit or compaction came between the two
 reads, and a result the trim already cut cannot be matched as a duplicate. Edits without line data are counted and
 reported rather than guessed. A session where the feature actually ran is judged on its real record instead.
+`tune --sweep` re-runs that replay at several values of each of their knobs (`dedupMinChars`, `reReadRecency`,
+`reReadKeepLines`, `editContextLines`), one at a time with your own value marked, so you see the curve rather than
+one number. It only shows data; it never changes your config.
 
 A `tools` map overrides any of these knobs per tool, keyed by tool name (`Bash`, `PowerShell`, `Read`). A
 tool's entry is merged over the base config for that tool only — knobs it omits keep their base value — so you
@@ -437,6 +440,7 @@ strictly apart:
 ```
 npx tokenbrake tune                 # pool your recent real sessions (benchmark sessions skipped)
 npx tokenbrake tune --cwd=<text>    # restrict the pool to one project; --session=<prefix> for one session
+npx tokenbrake tune --sweep         # the stateful features replayed at several values of each knob (data only)
 npx tokenbrake tune --write         # apply the MEASURED recommendation to tokenbrake.json (see below)
 ```
 

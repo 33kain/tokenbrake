@@ -17,6 +17,8 @@
   session on disk. Conservative where a transcript is blind (a shell command, edit or compaction between two reads
   disqualifies a re-read). Replaces the old estimators for those three. `report` shows the same replay for the session,
   in tokens, for features that are off in your config -- nothing installed needed.
+- **`tune --sweep`:** the offline replay of `dedup`, `reReadElide` and `readAfterEdit` at several values of each knob,
+  one at a time, your own value marked. Data only.
 - **`guard.js` is importable.** Run as a hook it behaves as before; required, it hands over its own `DEFAULTS` and
   command patterns, so the report stops keeping copies. One copy had already drifted: the report's persisted-output
   pattern missed the `.json` outputs the guard recognises.
