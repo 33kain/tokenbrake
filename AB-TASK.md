@@ -2686,7 +2686,10 @@ saves what the model would otherwise let in."
 ### Measured vs reasoned (kept separate on purpose)
 
 - **Measured:** the directional split above — ON worse on content-heavy, ON better on glance — from two single
-  pairs, both noise-limited. The content-heavy **harm is a real backfire**, not a null.
+  pairs, both noise-limited. The content-heavy result is **inconclusive**: +19% cache reads sits inside the
+  42.6% token band, so no harm is established, only a direction consistent with the mechanism. (Downgraded
+  2026-09-18 from "a real backfire, not a null": that verdict rested on a cost figure, and in tokens alone the
+  evidence does not carry it.)
 - **Reasoned, NOT A/B-confirmed:** that `mcpTrim` is a net win as a per-tool opt-in for glance-heavy MCP tools;
   and that `jsonShape` improves the trimmed sample (it was **off** in both arms, so its added value here is
   mechanism, not measurement). Answer **correctness was not captured** this round (no channel to the arms'
@@ -2696,8 +2699,8 @@ saves what the model would otherwise let in."
 ### Conclusion
 
 **Default stays OFF** for `mcpTrim` (and `jsonShape`, `shapeFilters`). The burden of proof is on the **flip**,
-not on staying off: a thin, noise-limited A/B does not meet it, and the one thing it did show cleanly enough to
-matter is that flipping can *add* reads on a content-hungry workload (+19% cache reads here). `mcpTrim` ships as an **opt-in**, best set
+not on staying off: a thin, noise-limited A/B does not meet it, and the direction it points — flipping can *add*
+reads on a content-hungry workload (+19% cache reads here, inside the noise) — is reason enough not to flip on it. `mcpTrim` ships as an **opt-in**, best set
 **per-tool** (`"tools": { "mcp__…": { "mcpTrim": true } }`) for MCP tools whose results you reliably only
 sample; pair with `jsonShape` for a clean JSON sample.
 
