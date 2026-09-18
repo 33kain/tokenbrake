@@ -1,6 +1,6 @@
 {
   "name": "tokenbrake",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Find out what ate your Claude Code context: a zero-install report that ranks every tool result by the tokens it was carried through, and optional hooks that trim oversized tool output when the report says there is something to brake. Zero dependencies, Windows-friendly.",
   "repository": {
     "type": "git",

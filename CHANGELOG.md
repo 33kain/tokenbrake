@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-09-18
+
+The instrument is the product: `npx tokenbrake report` needs nothing installed, reports only in tokens, and says
+whether the brake is worth installing for your work. The brake gains shadow mode, and every off-by-default feature
+can now be measured on your own sessions without switching it on.
+
+**Breaking:** `report --cost` and `--model` are removed (they print why and exit 1); the report's list-price and
+dollar lines and `--compare`'s cost row are gone. transcript.js no longer exports `priceOf`, `costOf`,
+`usdOfTokens`, `dominantModel`, `editThenRead` or `reReadOpportunity`. Ledger rows gain `sh: 1` when shadow is
+on, and shadow rows are `ev: 'shadow'`.
 
 - **The report is the product: `npx tokenbrake report` needs no install, and says whether the brake is worth it.**
   README, package description and `help` lead with the report; the brake is step two. A session with no sign of
@@ -23,6 +32,10 @@
   command patterns, so the report stops keeping copies. One copy had already drifted: the report's persisted-output
   pattern missed the `.json` outputs the guard recognises.
 - The evidence moved from the README to `EVIDENCE.md`; the README states why it quotes no percentage.
+- **`report --compare` splits entered and carried by tool class** (Read cap vs shell trim vs MCP vs other), so the
+  change column says which of the guard's levers moved.
+- **No more false "STALE" guard on Windows checkouts:** `.gitattributes` forces LF, and `status`/`doctor` compare
+  the guard's code, not its line endings.
 - **Shadow mode, on by default.** While `blobElide`, `gitView` or `mcpTrim` is off, the guard runs that feature's own decision
   on each shell result and logs what it would have withheld (`ev:'shadow'`), emitting and saving nothing; output is
   byte-identical either way. `tune` reads those rows as the exact withheld tokens on your own sessions, per session,
