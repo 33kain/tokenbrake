@@ -1192,3 +1192,12 @@ NOT done: `dedup`, `reReadElide`, `readAfterEdit`, `mcpTrim`. The three state-ca
 question settled first (a shadow must WRITE the per-session state or the second firing never sees the first, and
 must never read it back into an emission). `mcpTrim` is stateless and is the next cheap one. On this machine every
 feature is switched ON in the user's config, so shadow collects nothing here until one is turned off.
+
+### Pre-registered rules — settled 2026-09-18
+
+The user's call: the past rounds' decision rules quote their original "cost not worse" / "cost inside 21%"
+conditions verbatim, marked as pre-registered (never rewritten after the run); the two rule branches the
+tokens-only pass had deleted ("on-arm requests materially above off-arm: a loss" and "answers differing anywhere:
+void") are restored; result figures stay tokens-only. A dated amendment at the end of AB-TASK.md makes the third
+condition for every future round "tokens carried not worse beyond the OFF/OFF band". This settles the first of the
+two judgement calls in the tokens-only card above; the second (mcpTrim) was settled as inconclusive in PR #78.

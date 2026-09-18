@@ -1388,13 +1388,12 @@ guard was not supposed to leave open, and that is worth knowing on a second mode
 **Decision rule, fixed before the run.** Nothing ships or unships on this run; 0.2.3 is already released.
 What the run decides is what the README and the post may say about Fable:
 
-- On-arm requests at or below off-arm, and the session total not worse than the off arm by more than the
-  noise band two identical arms have produced (this clause was written in cost; not restated here —
-  tokens-only record): the 2026-09-06 Fable saving survives its guard change, and the README keeps a Fable
-  saving, stated as two runs on two guards.
+- On-arm requests at or below off-arm, and "cost not worse than the off arm by more than the 21% noise
+  band": the 2026-09-06 Fable saving survives its guard change, and the README keeps a Fable saving, stated
+  as two runs on two guards. *(Quoted as pre-registered: the condition was written in cost, and pre-registered text is never rewritten after the run. Rounds after 2026-09-18 use the token condition in "Amendment: the third condition, in tokens" below.)*
 - On-arm requests above off-arm: the 2026-09-06 Fable saving does not survive, and the README's Fable line gets the same
   treatment the Opus line already got — the best of N runs, not the number — with both readings printed.
-- Session totals inside the noise band with requests level: a null, recorded as one, and the Fable claim comes out
+- "Cost apart by less than 21%" with requests level: a null, recorded as one, and the Fable claim comes out
   of the README's headline and stays only in this file.
 
 Answers must be identical across the arms in every case; a difference there voids the round.
@@ -1494,14 +1493,15 @@ weight sits in the cache-read column and out of a hook's reach.
 **Decision rule, fixed before the run.** This round settles what the post may say about Sonnet, and only
 that; nothing ships or unships on it.
 
-- Requests level (within three either way) and session totals inside the noise band: the expected null.
+- Requests level (within three either way) and "cost inside 21%": the expected null.
   The post gets a Sonnet row reading "no measurable difference", and the JetBrains comparison is stated as
   what it is — their tool measured worse on this model, this one did nothing measurable on it, and neither
   is a saving.
-- On-arm requests materially below off-arm (four or more) with the session not worse on the rule's third
-  condition (written in cost; not restated here — tokens-only record): the first result on this
+- On-arm requests materially below off-arm (four or more) with "cost not worse": the first result on this
   page that would survive the requests rule, and it gets a second run before it is written anywhere
-  outside this file. One run does not become a claim.
+  outside this file. One run does not become a claim. *(Quoted as pre-registered: the condition was written in cost, and pre-registered text is never rewritten after the run. Rounds after 2026-09-18 use the token condition in "Amendment: the third condition, in tokens" below.)*
+- On-arm requests materially above off-arm: a loss, recorded as one. *(Restored 2026-09-18: this branch was
+  removed with the dollar figures, but it is a rule, not a figure.)*
 - On-arm requests materially above off-arm: a loss, recorded as one, and the post says the hook has made
   sessions heavier on three of three models.
 
@@ -1921,13 +1921,14 @@ this harness and recorded that way, the way ab6 was closed on Sonnet.
 **Decision rule, fixed before the run.** The requests column decides; a difference inside the noise band is a
 null.
 
-- Requests within three either way and inside the noise band: the expected null, and the fourth model-workload
+- Requests within three either way and "cost inside 21%": the expected null, and the fourth model-workload
   pair to produce one. The post's audit row gains a Windows-local line reading "no measurable difference".
-- On-arm requests four or more below the off arm with the session not worse on the rule's third condition
-  (written in cost; not restated here — tokens-only record): the first result on this page that
+- On-arm requests four or more below the off arm with "cost not worse": the first result on this page that
   would survive the requests rule, and it stays inside this file until a second run on a different day
-  reproduces it.
+  reproduces it. *(Quoted as pre-registered: the condition was written in cost, and pre-registered text is never rewritten after the run. Rounds after 2026-09-18 use the token condition in "Amendment: the third condition, in tokens" below.)*
 - On-arm requests four or more above the off arm: a loss, recorded as one.
+- Answers differing anywhere: void, and the answers matter more than the bill. *(Restored 2026-09-18: this
+  branch was removed with the dollar figures, but it is the correctness rule, not a figure.)*
 - Answers differing anywhere: void, and the answers matter more than the token counts.
 
 ### The report can read the wrong session, and on Windows it did — 2026-09-10
@@ -2204,9 +2205,8 @@ yet that trimming does not pay in tokens. If entered is level, the guard is not 
 and within 1.5 of each other, and both arms' answers checked against the ground truth above — including
 step 5, which is the one an arm can fail while looking fluent.
 
-- Entered lower **and** requests within three **and** not worse on a third condition written in cost (not
-  restated here — tokens-only record): the first workload on which this
-  guard demonstrably works. It stays in this file until a second run on another day reproduces it.
+- Entered lower **and** requests within three **and** "cost not worse": the first workload on which this
+  guard demonstrably works. It stays in this file until a second run on another day reproduces it. *(Quoted as pre-registered: the condition was written in cost, and pre-registered text is never rewritten after the run. Rounds after 2026-09-18 use the token condition in "Amendment: the third condition, in tokens" below.)*
 - Entered lower and requests four or more higher: the return trip, recorded as such.
 - Entered level: the guard is not acting on a task designed to make it act, and that goes in `README.md`'s
   "Limits" section next to the 285-call count.
@@ -2286,7 +2286,7 @@ session closed.
 | Read / Bash calls | 0 / 15 | 0 / 16 | |
 
 **By the rule written before the run, this is the first branch that has ever fired:** entered lower on the
-guarded arm, requests within three, and the cost-stated third condition held (not restated here). It therefore stays in this file and goes nowhere else
+guarded arm, requests within three, and "cost not worse" held (the rule as pre-registered). It therefore stays in this file and goes nowhere else
 until a second run on another day reproduces it. That rule has already retired two numbers on this page and
 it applies in this direction too.
 
@@ -3216,3 +3216,19 @@ where the trim's context saving is real — a per-surface fact, not a universal 
 so a `--compare` should record the surface. (2) n is tiny (one file, two runs); the
 MECHANISM is what this epoch records, not a rate. No default changed, no flag added
 — this is how to READ the ledger on the shell path, not what the guard withholds.
+
+## Amendment: the third condition, in tokens — 2026-09-18
+
+Every decision rule above that gates a result carries a third, safety condition, written as "cost not worse":
+the brake must not save entered tokens while the session as a whole gets heavier. Those rules are quoted as they
+were pre-registered and are never rewritten after their run. From 2026-09-18 tokenbrake states everything in
+tokens, never money, so **every round pre-registered after this date writes that condition as: tokens carried
+(size x the later requests that re-read it) not worse on the on-arm by more than the band two identical OFF/OFF
+arms have produced** -- 42.6% on tokens entered on the natural task above, or the round's own control pair where
+it has one.
+
+Carried, not cost, and deliberately: ab10 found the damage lands in carried -- a trim that sends the model back
+lengthens the session and carried climbs past where it started -- which is exactly what the cost condition was
+there to catch. One thing the swap gives up: cost weighted output and cache writes more heavily than cache reads,
+and a single token total weights them equally. A round whose risk is in output or cache writes names that count
+as its own fourth condition rather than folding it into carried.
