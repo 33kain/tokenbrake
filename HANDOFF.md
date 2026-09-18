@@ -1153,7 +1153,7 @@ Docs only (no guard/cli/transcript change, so no review loop). `## Limits, with 
 "Measured (2026-09-06 to 2026-09-10)" paragraph above it moved from the README to `EVIDENCE.md` word for word
 (checked: all 103 non-blank lines present). `EVIDENCE.md` opens with a dated note on the two figures the moved
 text now overstates: the reach share (11.6% / 7.5% with excerpts counted apart, was ~18%) and the renamed
-"Small shell output" line. README position two is now "Why there is no percentage on this page": anyone
-publishing a percentage for this category owes a control pair; the OFF/OFF pairs here were 5.7/18.4/30.3%
-apart on cost and up to 42.6% on tokens. Links to `EVIDENCE.md` are absolute GitHub URLs so they work on the
+"Small shell output" line. README position two is now "Why there is no percentage on this page", in TOKENS only (the user's hard rule:
+no money, no cost percentages): anyone publishing a token-saving percentage owes a control pair; the OFF/OFF
+pairs here were up to 42.6% apart on tokens entered, and carried rose in two of six brake pairs, once by 72.6%. Links to `EVIDENCE.md` are absolute GitHub URLs so they work on the
 npm page, where `EVIDENCE.md` is not shipped. Next: item 5 (shadow mode).

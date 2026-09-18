@@ -21,16 +21,18 @@ install it when your own report says there is something in its reach.
 
 ## Why there is no percentage on this page
 
-Anyone publishing a percentage saving for this category owes a control pair alongside it: the same task run
-twice with the tool **off** on both sides. Without one, a saving is indistinguishable from the agent reading
+Anyone publishing a token-saving percentage for this category owes a control pair alongside it: the same task
+run twice with the tool **off** on both sides. Without one, a saving is indistinguishable from the agent reading
 differently on the day.
 
 This project ran those controls. In a 22-session pre-registered benchmark
-([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)), three OFF-against-OFF pairs came out
-**5.7%, 18.4% and 30.3% apart** on cost and up to **42.6%** apart on tokens entered, with identical
-configuration on both sides. The runs with the brake showed a median 28.8% lower cost, and that sits inside the
-noise. Five pairs cannot resolve an effect that size against variation that size, and neither can anyone
-else's handful of sessions.
+([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)), OFF-against-OFF pairs with identical
+configuration on both sides came out up to **42.6% apart on tokens entered**. The runs with the brake entered a
+median 35.7% fewer tool-result tokens, and that sits inside the noise. The sharper result is about tokens
+**carried**, the number that matters: tokens entering context fell in every pair with the brake, but tokens
+carried fell in only four of six pairs and rose in two, once by 72.6%, because a trim that sends the model back
+for what it cut lengthens the session. Five pairs cannot resolve an effect that size against variation that
+size, and neither can anyone else's handful of sessions.
 
 So tokenbrake does not quote a saving. It reports what your own sessions carried and how much of it the brake
 could reach, and it leaves the decision to that. The whole record, losses included, is in
