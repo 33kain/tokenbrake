@@ -1694,6 +1694,42 @@ function offlineShadow(parsed, ledgerRecs, cfg) {
   return { ...out, live, editsTotal, editsNoPatch };
 }
 
+/* The knob sweep (`tune --sweep`): the offline replay re-run at several values of each stateful feature's knobs, so a
+   person sees the curve on their own sessions instead of one number at one setting. Data only: no recommendation, and
+   nothing written. Each knob is swept alone with every other setting as configured; the person's own value is always
+   one of the rows. Sessions where the feature ran live are left out by the replay itself (its record is measured). */
+const SWEEP_KNOBS = [
+  { feature: 'dedup', knob: 'dedupMinChars', steps: [250, 500, 1000, 2000, 4000] },
+  { feature: 'reReadElide', knob: 'reReadRecency', steps: [2, 4, 8, 16, 32] },
+  { feature: 'reReadElide', knob: 'reReadKeepLines', steps: [1, 5, 20, 50] },
+  { feature: 'readAfterEdit', knob: 'editContextLines', steps: [0, 5, 10, 20, 40] },
+];
+function sweepOffline(parsedSessions, ledgerRecs, cfg) {
+  const base = { ...GUARD.DEFAULTS, ...(cfg || {}) };
+  const sessions = (parsedSessions || []).filter(Boolean);
+  for (const p of sessions) carry(p);
+  const tools = base.tools && typeof base.tools === 'object' ? base.tools : {};
+  return SWEEP_KNOBS.map(({ feature, knob, steps }) => {
+    const raw = base[knob];
+    const current = typeof raw === 'number' ? raw : NaN;   // a non-number is named by the caller, never coerced into a row
+    /* A per-tool entry that sets this knob would override the swept top-level value (the guard merges it per call),
+       so the swept value goes into those entries too -- and they are returned, so the view can name them. */
+    const scoped = Object.entries(tools).filter(([, v]) => v && typeof v === 'object' && knob in v).map(([tool, v]) => ({ tool, value: v[knob] }));
+    const rows = stepsAround(steps, current).map((value) => {
+      const c = { ...base, [knob]: value,
+        tools: Object.fromEntries(Object.entries(tools).map(([tool, v]) => [tool, v && typeof v === 'object' && knob in v ? { ...v, [knob]: value } : v])) };
+      let n = 0, withheld = 0, carried = 0, replayed = 0;
+      for (const p of sessions) {
+        const os = offlineShadow(p, ledgerRecs, c);
+        if (os.live[feature]) continue;
+        replayed++; n += os[feature].n; withheld += os[feature].withheld; carried += os[feature].carried;
+      }
+      return { value, n, withheld, carried, replayed };
+    });
+    return { feature, knob, current, raw, scoped, rows };
+  });
+}
+
 /* `opts.disabled` is the set of knobs written `false` in the raw tokenbrake.json. It cannot be derived from
    `cfg`: the caller hands us TUNE_DEFAULTS merged with the file, and every feature knob defaults to false
    there, so "absent" and "deliberately off" are the same value by the time it arrives. Only the raw file
@@ -2243,5 +2279,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, sweepOffline, SWEEP_KNOBS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };

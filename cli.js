@@ -1277,6 +1277,28 @@ function tuneReport() {
   }
   if (!parsed.length) { console.log('No usable session(s) to tune from' + (want ? ' for --session=' + want : '') + (only ? ' under --cwd=' + only : '') + '.'); return; }
 
+  /* --sweep: the offline replay of the stateful features at several values of each knob -- a view of its own, data
+     only, so tune's own output does not grow. Tokens only. */
+  if (flag('--sweep')) {
+    const sw = transcript.sweepOffline(parsed, ledger, cfg);
+    const narrowed = [only ? '--cwd=' + only : null, want ? '--session=' + want : null].filter(Boolean).join(' ');
+    console.log('Knob sweep -- the stateful off-by-default features replayed over ' + parsed.length + ' session(s) with the guard\'s own decisions'
+      + (narrowed ? '  (' + narrowed + ')' : ''));
+    console.log('  One knob at a time, every other setting as configured. Tokens kept out and carried token-reads; whether the model');
+    console.log('  would have come back for them is not measured. Sessions where a feature ran live are left out (its record is measured).');
+    for (const s of sw) {
+      const on = transcript.isOnIn(rawCfg, s.feature);
+      console.log('\n  ' + s.feature + ' -- ' + s.knob + (on ? '   (on in your config: the replay covers only sessions it did not run in)' : ''));
+      if (s.scoped.length) console.log('    your tools entries set it too (' + s.scoped.map((x) => x.tool + ': ' + x.value).join(', ') + ') -- each row applies its value there as well');
+      if (s.raw != null && typeof s.raw !== 'number') console.log('    your value (' + JSON.stringify(s.raw) + ') is not a number, so no row is marked as yours');
+      console.log('    ' + 'value'.padStart(8) + 'acts on'.padStart(10) + 'tokens kept out'.padStart(18) + 'carried'.padStart(14) + 'sessions'.padStart(11));
+      for (const r of s.rows) console.log('    ' + fmt(r.value).padStart(8) + String(r.n).padStart(10) + ('~ ' + fmt(r.withheld)).padStart(18)
+        + ('~ ' + fmt(r.carried)).padStart(14) + String(r.replayed).padStart(11) + (r.value === s.current ? '   <- yours' : ''));
+    }
+    if (skipped.length) console.log('\n  ' + skipped.length + ' session(s) skipped.');
+    if (flag('--write')) console.log('  --write is ignored with --sweep: the sweep only shows data.');
+    return;
+  }
   const t = transcript.autotune(parsed, ledger, cfg, { disabled });
 
   /* `--write`: apply the recommendation to tokenbrake.json. This is the one part of the tuner that changes what
@@ -1576,6 +1598,8 @@ STEP TWO -- the brake, if your report says there is something in its reach.
                                       where it has not, plus the Read cap's health and a per-person grid and
                                       advice for maxChars and readMaxBytes (recommend-only). Prints the exact
                                       knob to set. Benchmark sessions skipped
+      --sweep                         the stateful features (dedup, reReadElide, readAfterEdit) replayed over your
+                                      transcripts at several values of each knob, your own marked. Data only
       --write                         turn ON the features with a clean MEASURED record (estimates, and features
                                       that backfired, are left for you to decide). Merges into tokenbrake.json,
                                       never replaces; aborts rather than overwrite a malformed config

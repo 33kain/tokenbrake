@@ -1245,3 +1245,11 @@ work here reads in bounded ranges, so outside the sessions where they ran live t
 `report` shows it too (the user's call): one line per session, off-by-default features only -- a feature ON in the
 config (top level or a `tools` entry) is named, never replayed, and one that fired live points at report --backfire.
 The replay applies per-tool settings through the guard's own `toolConfig`. Not done yet: the knob sweep view.
+
+### Knob sweep — `tune --sweep`, 2026-09-18
+
+`sweepOffline(sessions, ledger, cfg)` re-runs `offlineShadow` per value of `dedupMinChars` [250..4000],
+`reReadRecency` [2..32], `reReadKeepLines` [1..50] and `editContextLines` [0..40] (`stepsAround` splices in the
+person's own value), one knob at a time, every other setting as configured; each row carries how many sessions it
+replayed (live sessions are left out by the replay). Data only, tokens only, no advice, no write. On this machine
+(55 sessions, 0.6 s) the only non-zero cell: dedup at dedupMinChars 250 -> 4 repeats, ~180 tokens kept out.

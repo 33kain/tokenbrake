@@ -3037,6 +3037,32 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the replay applies per-tool settings the way the guard merges them (tools.Read.readMaxBytes)',
     off(rp, [], { tools: { Read: { readMaxBytes: 1000 } } }).reReadElide.n === 0 && off(rp, [], {}).reReadElide.n === 1);
 
+  /* tune --sweep: the replay re-run per knob value, one knob at a time, the person's own value always a row. */
+  {
+    const sw = T.sweepOffline([sess([read('/w/a.js'), read('/w/b.js'), read('/w/c.js'), read('/w/d.js'), read('/w/a.js')])], [], {});
+    const row = (knob, v) => sw.find(s => s.knob === knob).rows.find(r => r.value === v);
+    t('the sweep moves with the knob: a re-read 3 reads later is recent at reReadRecency 4, not at 2',
+      row('reReadRecency', 2).n === 0 && row('reReadRecency', 4).n === 1 && row('reReadRecency', 8).n === 1, JSON.stringify(sw.find(s => s.knob === 'reReadRecency').rows));
+    t('keeping more lines of a re-read withholds less, in tokens',
+      row('reReadKeepLines', 1).withheld > row('reReadKeepLines', 50).withheld && row('reReadKeepLines', 50).withheld > 0);
+    const own = T.sweepOffline([sess([read('/w/a.js')])], [], { dedupMinChars: 777 });
+    t("the person's own value is always one of the rows, and marked as current",
+      own.find(s => s.knob === 'dedupMinChars').current === 777 && own.find(s => s.knob === 'dedupMinChars').rows.some(r => r.value === 777));
+    const lv = T.sweepOffline([sess([read('/w/a.js'), read('/w/a.js')])], [{ ev: 'read-reread', session: 'OF', what: '/w/zz.js' }], {});
+    t('a session where the feature ran live is left out of its sweep, and the row says how many sessions it covers',
+      lv.find(s => s.knob === 'reReadRecency').rows.every(r => r.n === 0 && r.replayed === 0));
+  }
+
+  {
+    /* A tools entry that sets the knob would override the swept top-level value; the sweep applies each value there too. */
+    const scopedSw = T.sweepOffline([sess([read('/w/a.js'), read('/w/b.js'), read('/w/c.js'), read('/w/d.js'), read('/w/a.js')])], [], { tools: { Read: { reReadRecency: 2 } } });
+    const rs = scopedSw.find(s => s.knob === 'reReadRecency');
+    t('a per-tool entry does not flatten the sweep: each value is applied to it too, and the entry is reported',
+      rs.rows.find(r => r.value === 2).n === 0 && rs.rows.find(r => r.value === 4).n === 1 && rs.scoped.length === 1 && rs.scoped[0].tool === 'Read', JSON.stringify(rs));
+    const strSw = T.sweepOffline([sess([read('/w/a.js')])], [], { editContextLines: '20' }).find(s => s.knob === 'editContextLines');
+    t('a knob written as a string is reported as such, never coerced into a marked row', strSw.raw === '20' && Number.isNaN(strSw.current));
+  }
+
   /* In tune: the replay replaces the estimators, and a replay that saw nothing reads as nothing to act on. */
   const tp = sess([read('/w/a.js'), read('/w/b.js'), read('/w/a.js')], { file: '/w/OF.jsonl', requests: [{}, {}, {}, {}, {}, {}] });
   const at = T.autotune([tp], [], { reReadElide: false, readAfterEdit: false, dedup: false });
@@ -3581,6 +3607,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const rTune = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'tune'], { encoding: 'utf8', env: e2 });
   t('cli tune with no transcripts exits 0 and says so (fails open)', rTune.status === 0 && /No transcripts found/.test(rTune.stdout), (rTune.stdout || rTune.stderr || '').slice(0, 80));
   const rHelp = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env: e2 });
+  t('help lists tune --sweep', /--sweep/.test(spawnSync(process.execPath, ['cli.js', 'help'], { encoding: 'utf8' }).stdout));
   t('help lists the tune command', /tokenbrake tune/.test(rHelp.stdout));
 
   /* F5 (sessionId backfill): a transcript with no sessionId field of its own must not make autotune attribute
