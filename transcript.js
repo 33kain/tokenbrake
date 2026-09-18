@@ -656,29 +656,72 @@ function trimSavings(parsed, ledgerRecs) {
   return { count: trimmed.length, saved, savedCarried, usd: usdOfTokens(saved, savedCarried, price), priced: !!price };
 }
 
-function reachPooled(sessions) {
+/* The second half is the OTHER side of the same table, and it lives in this one loop for the reason the
+   comment above `trimmedResults` gives: a pooled view uses the same rule, not a second, quietly different
+   one. `reach` files everything non-shell into a single `nonShell` bucket and stops -- on the sessions this
+   was written from that bucket was 41% of all carried tokens, the second largest thing in the report, and
+   the view named none of it. It is not miscellany: pooled over 76 transcripts on one machine it was almost
+   entirely **Read**, 40.1% of everything carried. `handlePost` gates every branch on isShell/isMcp, so a Read
+   result never enters the trim pipeline at all, and its only lever is the PreToolUse cap.
+
+   So `read` sizes what that lever can even be eligible for. The cap fires on an UNBOUNDED read of a file over
+   `readMaxBytes`, leaving three groups, which on the same pool ran 63.8% / 33.2% / 3.0% of Read carry --
+   the cap is eligible for about a thirtieth of the largest block in the report. A ranged read is excluded BY
+   DESIGN (0.2.3: shredding one taught the model to read in 80-line chunks and doubled the bill), so this is
+   not a defect list; it is the size of what the product declines to touch, which the report owes the reader
+   plainly rather than as a 41% residue.
+
+   File sizes are NOT taken from the delivered text -- on a read the cap already acted on, that text IS the
+   cap's output, the mistake `unboundedReads` documents at length. They come from each session's optional
+   `sizes` map (id -> bytes), which the caller builds from `unboundedReads` and its existing provenance chain.
+   A read that chain cannot size is counted as `unsized` rather than guessed into a bucket, and an ABSENT
+   `readMaxBytes` files every whole read that way -- an absent knob is not a threshold of zero, the same
+   distinction `unboundedReads` draws for `over`. */
+function reachPooled(sessions, opts) {
+  const knob = (opts || {}).readMaxBytes;
+  const trigger = knob == null || knob === '' ? NaN : Number(knob);
+  const sized = Number.isFinite(trigger);
   const B = () => ({ n: 0, tokens: 0, carried: 0 });
   const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
-  const byTool = new Map();
-  for (const { parsed, trimmed } of sessions) {
+  const byTool = new Map(), nonShellByTool = new Map();
+  const read = { all: B(), ranged: B(), over: B(), under: B(), unsized: B() };
+  const bump = (map, key, res) => {
+    const e = map.get(key) || { tool: key, n: 0, tokens: 0, carried: 0 };
+    e.n++; e.tokens += res.tokens; e.carried += res.carried || 0;
+    map.set(key, e);
+  };
+  const add = (b, res) => { b.n++; b.tokens += res.tokens; b.carried += res.carried || 0; };
+  for (const { parsed, trimmed, sizes } of sessions) {
     const r = reach(parsed, trimmed);
     for (const k of Object.keys(out)) { out[k].n += r[k].n; out[k].tokens += r[k].tokens; out[k].carried += r[k].carried; }
     const inWindow = new Set([...(trimmed || [])]);
     for (const res of parsed.results) {
       const shell = res.name === 'Bash' || res.name === 'PowerShell';
-      if (!shell) continue;
+      /* `reach` tests the rewrite FIRST, so a result the guard rewrote is acted-on whatever it is. Mirroring
+         that order here is what keeps both tool maps summing to their own bucket instead of double-counting
+         a trimmed mcp__* result as acted-on and as beyond reach. */
+      if (!shell) {
+        if (inWindow.has(res)) continue;
+        bump(nonShellByTool, res.name || '(unknown)', res);
+        if (res.name !== 'Read' || !res.file) continue;
+        add(read.all, res);
+        /* A ranged read with a size is one the cap rewrote: `unboundedReads` ties its reconstructed cap row
+           back to this result, and it sizes no other ranged read. It belongs to the cap, not to "ranged". */
+        if (!res.whole && !(sizes && res.id != null && sizes.has(res.id))) { add(read.ranged, res); continue; }
+        const bytes = sized && sizes && res.id != null ? sizes.get(res.id) : null;
+        add(bytes == null ? read.unsized : bytes > trigger ? read.over : read.under, res);
+        continue;
+      }
       const isWindow = inWindow.has(res) || (!res.isError && res.chars > TRIM_CHARS && res.chars < HOST_CEILING);
       if (!isWindow) continue;
-      const tool = commandTool(res.what) || '(unknown)';
-      const e = byTool.get(tool) || { tool, n: 0, tokens: 0, carried: 0 };
-      e.n++; e.tokens += res.tokens; e.carried += res.carried || 0;
-      byTool.set(tool, e);
+      bump(byTool, commandTool(res.what) || '(unknown)', res);
     }
   }
   const carriedTotal = out.total.carried || 0;
-  return { ...out, carriedTotal,
+  const rank = (m) => [...m.values()].sort((a, b) => b.carried - a.carried || b.n - a.n);
+  return { ...out, carriedTotal, read, readTrigger: sized ? trigger : null,
     windowShareOfCarried: carriedTotal ? out.window.carried / carriedTotal : 0,
-    tools: [...byTool.values()].sort((a, b) => b.carried - a.carried || b.n - a.n) };
+    tools: rank(byTool), nonShellTools: rank(nonShellByTool) };
 }
 
 /* Money, not token counts. ab10 (AB-TASK.md) measured where a hook's effect actually lands: not in the
@@ -1055,7 +1098,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
          then argue for a lower trigger using the cap's own output as the evidence. */
       recordedOriginal++;
       capSeen.add(key);
-      reads.push({ file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
+      reads.push({ id: r.id, file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
         via: r.name === 'Read' ? 'read-cap' : 'post' });
       continue;
     }
@@ -1087,17 +1130,24 @@ function unboundedReads(parsed, ledgerRecs, opts) {
        POST hook, which returns before any cap logic at or under maxChars (guard.js:272). A trigger below
        maxChars is therefore a dead knob for a shell read, and a grid that does not know that overstates
        every row below it. */
-    reads.push({ file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source,
+    reads.push({ id: r.id, file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source,
       via: r.name === 'Read' ? 'read-cap' : 'post' });
   }
   /* A cap row whose file never appears as an unbounded read means the transcript recorded the guard's
      rewritten input instead -- the read is in there carrying a `limit`, which is not a whole-file read.
      Those reads belong in the population too, at their true size. */
   let recordedRewritten = 0;
+  const claimed = new Set();
   for (const [key, cap] of idx.byFile) {
     if (capSeen.has(key) || cap.persisted) continue;
     recordedRewritten++;
-    reads.push({ file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
+    /* The rewritten read is in the transcript as a Read of the same file carrying the cap's `limit` and no
+       offset. Tie the row to the first such result so a caller keying sizes by result id can find it; with
+       none, `id` stays null and such a caller skips it. */
+    const res = parsed.results.find((x) => x.name === 'Read' && !x.whole && x.readFrom == null && x.id != null
+      && !claimed.has(x.id) && normReadPath(x.file, parsed.cwd) === key);
+    if (res) claimed.add(res.id);
+    reads.push({ id: res ? res.id : null, file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
       via: 'read-cap' });
   }
   const sized = reads.filter((r) => !r.ceiling);
