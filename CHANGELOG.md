@@ -12,6 +12,10 @@
 - **Tokens only, never money.** `report --cost` and `--model` repricing are removed (they now say so and exit
   1); the report's list-price line and every dollar figure on its saving, still-within-reach and recovery lines
   are gone; `--compare` drops its cost row. Every figure tokenbrake prints is tokens or a count.
+- **Offline shadow for `dedup`, `reReadElide` and `readAfterEdit`.** `tune` replays your transcripts with the guard's
+  own (now exported) decision functions, keeping the per-session memory in memory: no install, no runtime cost, every
+  session on disk. Conservative where a transcript is blind (a shell command, edit or compaction between two reads
+  disqualifies a re-read). Replaces the old estimators for those three.
 - **`guard.js` is importable.** Run as a hook it behaves as before; required, it hands over its own `DEFAULTS` and
   command patterns, so the report stops keeping copies. One copy had already drifted: the report's persisted-output
   pattern missed the `.json` outputs the guard recognises.

@@ -2937,6 +2937,93 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Offline shadow: dedup, reReadElide, readAfterEdit replayed over a transcript ----------------------------
+   The replay asks the guard's own exported decisions at each step, so these checks are about the replay's
+   bookkeeping: that it fires where the guard would, stays quiet where the guard would, and stays conservative
+   where a transcript cannot see what the guard sees. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  console.log('\n-- offline shadow: stateful features replayed');
+  let n = 0;
+  const R = (name, extra) => ({ id: 'o' + (++n), name, what: name, chars: 4000, tokens: 1000, carriedTurns: 3, afterReq: 0,
+    isError: false, marker: false, file: null, whole: false, lines: 1, ...(extra || {}) });
+  const read = (file, extra) => R('Read', { file, whole: true, lines: 400, shape: { bytes: 16000, lines: 400 }, ...(extra || {}) });
+  const sess = (results, extra) => ({ sessionId: 'OF', cwd: '/w', requests: [{}, {}, {}, {}], compactions: [], results, ...(extra || {}) });
+  const off = (p, led, cfg) => T.offlineShadow(p, led || [], cfg || {});
+  const GD = createRequire(import.meta.url)('./guard.js');
+  const noteTok = (s) => Math.round(s.length / 4);   // the narrowings' own note enters context too, so it is priced
+
+  // dedup
+  const dupA = R('Bash', { what: 'npm test', hash: 'h1', chars: 4000 }), dupB = R('Bash', { what: 'npm test', hash: 'h1', chars: 4000 });
+  const d1 = off(sess([dupA, dupB]));
+  t('dedup replay: an identical second result over the floor is a would-dedup, priced as what the pointer would save',
+    d1.dedup.n === 1 && d1.dedup.withheld > 900 && d1.dedup.withheld < 1000, JSON.stringify(d1.dedup));
+  t('dedup replay: a trimmed result (marker) cannot be matched and is skipped, an under-count',
+    off(sess([dupA, R('Bash', { hash: 'h1', marker: true })])).dedup.n === 0);
+  t('dedup replay: a noTrim command is left alone, as the guard leaves it', off(sess([dupA, dupB]), [], { noTrim: ['npm test'] }).dedup.n === 0);
+  t('dedup replay: below dedupMinChars is not a repeat worth a pointer', off(sess([dupA, dupB]), [], { dedupMinChars: 5000 }).dedup.n === 0);
+  t('a session where the feature ran live is skipped for it: its measured record is the evidence',
+    off(sess([dupA, dupB]), [{ ev: 'post', session: 'OF', dedup: true }]).live.dedup === true
+    && off(sess([dupA, dupB]), [{ ev: 'post', session: 'OF', dedup: true }]).dedup.n === 0);
+
+  // reReadElide
+  const r2 = off(sess([read('/w/a.js'), read('/w/b.js'), read('/w/a.js')]));
+  t('reReadElide replay: an unchanged, recent whole re-read is a would-elide, priced as all but the kept lines',
+    r2.reReadElide.n === 1 && r2.reReadElide.withheld === Math.round(1000 * (1 - 5 / 400)) - noteTok(GD.reReadNote('a.js', 5, 400)), JSON.stringify(r2.reReadElide));
+  t('reReadElide replay: any shell command between the two reads disqualifies them (it could have changed the file)',
+    off(sess([read('/w/a.js'), R('Bash', { what: 'npm run format' }), read('/w/a.js')])).reReadElide.n === 0);
+  t('reReadElide replay: an edit of the file between the reads disqualifies them',
+    off(sess([read('/w/a.js'), R('Edit', { file: '/w/a.js', patch: [[3, 4]] }), read('/w/a.js')])).reReadElide.n === 0);
+  t('reReadElide replay: a compaction between the reads disqualifies them (the model no longer has the first)',
+    off(sess([read('/w/a.js', { afterReq: 0 }), read('/w/a.js', { afterReq: 2 })], { compactions: [1] })).reReadElide.n === 0);
+  t('reReadElide replay: a read no longer recent (reReadRecency others since) is not elided, as in the guard',
+    off(sess([read('/w/a.js'), ...Array.from({ length: 8 }, (_, i) => read('/w/x' + i + '.js')), read('/w/a.js')])).reReadElide.n === 0);
+  t('reReadElide replay: an elided re-read is not recorded, so a third read counts once more, as in the guard',
+    off(sess([read('/w/a.js'), read('/w/a.js'), read('/w/a.js')])).reReadElide.n === 2);
+
+  t('a read of a file the guard itself capped or narrowed this session is never replayed (the guard already acted on it)',
+    off(sess([read('/w/a.js'), read('/w/a.js')]), [{ ev: 'read-cap', session: 'OF', what: '/w/a.js' }]).reReadElide.n === 0);
+  t('a numbered excerpt that does not start at line 1 is not a whole read, whatever its input said',
+    off(sess([read('/w/a.js'), read('/w/a.js', { shape: { bytes: 16000, lines: 400, numbered: true, from: 301 } })])).reReadElide.n === 0);
+  t('a noTrim path is left alone by both Read narrowings, as the guard leaves it',
+    off(sess([read('/w/a.js'), read('/w/a.js')]), [], { noTrim: ['a.js'] }).reReadElide.n === 0);
+  t('dedup honours noTrim on the RAW command, not the cleaned-up one',
+    off(sess([R('Bash', { what: 'npm test', cmd: 'CI=1 npm test', hash: 'h9' }), R('Bash', { what: 'npm test', cmd: 'CI=1 npm test', hash: 'h9' })]), [], { noTrim: ['CI=1'] }).dedup.n === 0);
+
+  // readAfterEdit
+  const e1 = off(sess([R('Edit', { file: '/w/a.js', patch: [[10, 12]] }), read('/w/a.js')]));
+  t('readAfterEdit replay: a whole read after an edit narrows to the guard\'s own window around the edit',
+    e1.readAfterEdit.n === 1 && e1.readAfterEdit.withheld === Math.round(1000 * (1 - 32 / 400)) - noteTok(GD.deltaNote('a.js', 1, 32, 400)), JSON.stringify(e1.readAfterEdit));
+  t('readAfterEdit replay: an edit with no line ranges is counted as not replayable, never guessed',
+    off(sess([R('Edit', { file: '/w/a.js', patch: [] }), read('/w/a.js')])).editsNoPatch === 1
+    && off(sess([R('Edit', { file: '/w/a.js', patch: [] }), read('/w/a.js')])).readAfterEdit.n === 0);
+  t('readAfterEdit replay: a whole read over readMaxBytes is the cap\'s, not the delta\'s',
+    off(sess([R('Edit', { file: '/w/a.js', patch: [[10, 12]] }), read('/w/a.js', { shape: { bytes: 90000, lines: 400 } })])).readAfterEdit.n === 0);
+
+  /* The line ranges come from Claude Code's structuredPatch, read with the guard's own patchRanges at parse time. */
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-offline-'));
+    const f = join(dir, 'pt.jsonl');
+    writeFileSync(f, [
+      JSON.stringify({ type: 'assistant', uuid: 'a1', sessionId: 'pt', cwd: '/w', message: { model: 'm', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/w/a.js', old_string: 'x', new_string: 'y' } }] } }),
+      JSON.stringify({ type: 'user', uuid: 'u1', sessionId: 'pt', toolUseResult: { filePath: '/w/a.js', structuredPatch: [{ oldStart: 10, oldLines: 3, newStart: 10, newLines: 3, lines: [] }] },
+        message: { content: [{ type: 'tool_result', tool_use_id: 'e1', content: 'The file /w/a.js has been updated successfully.' }] } }),
+    ].join('\n') + '\n');
+    const pr = T.parseTranscript(f);
+    t('an Edit\'s line ranges are parsed from structuredPatch with the guard\'s own patchRanges', JSON.stringify(pr.results[0].patch) === '[[10,12]]', JSON.stringify(pr.results[0].patch));
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  /* In tune: the replay replaces the estimators, and a replay that saw nothing reads as nothing to act on. */
+  const tp = sess([read('/w/a.js'), read('/w/b.js'), read('/w/a.js')], { file: '/w/OF.jsonl', requests: [{}, {}, {}, {}, {}, {}] });
+  const at = T.autotune([tp], [], { reReadElide: false, readAfterEdit: false, dedup: false });
+  const fr = at.features.find(f => f.key === 'reReadElide'), fe = at.features.find(f => f.key === 'readAfterEdit');
+  t('tune reads a stateful feature from its offline replay, never more than a "try"',
+    fr.bound === 'offline' && fr.opportunity.n === 1 && ['try', 'measure', 'idle'].includes(fr.status) && fr.status !== 'turn-on', JSON.stringify({ b: fr.bound, o: fr.opportunity, s: fr.status }));
+  t('and a replay that saw nothing is "nothing to act on", not an estimate', fe.bound === 'offline' && fe.opportunity.n === 0 && fe.status === 'idle', JSON.stringify({ s: fe.status }));
+}
+
 /* ---- Shadow mode (item 5): an off feature runs its test, logs, and emits NOTHING --------------------------
    The whole claim is that shadow changes nothing that enters context, so the first check is byte-identical
    output with shadow on and off. Then: the row it writes, the rows it must not write, and that `tune` reads
@@ -3410,31 +3497,6 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     R({ name: 'Bash', what: 'git show HEAD', chars: 5000, carried: 4 }), // counts
   ]), { gitViewMinChars: 2000 });
   t('gitOpportunity counts git diff/show over the floor, not git log', go.n === 2 && go.carried === 7, JSON.stringify(go));
-
-  const eo = T.editThenRead(P([
-    R({ name: 'Edit', file: '/w/a.js' }),
-    R({ name: 'Read', file: '/w/a.js', whole: true, carried: 8 }),   // whole read after an edit of the same file
-    R({ name: 'Read', file: '/w/b.js', whole: true }),               // no prior edit
-    R({ name: 'Edit', file: '/w/c.js' }),
-    R({ name: 'Read', file: '/w/c.js', whole: false }),              // bounded read, not what the delta narrows
-  ]));
-  t('editThenRead counts a whole read of a file edited earlier this session', eo.n === 1 && eo.carried === 8, JSON.stringify(eo));
-
-  const rr = T.reReadOpportunity(P([
-    R({ name: 'Read', file: '/w/a.js', whole: true }),               // first whole read of a.js
-    R({ name: 'Read', file: '/w/a.js', whole: true, carried: 9 }),   // whole RE-read of a.js -> counts (what reReadElide narrows)
-    R({ name: 'Bash', what: "sed -n '1,80p' a.js", chars: 500 }),    // a bounded read, which the elision never touches
-    R({ name: 'Read', file: '/w/b.js', whole: true }),               // first whole read of b.js, not a repeat
-  ]));
-  t('reReadOpportunity counts a whole re-read of an already-whole-read file, not bounded reads', rr.n === 1 && rr.carried === 9, JSON.stringify(rr));
-  t('reReadOpportunity ignores a failed re-read (a read that delivered nothing)', T.reReadOpportunity(P([
-    R({ name: 'Read', file: '/w/a.js', whole: true }),
-    R({ name: 'Read', file: '/w/a.js', whole: true, isError: true }),
-  ])).n === 0);
-  t('editThenRead ignores a failed verify read', T.editThenRead(P([
-    R({ name: 'Edit', file: '/w/a.js' }),
-    R({ name: 'Read', file: '/w/a.js', whole: true, isError: true }),
-  ])).n === 0);
 
   // ---- read-cap health ----
   const postRow = { ev: 'post', session: sid, id: 'x', tool: 'Bash', chars: 100 };

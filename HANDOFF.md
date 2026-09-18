@@ -1226,3 +1226,21 @@ constants and functions at top level). Left for later: `stemOf` (mirrors saveOut
 Step 2 (next): pull dedup / reReadElide / readAfterEdit decisions into pure exported guard functions, then build
 the offline shadow in transcript.js on them -- conservative reReadElide (a shell command between reads
 disqualifies), compaction exclusion, a coverage count for edits without structuredPatch, and a sweep view.
+
+### Offline shadow (option B, step 2) — 2026-09-18
+
+guard.js now exports its stateful decisions as pure functions -- `priorReadIn`, `reReadDecision`, `editWindow`,
+`dedupPointer`, plus `hashOf` and `patchRanges` -- and the live guard calls them (behaviour unchanged, suite green).
+transcript.js `offlineShadow(parsed, ledger, cfg)` replays a transcript in order with the same functions, memory
+in memory, each feature alone, skipping a session where the feature ran live (its ledger rows). Parse gained
+`hash` (shell/MCP results >= 200 chars) and `patch` (Edit/MultiEdit ranges via the guard's patchRanges on
+`toolUseResult.structuredPatch`). reReadElide's size+mtime test is fed a conservative signature instead
+(shell-command count : edits-of-this-file : compactions) so the guard's own reReadDecision decides; dedup skips
+marker results (under-count); edits without a patch are counted (`editsNoPatch`). tune uses it as bound
+`offline` (at most "try"; zero with sessions -> `idle`); `editThenRead` and `reReadOpportunity` are retired.
+
+On this machine it replays 55 sessions in ~75 ms and finds nothing for all three: only 20 whole-file reads in 55
+sessions, none a re-read or a read after an edit, and no exact duplicate among 477 large shell/MCP results. The
+work here reads in bounded ranges, so outside the sessions where they ran live these features have nothing to do.
+Not done yet: the knob sweep view, and whether `report` (not just `tune`) should show it for users with nothing
+installed -- the user's call.

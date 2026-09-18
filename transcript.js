@@ -388,6 +388,9 @@ function readKey(name, input) {
    first entry that carries it), the tool results in order with the request index they landed after, and the
    compaction boundaries. Only the main chain: sidechain entries (subagents) run in their own context and
    would be counted against the wrong window. */
+/* One malformed structuredPatch in a transcript (a hunk whose newStart cannot even be converted to a number)
+   must not throw the whole session away as unreadable: that edit just has no ranges, and counts as not replayable. */
+const safeRanges = (resp) => { try { return GUARD.patchRanges(resp); } catch { return []; } };
 function parseTranscript(file) {
   const entries = readJsonl(file);
   const requests = [];               // { id, usage, at }  in order of first appearance
@@ -435,6 +438,13 @@ function parseTranscript(file) {
           what: describe(use.name, use.input),
           key: readKey(use.name, use.input),
           file: readFileOf(use.name, use.input),
+          /* For the offline shadow (see offlineShadow): a hash of what a shell or MCP result delivered, and the line
+             ranges an Edit changed, read from Claude Code's own structuredPatch with the guard's own patchRanges --
+             the exact ranges the live readAfterEdit would have recorded. */
+          hash: (use.name === 'Bash' || use.name === 'PowerShell' || /^mcp__/.test(use.name)) && text ? GUARD.hashOf(text) : null,
+          /* The raw command, for matching noTrim exactly as the guard does (`what` is cleaned up for display). */
+          cmd: (use.name === 'Bash' || use.name === 'PowerShell') && use.input && typeof use.input.command === 'string' ? use.input.command : undefined,
+          patch: (use.name === 'Edit' || use.name === 'MultiEdit') ? safeRanges(e.toolUseResult) : undefined,
           /* The guard's own test for "this command is a read of one file" (guard.js EXCERPT), kept as its own fact
              rather than inferred from `file`, which means "which file this reads" and may grow other shapes. */
           excerpt: (use.name === 'Bash' || use.name === 'PowerShell') && !!use.input && typeof use.input.command === 'string'
@@ -1437,28 +1447,6 @@ function mcpOpportunity(parsed, cfg) {
   return { n, carried };
 }
 
-/* Read-After-Edit opportunity: a file this session edited and then read WHOLE -- the unbounded verify-read the
-   delta narrows to the changed region. Edits surface as Edit/MultiEdit results whose `file` is the path
-   (readFileOf returns file_path for any tool that names one); a later unbounded Read of the same file is the
-   read the delta targets. Path-normalised so an Edit and a Read of the same file join. Coarse and an UPPER
-   bound: the delta only fires on files at or under readMaxBytes (a bigger file's re-read is size-capped
-   instead), which this does not check -- the file's true size is not in the result -- so it is reported as
-   "up to N", the count to confirm by turning the delta on, never as exact. */
-function editThenRead(parsed) {
-  const cwd = parsed.cwd;
-  const edited = new Set();
-  let n = 0, carried = 0;
-  for (const r of parsed.results) {
-    if (r.isError) continue;   // a failed edit changed nothing; a failed read delivered nothing
-    if (r.name === 'Edit' || r.name === 'MultiEdit') { const k = normReadPath(r.file, cwd); if (k) edited.add(k); continue; }
-    if (r.name === 'Read' && r.whole && r.file) {
-      const k = normReadPath(r.file, cwd);
-      if (k && edited.has(k)) { n++; carried += r.carried || 0; }
-    }
-  }
-  return { n, carried };
-}
-
 /* Git-view opportunity: an UNTRIMMED `git diff`/`git show` result over gitViewMinChars. This is an UPPER bound,
    unlike the exact-lower-bound estimators -- the guard collapses only the hunks of generated/lockfile paths, and
    with the body dropped this cannot see whether such a path is in the diff. So it counts every large diff and
@@ -1474,25 +1462,6 @@ function gitOpportunity(parsed, cfg) {
     if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
     if (r.isError || r.marker || r.chars < min || !GIT_CMD.test(String(r.what || ''))) continue;
     n++; carried += r.carried || 0;
-  }
-  return { n, carried };
-}
-
-/* Read-After-Read opportunity: a WHOLE-file read of a file already read WHOLE earlier this session -- the
-   population reReadElide narrows (guard.js only elides whole re-reads). Deliberately NOT repeatReads, which
-   keys on path+range (so it counts a bounded `sed` re-read the elision never touches) and is windowed by
-   compaction (so it drops a post-compaction whole re-read the elision WOULD narrow, since the guard does not
-   consult compaction). An UPPER bound: the elision also requires the file unchanged and the re-read recent,
-   neither checkable from the transcript, so it is shown as "up to N". */
-function reReadOpportunity(parsed) {
-  const cwd = parsed.cwd;
-  const seen = new Set();
-  let n = 0, carried = 0;
-  for (const r of parsed.results) {
-    if (r.name !== 'Read' || !r.whole || !r.file || r.isError) continue;   // a failed read delivered nothing to re-elide
-    const k = normReadPath(r.file, cwd);
-    if (!k) continue;
-    if (seen.has(k)) { n++; carried += r.carried || 0; } else seen.add(k);
   }
   return { n, carried };
 }
@@ -1629,6 +1598,97 @@ function shadowRecord(parsed, ledgerRecs) {
   return { ran, ...Object.fromEntries(out) };
 }
 
+/* ---- Offline shadow: the three stateful features, replayed over a transcript -----------------------------------
+
+   dedup, reReadElide and readAfterEdit each remember earlier calls in a session, so a live shadow would need its own
+   state on disk. Instead this replays the transcript in order, keeps that memory in memory, and asks the guard's
+   OWN decision functions (guard.js exports them) at each step -- so it cannot drift from what the guard decides,
+   it costs nothing at runtime, and it works on every transcript already on disk, guard installed or not.
+
+   Each feature is simulated alone (as if it were the only one on), and a session where the feature actually ran
+   live is skipped for it: its measured record is better than any replay. What the replay cannot see, and how
+   each gap is biased:
+   - dedup hashes what was DELIVERED, not the original bytes the guard hashes, so a result the trim had already
+     cut (it carries the marker) cannot be matched -- skipped, an under-count.
+   - reReadElide's "unchanged" is the guard's size+mtime test, which a transcript cannot see. It is replaced by a
+     conservative signature: no shell command at all, no edit of the file and no compaction between the two reads.
+     A shell command could have changed the file (a formatter, a checkout), so any one disqualifies the pair --
+     an under-count by design, because over-counting here would argue for flipping a default. Compaction is
+     excluded because after it the model no longer has the first read -- a blind spot of the live guard itself.
+   - readAfterEdit takes the edit's ranges from structuredPatch; an edit without one (older Claude Code, or a
+     shape change) is counted in `editsNoPatch` so a format change shows as coverage, not as a quiet zero.
+   - Like every shadow, nothing here says whether the model would have come back for what was withheld. */
+const OFFLINE = ['dedup', 'reReadElide', 'readAfterEdit'];
+const LIVE_ROW = { dedup: (l) => l.dedup === true, reReadElide: (l) => l.ev === 'read-reread', readAfterEdit: (l) => l.ev === 'read-delta' };
+function offlineShadow(parsed, ledgerRecs, cfg) {
+  const c = { ...GUARD.DEFAULTS, ...(cfg || {}) };
+  const sid = parsed.sessionId;
+  const out = Object.fromEntries(OFFLINE.map((k) => [k, emptyShadow()]));
+  const live = Object.fromEntries(OFFLINE.map((k) => [k, false]));
+  /* A read the guard itself capped or narrowed in this session is the guard's, not a candidate: some transcripts
+     record the model's ORIGINAL unbounded input for it, so it looks like a small whole read of the cap's first
+     300 lines -- the trap unboundedReads documents. Any read of such a file is left out (an under-count), and a
+     whole read the guard logged gets its true size from the ledger, not from the delivered text. */
+  const guarded = new Set();
+  for (const l of ledgerRecs || []) {
+    if (!l || (sid && l.session !== sid)) continue;
+    for (const k of OFFLINE) if (LIVE_ROW[k](l)) live[k] = true;
+    if ((l.ev === 'read-cap' || l.ev === 'read-delta' || l.ev === 'read-reread') && l.what) guarded.add(normReadPath(l.what));
+  }
+  const trueSize = wholeReadIndex(ledgerRecs || [], sid).byFile;
+  const credit = (k, r, tok) => {
+    if (tok <= 0) return;
+    const e = out[k]; e.n++; e.withheld += tok; e.carried += tok * ((r.carriedTurns || 0) + 1);
+  };
+  const shell = (r) => r.name === 'Bash' || r.name === 'PowerShell';
+  const noteTok = (s) => Math.round(s.length / CHARS_PER_TOKEN);
+  const compactionsBy = (req) => parsed.compactions.filter((x) => x <= req).length;
+  const seen = new Set();                       // dedup: hashes delivered so far
+  const reads = [];                             // reReadElide: the guard's own record shape, in order
+  const edits = new Map();                      // readAfterEdit: file -> [{ ranges, t }]
+  const fileGen = new Map();
+  let shellGen = 0, editsTotal = 0, editsNoPatch = 0;
+  parsed.results.forEach((r, i) => {
+    const key = r.file ? normReadPath(r.file, parsed.cwd) : null;
+    if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(r.name) && key && !r.isError) {
+      fileGen.set(key, (fileGen.get(key) || 0) + 1);
+      if (r.name === 'Edit' || r.name === 'MultiEdit') {
+        editsTotal++;
+        if (r.patch && r.patch.length) { if (!edits.has(key)) edits.set(key, []); edits.get(key).push({ ranges: r.patch, t: i }); } else editsNoPatch++;
+      }
+    }
+    /* dedup: a shell or MCP result over the floor, delivered whole (no marker), not protected by noTrim -- the
+       guard's own noTrimmed, on the raw command for a shell result and the tool name for an MCP one */
+    const mcpR = /^mcp__/.test(r.name);
+    if (!live.dedup && (shell(r) || mcpR) && !r.isError && !r.marker && r.hash && r.chars >= c.dedupMinChars
+      && !GUARD.noTrimmed(c, mcpR ? r.name : (r.cmd || r.what), mcpR)) {
+      if (seen.has(r.hash)) credit('dedup', r, Math.round((r.chars - GUARD.dedupPointer({ chars: r.chars, id: 'x'.repeat(19) }).length) / CHARS_PER_TOKEN));
+      else seen.add(r.hash);
+    }
+    if (shell(r)) shellGen++;
+    /* the two Read narrowings: a whole, successful Read of line 1 on, the guard would have let through (not
+       noTrim, not one it capped or narrowed, under the trigger, not a persisted output, not alwaysCap) */
+    if (r.name !== 'Read' || !r.whole || r.isError || !key || guarded.has(key)) return;
+    if (r.shape && r.shape.numbered && r.shape.from !== 1) return;
+    if (GUARD.matchesAny(c.noTrim, r.file) || GUARD.matchesAny(c.alwaysCap, r.file) || PERSISTED.test(r.file)) return;
+    const logged = trueSize.get(key);
+    const bytes = (logged && logged.bytes) || (r.shape && r.shape.bytes) || r.chars;
+    const nLines = (logged && logged.lines) || (r.shape && r.shape.lines) || r.lines;
+    if (!nLines || bytes > c.readMaxBytes) return;
+    const base = path.basename(String(r.file));
+    if (!live.readAfterEdit) {
+      const w = GUARD.editWindow(edits.get(key), nLines, c);
+      if (w) credit('readAfterEdit', r, Math.round(r.tokens * (1 - w.limit / nLines)) - noteTok(GUARD.deltaNote(base, w.from, w.to, nLines)));
+    }
+    if (!live.reReadElide) {
+      const sig = shellGen + ':' + (fileGen.get(key) || 0) + ':' + compactionsBy(r.afterReq);
+      if (GUARD.reReadDecision(GUARD.priorReadIn(reads, key), sig, 0, nLines, c)) credit('reReadElide', r, Math.round(r.tokens * (1 - c.reReadKeepLines / nLines)) - noteTok(GUARD.reReadNote(base, c.reReadKeepLines, nLines)));
+      else reads.push({ file: key, size: sig, mtime: 0 });   // an elided read is not recorded, as in the guard
+    }
+  });
+  return { ...out, live, editsTotal, editsNoPatch };
+}
+
 /* `opts.disabled` is the set of knobs written `false` in the raw tokenbrake.json. It cannot be derived from
    `cfg`: the caller hands us TUNE_DEFAULTS merged with the file, and every feature knob defaults to false
    there, so "absent" and "deliberately off" are the same value by the time it arrives. Only the raw file
@@ -1646,8 +1706,10 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
 
   const shadowed = Object.fromEntries(SHADOWED.map((k) => [k, emptyShadow()]));
+  const offline = Object.fromEntries(OFFLINE.map((k) => [k, { n: 0, withheld: 0, carried: 0, sessions: 0 }]));
+  let editsTotal = 0, editsNoPatch = 0;
   let shadowSessions = 0;
-  const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
+  const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
   const sizedReads = [], shellRows = [];   // the two threshold grids' populations, pooled
   const noTrim = Array.isArray(cfg.noTrim) ? cfg.noTrim.filter((x) => !String(x).startsWith('mcp__')) : [];
@@ -1673,6 +1735,9 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     netCarried += a.net; withholds += a.withholds.length;
 
     const sr = shadowRecord(p, led);
+    const os = offlineShadow(p, led, cfg);
+    editsTotal += os.editsTotal; editsNoPatch += os.editsNoPatch;
+    for (const k of OFFLINE) if (!os.live[k]) { offline[k].sessions++; for (const f of ['n', 'withheld', 'carried']) offline[k][f] += os[k][f]; }
     if (sr.ran) {
       shadowSessions++;
       for (const k of SHADOWED) for (const f of Object.keys(emptyShadow())) shadowed[k][f] += sr[k][f];
@@ -1681,8 +1746,6 @@ function autotune(parsedSessions, ledger, cfg, opts) {
       const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
       const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
     }
-    const eo = editThenRead(p); edits.n += eo.n; edits.carried += eo.carried;
-    const ro = reReadOpportunity(p); reReadOpp.n += ro.n; reReadOpp.carried += ro.carried;
     if (!sr.ran) { const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried; }
 
     const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
@@ -1755,9 +1818,10 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     return isOn ? 'keep' : 'measure';
   };
   /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
-     re-derived from the feature key in the renderer: 'upper' for the over-counting estimators (editThenRead,
-     gitOpportunity and reReadOpportunity, shown as "up to N"), 'near' for the exact lower-bound ones
-     (blobOpportunity, mcpOpportunity, shown as "~ N"). */
+     re-derived from the feature key in the renderer: 'upper' for the over-counting estimator (gitOpportunity,
+     shown as "up to N"), 'near' for the lower-bound ones (blobOpportunity, mcpOpportunity, shown as "~ N"),
+     'shadow'/'mixed' for the guard's live shadow rows, and 'offline' for the transcript replay of the three
+     stateful features (offlineShadow). */
   const disabledKnobs = new Set((opts && opts.disabled) || []);
   const feat = (key, label, knob, measured, opp, bound) => {
     const isOn = on(knob), isScoped = scoped(knob), isDisabled = disabledKnobs.has(knob);
@@ -1789,6 +1853,9 @@ function autotune(parsedSessions, ledger, cfg, opts) {
      an opportunity -- the backfire side is unmeasured -- so at most a "try"), exact instead of estimated. */
   /* Chosen per SESSION above: a session the shadow ran in contributes its exact record (zero included -- "saw
      none" is an answer), one it did not contributes the estimate. The bound says which the total is made of. */
+  /* The offline replay of a stateful feature, over the sessions it did not run live in. `shadowSessions` carries the
+     session count so decide() reads a replay that saw nothing as "idle", the same as a live shadow that saw none. */
+  const replayed = (k) => [{ n: offline[k].n, withheld: offline[k].withheld, carried: offline[k].carried, shadowSessions: offline[k].sessions }, 'offline'];
   const offOrShadow = (k, estimate, bound) => {
     if (!shadowSessions) return [estimate, bound];
     const s = shadowed[k];
@@ -1799,9 +1866,9 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), ...offOrShadow('blobElide', blob, 'near')),
     feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), ...offOrShadow('gitView', gitOpp, 'upper')),
     feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), ...offOrShadow('mcpTrim', mcp, 'near')),
-    feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
-    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'upper'),
-    feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits, 'upper'),
+    feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), ...replayed('dedup')),
+    feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), ...replayed('reReadElide')),
+    feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), ...replayed('readAfterEdit')),
   ];
 
   /* The Read cap is always on and has its own tuning views (report --reads/--where); the tuner only reads its
@@ -1872,7 +1939,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
     netCarried, withholds, narrowings: reReadFired + deltaFired, features, readCap, thresholds, summary,
-    shadowOn: cfg.shadow !== false,
+    shadowOn: cfg.shadow !== false, editsTotal, editsNoPatch,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 
@@ -2151,5 +2218,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  GUARD_DEFAULTS: GUARD.DEFAULTS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
-  autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };
+  GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };
