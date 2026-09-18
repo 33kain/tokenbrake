@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 /* tokenbrake tests -- no Claude Code, no network.
    Run from the tokenbrake/ directory:  node test.mjs
 
@@ -821,12 +822,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const o = parse(r.stdout); const u = o && o.hookSpecificOutput && o.hookSpecificOutput.updatedToolOutput;
     t(`still trimmed: ${c}`, !!u && /\[tokenbrake\] \d+ lines omitted here/.test(u.stdout), r.stdout.slice(0, 60));
   }
-  /* transcript.js carries a SECOND copy of this grammar (EXCERPT_CMD), because guard.js ships as one
-     self-contained file and cannot import one. Its own comment states the invariant -- "the two must agree:
-     a report that does not recognise the commands the guard treats as reads cannot tell you what the guard
-     did" -- and it had gone stale on all three operand fixes at once, so `grep -nr foo .` was trimmed by
-     the guard while the report counted it as one file's excerpt. Keeping them in step was a comment; this
-     makes it a check, over the SAME corpus the two loops above just ran through the real guard. */
+  /* The report must recognise exactly the commands the guard treats as reads, or it cannot say what the guard
+     did. It once kept its own copy of this grammar, which went stale on three operand fixes at once; it now
+     uses the guard's EXCERPT, and this runs the SAME corpus the two loops above ran through the real guard,
+     through the report's classifier (readFileOf), end to end. */
   {
     const trx = await import('./transcript.js');
     const TX = trx.default || trx;
@@ -3466,22 +3465,31 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const noneTune = T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [], results: [R({ name: 'Bash', what: 'ls', chars: 100 })] }], [postRow], {});
   t('a session that withheld nothing reports withholds === 0 (distinct from a zero net)', noneTune.withholds === 0, JSON.stringify({ w: noneTune.withholds }));
 
-  // ---- TUNE_DEFAULTS pinned to guard.js DEFAULTS (guard.js cannot be require()d: it runs on load) ----
-  const guardSrc = readFileSync('./guard.js', 'utf8');
-  const D = T.TUNE_DEFAULTS;
-  let pinned = true, badKey = '';
-  for (const k of Object.keys(D)) {
-    const m = new RegExp('\\b' + k + ':\\s*(true|false|-?\\d+)').exec(guardSrc);
-    const got = m ? m[1] : '(absent)';
-    if (got !== String(D[k])) { pinned = false; badKey = k + '=' + got + ' vs ' + D[k]; break; }
+  // ---- guard.js is a library when required and a hook only when run ----
+  /* transcript.js used to carry COPIES of the guard's knobs and command grammars, pinned by tests like the ones
+     this replaces -- and one had drifted anyway (PERSISTED missed .json). Now it takes the guard's own objects,
+     so there is nothing to pin: the checks below are that it really does, and that loading the guard as a
+     library is inert. */
+  {
+    const G = createRequire(import.meta.url)('./guard.js');
+    t('transcript.js uses the guard\'s own objects, not copies',
+      T.GIT_CMD === G.GIT_DIFF && Object.keys(T.TUNE_DEFAULTS).every(k => T.TUNE_DEFAULTS[k] === G.DEFAULTS[k]),
+      JSON.stringify(Object.keys(T.TUNE_DEFAULTS).filter(k => T.TUNE_DEFAULTS[k] !== G.DEFAULTS[k])));
+    t('and its read grammar is the guard\'s, with the file as group 1', T.readFileOf('Bash', { command: "sed -n '1,40p' 'a b.js'" }) === 'a b.js');
+    /* Loaded, the guard must not do what it does as a hook: read stdin, write the ledger, print a reply. A hook
+       input on stdin makes the difference visible -- run as a hook it would answer; required, it must not. */
+    const lib = mkdtempSync(join(tmpdir(), 'tokenbrake-lib-'));
+    const hookInput = JSON.stringify({ session_id: 'lib', tool_use_id: 'toolu_lib', tool_name: 'Bash', tool_input: { command: 'npm test' },
+      tool_response: bashResp('x\n'.repeat(5000)) });
+    const req = spawnSync(process.execPath, ['-e', "const g = require('./guard.js'); process.stdout.write(typeof g.DEFAULTS + ' ' + typeof g.EXCERPT)"],
+      { input: hookInput, encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: lib } });
+    t('required as a library, the guard reads no stdin, writes no ledger and prints no reply',
+      req.status === 0 && req.stdout === 'object object' && !existsSync(join(lib, 'tokenbrake', 'ledger.jsonl')), JSON.stringify({ out: req.stdout, err: req.stderr.slice(0, 200) }));
+    const run = spawnSync(process.execPath, ['./guard.js', 'post'], { input: hookInput, encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: lib } });
+    t('run as a hook, the same file still answers and records', run.status === 0 && /updatedToolOutput/.test(run.stdout)
+      && existsSync(join(lib, 'tokenbrake', 'ledger.jsonl')), run.stdout.slice(0, 80));
+    rmSync(lib, { recursive: true, force: true });
   }
-  t('TUNE_DEFAULTS matches guard.js DEFAULTS for every mirrored key', pinned, badKey);
-
-  /* GIT_CMD mirrors guard.js GIT_DIFF (guard.js can't be require()d), and gitOpportunity estimates against the
-     command set the guard actually collapses -- so pin the regex source to guard.js the same way, or the two
-     can silently diverge (guard starts collapsing `git log -p`, say) with nothing failing. */
-  const gm = /const GIT_DIFF = \/(.+?)\/;/.exec(guardSrc);
-  t('GIT_CMD matches guard.js GIT_DIFF source (the mirror is pinned)', !!gm && gm[1] === T.GIT_CMD.source, gm ? gm[1] + ' vs ' + T.GIT_CMD.source : 'GIT_DIFF not found in guard.js');
 
   // ---- cli wiring: tune runs and help lists it ----
   const cfg2 = mkdtempSync(join(tmpdir(), 'tokenbrake-tune-'));

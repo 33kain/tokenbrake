@@ -57,39 +57,31 @@ function describe(name, input) {
 /* The file a result came from, when the call names one: a Read's path, or the single path a plain
    cat/sed/head/tail read. Separate from readKey because a recovery read is the SAME file at a DIFFERENT
    offset, so it needs the path without the range that readKey deliberately includes. */
-/* The same command shapes guard.js exempts from the trim, kept deliberately in step with its EXCERPT: a
-   read of one file, optionally inside a `cd ... &&`, optionally with an `echo` label before or after, and
-   with the path quoted if it has spaces. The two must agree -- a report that does not recognise the
-   commands the guard treats as reads cannot tell you what the guard did. */
-const P_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
-/* Mirrors guard.js ARG_/FILE_ exactly; see the long comments there for why an operand rejects a leading `-`
-   and why the file slot rejects an unquoted `*`/`?` but deliberately keeps `[` and `]`. The guard trims
-   whatever these reject, so a report that spells them differently misreports what the guard did. */
-const Q_ = String.raw`'[^']+'|"[^"]+"`;
-const ARG_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s]+)`;
-const FILE_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s*?]+)`;
-const LBL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
-const RD_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
-  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+(${FILE_})`;
-const EXCERPT_CMD = new RegExp(
-  String.raw`^\s*(?:cd\s+${P_}\s*&&\s*)?(?:${LBL_}\s*(?:&&|;)\s*)?${RD_}` +
-  String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
+/* The guard's own definitions -- guard.js is a library when required and a hook only when run -- so the report
+   classifies commands, persisted outputs and knobs with the SAME objects the guard decides with. These were
+   copies once, kept in step by pinning tests, and one had already drifted (PERSISTED missed the .json outputs
+   the guard recognises). */
+const GUARD = require('./guard.js');
+/* A read of one file: the guard's EXCERPT, whose group 1 is the file. */
+const EXCERPT_CMD = GUARD.EXCERPT;
 const unquote = (s) => String(s || '').replace(/^['"]|['"]$/g, '');
 
 /* A whole-file read: the population the Read cap's TRIGGER acts on. An unbounded Read, or a bare `cat` of
    one file -- `head -n N`, `tail`, `sed -n` and `grep` are all bounded requests and are not it, even though
    readFileOf recognises them as reads of a named file. A Read carrying an offset or a limit is likewise not
    one, and that is also how the guard decides (guard.js:323 returns before it stats anything). */
+const P_ = String.raw`(?:'[^']+'|"[^"]+"|[^|;&<>'"\s]+)`;
+const LBL_ = String.raw`echo(?:\s+(?:'[^']*'|"[^"]*"|[^|;&<>'"\s]+))*`;
 const WHOLE_RD_ = String.raw`cat(?:\s+-[bnAEsTv]+)*\s+(${P_})`;
 const WHOLE_CMD = new RegExp(
   String.raw`^\s*(?:cd\s+${P_}\s*&&\s*)?(?:${LBL_}\s*(?:&&|;)\s*)?${WHOLE_RD_}` +
   String.raw`(?:\s*(?:&&|;)\s*${LBL_})*\s*$`);
 
-/* The guard's own two early exits, kept deliberately in step with it exactly as EXCERPT_CMD is: a read it
+/* The guard's own two early exits (PERSISTED is the guard's own pattern; WHOLE_CMD is the report's): a read it
    returns on is not a read the trigger acts on, so neither belongs in the population readMaxBytes is argued
    from. PERSISTED is the second knob -- a spilled output is capped by persistedLimitLines at anything over
    maxChars, whatever readMaxBytes says (guard.js:41, :329). */
-const PERSISTED = /(^|[\\/])(tool-results|tokenbrake[\\/]out)[\\/][^\\/]+\.txt$/;
+const PERSISTED = GUARD.PERSISTED;
 /* Claude Code's own refusal when a file exceeds its per-read token ceiling. Matched on wording, so a build
    that words it differently falls through to 'errored' rather than being counted as a big file. */
 const TOO_LARGE = /exceeds maximum allowed (?:tokens|size)|too (?:large|long) to read|maximum allowed tokens/i;
@@ -521,7 +513,7 @@ function repeatReads(parsed) {
 }
 
 
-const TRIM_CHARS = 6000;
+const TRIM_CHARS = GUARD.DEFAULTS.maxChars;   // the guard's own default maxChars
 /* The share of a session's carried tokens inside the trim's window at which a report tells someone without the
    guard that installing it is worth it. Below it the honest line is "too little here". A chosen floor, not a
    measured one: on the machine this was written on, with excerpts correctly out of the window, the pooled window
@@ -814,7 +806,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
      side of the gate. It is a Read-cap-family event and belongs to the caps line / `report --caps`. `stem` is
      the exact out/ filename (minus .txt) the guard would have written: for a dedup, the first copy's stem in
      `sameAs`; otherwise rebuilt the way saveOut names it (guard.js saveOut -- pinned by the integration test
-     in test.mjs, since the guard installs as a single file and cannot share this helper). No stem => no match. */
+     in test.mjs; the guard could now export it, a later cleanup). No stem => no match. */
   // must match guard.js saveOut's sid stem byte-for-byte, or a pull-back won't match its withhold: same
   // slice+sanitize, AND the same fallback -- recover the real session from the transcript filename (as the
   // rest of transcript.js does) when the parse lost it, then guard's own `|| 'session'` last resort.
@@ -1385,16 +1377,13 @@ function triggerGrid(reads, triggers, limits, opts) {
    Pure: parsed sessions + the ledger + the merged config in, a structured recommendation out. cli.js renders
    it. This function only ever reads -- it never writes a config. */
 
-/* The guard.js DEFAULTS the tuner needs: the off-by-default state of each feature (so a feature the user has
-   not turned on reads as off) and the thresholds the opportunity estimators compare against. guard.js cannot be
-   require()d (it runs on load and installs as a single file), so these are mirrored here and PINNED to guard.js
-   by a test in test.mjs, the same way stemOf is pinned to saveOut. cli.js merges the user's tokenbrake.json
-   over this, so a knob the user changed is respected and only the rest fall back to the default. */
-const TUNE_DEFAULTS = {
-  mcpTrim: false, dedup: false, readAfterEdit: false, reReadElide: false, blobElide: false, gitView: false, shadow: true,
-  maxChars: 6000, blobMinChars: 4000, blobMaxLine: 2000, dedupMinChars: 1000, gitViewMinChars: 2000,
-  readMaxBytes: 60000, readLimitLines: 300,
-};
+/* The guard.js DEFAULTS the tuner needs -- the guard's own values, not copies: the off-by-default state of each
+   feature (so a feature the user has not turned on reads as off) and the thresholds the opportunity estimators
+   compare against. cli.js merges the user's tokenbrake.json over this, so a knob the user changed is respected
+   and only the rest fall back to the default. */
+const TUNE_DEFAULTS = Object.fromEntries(['mcpTrim', 'dedup', 'readAfterEdit', 'reReadElide', 'blobElide', 'gitView', 'shadow',
+  'maxChars', 'blobMinChars', 'blobMaxLine', 'dedupMinChars', 'gitViewMinChars', 'readMaxBytes', 'readLimitLines']
+  .map((k) => [k, GUARD.DEFAULTS[k]]));
 
 const MIN_FIRE = MIN_WITHHOLDS;   // reuse the audit's confidence floor: below it a clean measured record is "try", not "on"
 /* Judgment floors for turning an OPPORTUNITY into a "try it": below both, the feature would act too rarely or
@@ -1409,7 +1398,7 @@ const OPP_MIN_CARRIED = 2000;    // or withhold at least this many carried token
    (`lines === 1`) over the floor: its one line IS the whole output, so its longest line = chars, which clears
    blobMaxLine (chars >= blobMaxLine via the floor) and is 100% of the output -- so it satisfies the dominance
    share for ANY blobLineShare, and this estimate does not depend on that knob's value (which is why blobLineShare
-   is not among the mirrored TUNE_DEFAULTS). Deliberately conservative: it skips a two-line result even though a
+   is not among the TUNE_DEFAULTS). Deliberately conservative: it skips a two-line result even though a
    blob with a trailing newline is two lines, because chars+lines alone cannot tell that (dominant) case from two
    real long lines (not dominant, which the guard would NOT elide) -- so it never over-counts.
 
@@ -1476,8 +1465,8 @@ function editThenRead(parsed) {
    the render labels it "up to"; the real number comes from turning gitView on for a session. A result already
    carrying the guard's marker is excluded (as mcpOpportunity does): the always-on trim already char-sliced it,
    so its carried in the transcript is the shrunken value, not the diff's -- counting it would double-count what
-   the trim already saved and size it wrong. GIT_CMD mirrors guard.js GIT_DIFF. */
-const GIT_CMD = /\bgit(?:\s+-C\s+\S+)?\s+(?:diff|show)\b/;
+   the trim already saved and size it wrong. GIT_CMD is the guard's own GIT_DIFF. */
+const GIT_CMD = GUARD.GIT_DIFF;
 function gitOpportunity(parsed, cfg) {
   const min = Number(cfg.gitViewMinChars) || 2000;
   let n = 0, carried = 0;
@@ -2162,5 +2151,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  GUARD_DEFAULTS: GUARD.DEFAULTS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };
