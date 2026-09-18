@@ -1117,7 +1117,7 @@ On this machine: `maxChars` keep 6,000 (1 of 22 pulled back, raising gives up mo
 
 Known and left then: `reach()` used the constant `TRIM_CHARS` and counted excerpts in its window -- fixed in item 1.
 
-### Item 1 — the instrument is the product, 2026-09-18
+### Item 1 — the instrument is the product, merged (PR #75), 2026-09-18
 
 Code complete and reviewed, suite green at 692 checks (from 683).
 
@@ -1146,3 +1146,14 @@ Review loop: `/simplify` (one classifier, one `isShell`, one empty-buckets facto
 itself, maxChars resolved once); `/code-review` (5 fixes: --reach verdict's shell count missed excerpts,
 guard-absent wording overclaimed, capped excerpt counted as a trim, per-tool maxChars ignored, a stale footnote).
 Next: items 4 and 5 (independent).
+
+### Item 4 — the evidence moved, the argument promoted, 2026-09-18
+
+Docs only (no guard/cli/transcript change, so no review loop). `## Limits, with the numbers` and the
+"Measured (2026-09-06 to 2026-09-10)" paragraph above it moved from the README to `EVIDENCE.md` word for word
+(checked: all 103 non-blank lines present). `EVIDENCE.md` opens with a dated note on the two figures the moved
+text now overstates: the reach share (11.6% / 7.5% with excerpts counted apart, was ~18%) and the renamed
+"Small shell output" line. README position two is now "Why there is no percentage on this page", in TOKENS only (the user's hard rule:
+no money, no cost percentages): anyone publishing a token-saving percentage owes a control pair; the OFF/OFF
+pairs here were up to 42.6% apart on tokens entered, and carried rose in two of six brake pairs, once by 72.6%. Links to `EVIDENCE.md` are absolute GitHub URLs so they work on the
+npm page, where `EVIDENCE.md` is not shipped. Next: item 5 (shadow mode).

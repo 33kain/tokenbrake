@@ -2245,7 +2245,7 @@ failure hole; the ceiling is the one nobody had named, and it means the largest 
 worth trimming — are as unreachable as the failing ones. Between them they remove the debugging workload
 entirely, which is the workload the trim was written for.
 
-All of it is now in `README.md` under "Limits, with the numbers", ahead of the install instructions, on the
+All of it went into `README.md` under "Limits, with the numbers" (moved word for word to `EVIDENCE.md` on 2026-09-18), ahead of the install instructions, on the
 principle that a package whose whole argument is honesty should not leave its limitations to be discovered
 by someone else.
 
