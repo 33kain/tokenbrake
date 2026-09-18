@@ -1401,7 +1401,8 @@ function tuneReport() {
     /* Shadow rows are the guard's own test on the real output, so the withhold side is exact. What they cannot
        say is whether the model would have come back for it: it saw the output as delivered. */
     if (f.bound === 'shadow' || f.bound === 'mixed') {
-      const grew = o.grew ? '; on ' + o.grew + ' more it would have ADDED tokens (its output larger than what entered), which counts against it' : '';
+      const grew = (o.grew ? '; on ' + o.grew + ' more it would have ADDED tokens (its output larger than what entered), which counts against it' : '')
+        + (o.hostSwapped ? '; ' + o.hostSwapped + ' more were results Claude Code had already swapped for a short preview and saved to a file -- not priced here (their cost is the later re-read of that file, which the read cap governs)' : '');
       const sh = o.shadowN
         ? 'its shadow saw it would have acted on ' + o.shadowN + ' result(s) in ' + o.shadowSessions + ' session(s), withholding ~ ' + fmt(o.withheld) + ' tokens (exact, from the guard\'s own test)'
         : 'its shadow ran in ' + o.shadowSessions + ' session(s) and saw nothing it would act on';
@@ -1418,7 +1419,7 @@ function tuneReport() {
     return 'not fired; would act on ' + bound + o.n + what + (o.carried ? ' (~ ' + fmt(o.carried) + ' carried token-reads)' : '');
   };
   console.log('\n  Off-by-default features:');
-  if (!t.shadowOn) console.log('    (shadow is off in your config, so blobElide and gitView are estimated from the off state rather than measured -- "shadow": true measures them for free)');
+  if (!t.shadowOn) console.log('    (shadow is off in your config, so blobElide, gitView and mcpTrim are estimated from the off state rather than measured -- "shadow": true measures them for free)');
   for (const f of t.features) {
     /* `note` (from feat()) is the status-independent config classification: `scoped` (a `tools` entry pins the
        knob off) and `user-off` (top-level false) are the two ways it is off BY CONFIG, `running` is on via a
