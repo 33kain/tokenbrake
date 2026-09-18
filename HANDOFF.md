@@ -1257,3 +1257,32 @@ The replay applies per-tool settings through the guard's own `toolConfig`. Not d
 person's own value), one knob at a time, every other setting as configured; each row carries how many sessions it
 replayed (live sessions are left out by the replay). Data only, tokens only, no advice, no write. On this machine
 (55 sessions, 0.6 s) the only non-zero cell: dedup at dedupMinChars 250 -> 4 repeats, ~180 tokens kept out.
+
+## Where it stands — end of 2026-09-18
+
+**0.4.0 is on the registry.** Cut in PR #85, published by the `Publish` workflow at 20:31 UTC (run 35391903118);
+`npm view tokenbrake version` prints 0.4.0. It carries all five items of the 2026-09-18 priority set, including
+shadow mode, the offline replay and `tune --sweep`.
+
+**The site is rewritten and live (PR #86).** `site/` was a compiled React bundle with no source here, and most
+of its copy described a product that does not exist (see the item 1 note above). It is now a single
+hand-written `site/index.html` — the file is its own source, no build step, and `pages.yml` deploys it
+unchanged. Copy comes from the README only: it leads with `npx tokenbrake report`, explains carried vs. size
+with an excerpt of a real report (the 487-request session that built 0.4.0), puts the brake second, and
+quotes no number but the README's own benchmark figures. `og-image.png` is rendered from `site/og-image.html`
+with headless Edge; the command is in that file's header. Deployed and checked live: new title, new
+42,607-byte share image. The report excerpt is typed in by hand, so it does not update itself.
+
+**The bench links point at AB-TASK.md now (PR #87).** README, EVIDENCE.md and LANDSCAPE.md linked the private
+`33kain/tokenbrake-bench`, a 404 for every reader. They now link `AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought`,
+which carries the same numbers. CHANGELOG keeps its old link as the record of that release. The README on npm
+still has the dead link until the next publish; that alone is not a reason to cut one.
+
+**This machine, at the end of the day:** `status` is clean (three hooks installed, guard build matches the
+checkout, all three spawn tests ok, 4,132 ledger records). The day's session report: within the guard's reach,
+11 of 443 results (14% of carried), all 11 acted on; small shell output under the gate 65% of carried; Read
+20%, almost all whole reads of the repo's own sources.
+
+**Next.** The priority set is done, so nothing is left that jumps the queue. The board it paused starts at
+"Then — the distribution table and the post" and "Launch vehicle" above. The site and README now tell the
+same report-first story, which those two sections need.
