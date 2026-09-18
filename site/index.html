@@ -1,1 +1,197 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta name="theme-color" content="#059669"/><link rel="icon" type="image/svg+xml" href="/favicon.svg"/><link rel="canonical" href="https://tokenbrake.site/"/><meta name="description" content="Tokenbrake is a local Claude Code middleware that trims oversized tool output and bounds unbounded file reads before they hit your context window — 100% local, with full token-consumption reporting."/><meta property="og:title" content="Tokenbrake — Stop burning tokens on oversized tool output"/><meta property="og:description" content="Local middleware for Claude Code that intercepts ballooning tool outputs and unbounded file reads, trims them surgically, and reports exactly what consumed your tokens."/><meta property="og:type" content="website"/><meta property="og:url" content="https://tokenbrake.site/"/><meta property="og:image" content="https://tokenbrake.site/og-image.png"/><meta property="og:image:width" content="2400"/><meta property="og:image:height" content="1260"/><meta property="og:image:alt" content="Tokenbrake — stop burning tokens on oversized tool output"/><meta name="twitter:card" content="summary_large_image"/><meta name="twitter:image" content="https://tokenbrake.site/og-image.png"/><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet"/><title>Tokenbrake — Stop burning tokens on oversized tool output</title><script defer="defer" src="/static/js/main.68cf78ce.js"></script><link href="/static/css/main.8ac80ad2.css" rel="stylesheet"></head><body><noscript>You need to enable JavaScript to run this app.</noscript><div id="root"></div></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tokenbrake — what ate your Claude Code context</title>
+<meta name="description" content="npx tokenbrake report reads the transcripts Claude Code already keeps and ranks every tool result by the tokens it was carried through. The brake — two hooks that trim oversized shell output and cap large reads — is step two, for when your report says there is something to brake.">
+<link rel="canonical" href="https://tokenbrake.site/">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="theme-color" content="#09090b">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://tokenbrake.site/">
+<meta property="og:title" content="tokenbrake — find out what ate your Claude Code context">
+<meta property="og:description" content="One command, no install: rank every tool result in a session by the tokens it was carried through, and see how much of that a brake could even reach.">
+<meta property="og:image" content="https://tokenbrake.site/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="tokenbrake — npx tokenbrake report: what ate your Claude Code context">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://tokenbrake.site/og-image.png">
+<style>
+:root {
+  --bg: #fafafa; --surface: #ffffff; --text: #18181b; --muted: #52525b; --line: #e4e4e7;
+  --accent: #047857; --code-bg: #f4f4f5; --term-bg: #18181b; --term-text: #e4e4e7; --term-dim: #a1a1aa; --term-hi: #34d399;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #09090b; --surface: #111113; --text: #fafafa; --muted: #a1a1aa; --line: #27272a;
+    --accent: #34d399; --code-bg: #18181b; --term-bg: #111113; --term-text: #e4e4e7; --term-dim: #71717a; --term-hi: #34d399;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #09090b; --surface: #111113; --text: #fafafa; --muted: #a1a1aa; --line: #27272a;
+  --accent: #34d399; --code-bg: #18181b; --term-bg: #111113; --term-text: #e4e4e7; --term-dim: #71717a; --term-hi: #34d399;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main, header, footer { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding-top: 24px; padding-bottom: 8px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: var(--text); text-decoration: none; }
+.brand img { width: 28px; height: 28px; }
+nav a { color: var(--muted); text-decoration: none; margin-left: 18px; font-size: 15px; }
+nav a:hover { color: var(--text); }
+h1 { font-size: clamp(32px, 6vw, 48px); line-height: 1.1; letter-spacing: -0.02em; margin: 48px 0 16px; }
+h2 { font-size: 24px; letter-spacing: -0.01em; margin: 56px 0 12px; }
+p { margin: 0 0 16px; }
+.lede { font-size: 19px; color: var(--muted); }
+a { color: var(--accent); }
+code { white-space: nowrap; font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; font-size: 0.92em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+pre {
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace; font-size: 13.5px; line-height: 1.55;
+  background: var(--term-bg); color: var(--term-text); border: 1px solid var(--line); border-radius: 10px;
+  padding: 16px; margin: 0 0 16px; overflow-x: auto;
+}
+pre code { white-space: pre; background: none; padding: 0; font-size: inherit; }
+.dim { color: var(--term-dim); }
+.hi { color: var(--term-hi); }
+.cmd { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 24px 0 8px; }
+.cmd pre { margin: 0; font-size: 17px; padding: 12px 18px; flex: 0 1 auto; }
+.cmd button {
+  font: inherit; font-size: 14px; background: var(--surface); color: var(--text); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 14px; cursor: pointer;
+}
+.cmd button:hover { border-color: var(--accent); }
+.note { color: var(--muted); font-size: 15px; }
+.steps { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.step b { display: block; font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.step p { margin: 0; }
+ul { padding-left: 20px; margin: 0 0 16px; }
+li { margin-bottom: 6px; }
+footer { border-top: 1px solid var(--line); margin-top: 72px; padding-top: 20px; padding-bottom: 40px; color: var(--muted); font-size: 14px; }
+footer a { color: var(--muted); }
+@media (max-width: 600px) {
+  .steps { grid-template-columns: 1fr; }
+  nav a { margin-left: 0; margin-right: 14px; }
+  pre { font-size: 12px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><img src="/favicon.svg" alt="">tokenbrake</a>
+  <nav>
+    <a href="https://github.com/33kain/tokenbrake#readme">Docs</a>
+    <a href="https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md">Evidence</a>
+    <a href="https://github.com/33kain/tokenbrake">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Find out what ate your Claude Code context.</h1>
+  <p class="lede">Then brake it — if your report says there is anything to brake.</p>
+
+  <div class="cmd">
+    <pre><code id="cmd">npx tokenbrake report</code></pre>
+    <button type="button" id="copy">Copy</button>
+  </div>
+  <p class="note">No install, no hooks, no config, nothing written anywhere. Node 18+.</p>
+
+  <h2>Size is the wrong number. Carried is the right one.</h2>
+  <p>A tool result isn't paid for once. It is re-sent as context on every later request until the session
+    compacts, so a 4k-token file read at request 3 of 100 is about 400k token-reads. <code>report</code> reads the
+    session transcripts Claude Code already keeps under <code>~/.claude/projects/</code> and ranks every tool result
+    by <strong>size × the requests it was carried through</strong>. That puts the <code>cat</code>, <code>Read</code>
+    or test run worth avoiding at the top, where you can see it.</p>
+  <p>This is the report from a real session spent building tokenbrake:</p>
+<pre><code><span class="dim">$</span> npx tokenbrake report
+  487 requests, 443 tool results
+  Context processed: 204.7M tokens across 487 requests (99% read from cache)
+  Tool results entered ~ 140k tokens, carried ~ 41.2M token-reads
+
+What ate it -- by tokens carried (size x later requests), top 4:
+     size   carried   turns  tool   what
+       4k      <span class="hi">2.0M</span>    445  Read   cli.js
+       4k      <span class="hi">1.9M</span>    445  Read   transcript.js
+       4k      989k    232  Read   guard.js
+       3k      961k    364  Read   README.md
+
+By tool (share of tokens carried):
+  Bash    318 calls   107k entered   30.5M carried   74%
+  Read     24 calls    23k entered    8.2M carried   20%
+
+<span class="hi">Within the guard's reach: 11 of 443 tool results (14% of all carried)</span></code></pre>
+  <p>The last line matters most. The report tells you how much of what you carried a brake could reach at all.
+    When tokenbrake wasn't running, it also tells you whether installing it is worth it for work like yours. Often it
+    isn't, and the report says so.</p>
+
+  <h2>Two steps, in this order</h2>
+  <div class="steps">
+    <div class="step">
+      <b>Step one · the report</b>
+      <p><code>npx tokenbrake report</code> ranks the last session. <code>--all</code> lists every session on disk;
+        <code>--reach</code> shows what share of your carried tokens any trim could act on.</p>
+    </div>
+    <div class="step">
+      <b>Step two · the brake</b>
+      <p><code>npx tokenbrake init</code> installs two Claude Code hooks. They trim oversized shell output and cap
+        unbounded reads of large files before either enters context.</p>
+    </div>
+  </div>
+
+  <h2>What the brake does</h2>
+  <ul>
+    <li><strong>Shell output trim.</strong> Output over 6,000 characters is replaced by its first and last lines,
+      plus up to 20 lines from the middle that look like errors or warnings, with their line numbers. The full output is
+      saved to <code>~/.claude/tokenbrake/out/</code>, and the trimmed result names that path so Claude can read it
+      again. Nothing is rewritten or "compressed".</li>
+    <li><strong>Large-read cap.</strong> A <code>Read</code> with no range on a file over 60 KB becomes the
+      first 300 lines. Claude is told the file's real size and how to page through it.</li>
+    <li><strong>Ledger.</strong> The size of every tool result is appended to a local file. Nothing leaves your
+      machine.</li>
+    <li><strong>Fails open.</strong> Any error inside the guard exits cleanly with no output, and Claude Code
+      carries on unchanged.</li>
+  </ul>
+  <pre><code>npx tokenbrake init      <span class="dim"># user scope: ~/.claude/settings.json, every project</span>
+npx tokenbrake status    <span class="dim"># what is installed, plus one real spawn of each hook</span>
+npx tokenbrake uninstall</code></pre>
+  <p class="note">It also installs as a Claude Code plugin, and it runs in cloud sessions from the environment's setup
+    script. See the <a href="https://github.com/33kain/tokenbrake#install">install section</a>.</p>
+
+  <h2>Why there is no percentage on this page</h2>
+  <p>A token-saving percentage in this category means nothing without a control pair: the same task run twice
+    with the tool <strong>off</strong> on both sides. Without one, a saving can't be told apart from the agent
+    simply reading differently that day.</p>
+  <p>tokenbrake ran those controls in a pre-registered 22-session benchmark. Pairs with identical configuration,
+    tool off on both sides, came out up to <strong>42.6% apart</strong> on tokens entered. Runs with the brake entered
+    a median 35.7% fewer tool-result tokens, which is inside that noise. Tokens <em>carried</em> fell in only four of
+    six pairs and rose in two, once by 72.6%, because a trim that sends the model back for what it cut makes the
+    session longer.</p>
+  <p>So tokenbrake doesn't quote a saving. It reports what your own sessions carried and how much of that the brake
+    could reach, and leaves the decision to you. The whole record, losses included, is in
+    <a href="https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md">EVIDENCE.md</a>.</p>
+</main>
+
+<footer>
+  MIT licensed · <a href="https://github.com/33kain/tokenbrake">github.com/33kain/tokenbrake</a> ·
+  <a href="https://www.npmjs.com/package/tokenbrake">npm</a>
+</footer>
+
+<script>
+document.getElementById('copy').addEventListener('click', function () {
+  var b = this;
+  try {
+    navigator.clipboard.writeText(document.getElementById('cmd').textContent).then(function () {
+      b.textContent = 'Copied';
+      setTimeout(function () { b.textContent = 'Copy'; }, 1500);
+    }, function () {});
+  } catch (e) {}
+});
+</script>
+</body>
+</html>
