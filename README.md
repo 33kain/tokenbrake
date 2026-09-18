@@ -530,6 +530,15 @@ fresh install sees, meaning no pooled session ran the guard, so nothing watched 
 `report --reads` and `--where`) and how much of your carried tokens sit where the trim can act. Tokens and cache,
 never dollars — `--cost` is where dollars live.
 
+It also recommends the two **thresholds**, `maxChars` and `readMaxBytes`, from your own sessions rather than
+one value for everyone: a grid of what each candidate value would reach and could withhold at most, with your
+own value marked, and one step of advice. **Try one step lower** only when the record at your current value is
+clean with enough firings and the lower value takes materially more. **Raise** only when the pull-backs raising
+would have prevented cost more than the saving it would give up; both sides are measured on the same withholds,
+so one pull-back among many clean trims reads as the trim working. Otherwise **keep**. The Read cap's pull-backs
+can't be measured from transcripts, so its advice says so. These are recommendations only: `tune --write` never
+changes a threshold, because the lower value has no record of its own until you run it.
+
 **`tune --write`** applies the recommendation to `~/.claude/tokenbrake.json`, and only ever acts on **measured**
 evidence — never an estimate. It turns **on** the features with a clean measured record (a `turn on`). It does
 **not** turn anything off: a feature that measurably backfired is surfaced as `reconsider` for you to disable

@@ -3339,6 +3339,88 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     rF5.status === 0 && !/fired \d+x/.test(rF5.stdout), (rF5.stdout.match(/fired \d+x/) || ['(none)'])[0]);
   rmSync(cfg2, { recursive: true, force: true });
 
+  /* Item 2: the two thresholds, per person. A grid of what each value would reach, and one step of advice,
+     weighed on the measured record -- recommend-only, so --write never touches them (checked further down). */
+  {
+    const g = T.shellGrid([{ chars: 3500, reuse: 3 }, { chars: 7000, reuse: 2 }, { chars: 20000, reuse: 4 }], [3000, 6000]);
+    t('shellGrid counts each sized result over the value',
+      g[0].n === 3 && g[1].n === 2, JSON.stringify(g));
+    t('and prices what past the value it could withhold, across every request it would no longer sit in',
+      g[1].withheldCarried === Math.round(1000 / 4) * 2 + Math.round(14000 / 4) * 4, JSON.stringify(g[1]));
+
+    /* The population autotune hands shellGrid: successful shell results under the host ceiling, a TRIMMED one
+       at its original size from the ledger. Sized by the transcript, a trimmed result sits at its trimmed size
+       and drops out of exactly the rows where the trim fired. */
+    {
+      const R = (id, chars, extra) => ({ id, name: 'Bash', what: 'cmd ' + id, chars, tokens: Math.round(chars / 4), isError: false, marker: false, afterReq: 0, ...(extra || {}) });
+      const p = { sessionId: 'sg', cwd: '/w', requests: [{}, {}, {}], compactions: [], results: [
+        R('a', 3500), R('b', 2400, { marker: true }), R('c', 40000), R('d', 9000, { isError: true }),
+        R('f', 9000, { file: '/w/big.log' }), R('g', 9000, { what: 'npm run bench' }),
+        { id: 'e', name: 'Read', file: '/w/x', chars: 5000, tokens: 1250, afterReq: 0 }] };
+      const led = [{ ev: 'post', session: 'sg', id: 'b', tool: 'Bash', what: 'cmd b', chars: 20000, kept: 2400 }];
+      const th = T.autotune([p], led, { maxChars: 6000, readMaxBytes: 60000, noTrim: ['bench'] }).thresholds;
+      const at = (v) => th.maxChars.grid.find(x => x.value === v);
+      t('a trimmed result is sized from the ledger, so it stays in the rows the trim fired on',
+        at(6000).n === 1 && at(3000).n === 2, JSON.stringify(th.maxChars.grid));
+      /* A single-file excerpt goes down the guard's read path and a noTrim command is returned on first -- the
+         trim never sees either at any maxChars, so neither belongs in its grid. */
+      t('a file excerpt and a noTrim command are not in the maxChars grid -- the trim never reaches them',
+        at(3000).n === 2, JSON.stringify(th.maxChars.grid));
+      /* On the numerator's basis (entry + carry), or a share can print over 100% in a short session. */
+      t('the share denominator is everything carried, entry included, and is carried once for both grids',
+        th.carriedTotal === p.results.reduce((s, r) => s + (r.tokens || 0) + (r.carried || 0), 0) && th.maxChars.carriedTotal === undefined,
+        JSON.stringify({ total: th.carriedTotal }));
+    }
+
+    const reads = [
+      { bytes: 50000, lines: 1000, reuse: 2, via: 'read-cap' },
+      { bytes: 5000, lines: 100, reuse: 1, via: 'post' },        // a cat at or under maxChars: the POST hook never reaches the cap
+      { bytes: 20000, lines: null, reuse: 1, via: 'read-cap' },  // caught, but no line count to price it by
+    ];
+    const rg = T.readGrid(reads, [4000, 30000], { readLimitLines: 300, maxChars: 6000 });
+    t("readGrid keeps --reads' maxChars floor for shell reads and prices only what it can",
+      rg[0].n === 2 && rg[1].n === 1 && rg[1].withheldCarried === Math.round(50000 * 700 / 1000 / 4) * 2, JSON.stringify(rg));
+
+    const grid = [{ value: 3000, withheldCarried: 90000 }, { value: 6000, withheldCarried: 50000 }, { value: 12000, withheldCarried: 10000 }];
+    const rec = (rows) => ({ fired: rows.length, backfired: rows.filter(r => r.pulledFoot).length, rows });
+    const clean = rec([1, 2, 3, 4].map(() => ({ chars: 9000, savedCarried: 500, pulledFoot: 0 })));
+    const tryDown = T.thresholdAdvice(grid, 6000, clean, clean.fired);
+    t('a clean record with enough firings and material gain says try ONE step down, never further',
+      tryDown.advice === 'try' && tryDown.to === 3000 && tryDown.gain === 40000, JSON.stringify(tryDown));
+    t('too few firings to step from says keep',
+      T.thresholdAdvice(grid, 6000, rec([{ chars: 9000, savedCarried: 500, pulledFoot: 0 }]), 1).why === 'few-firings');
+    t('a step down that takes too little more says keep',
+      T.thresholdAdvice([{ value: 3000, withheldCarried: 50100 }, grid[1]], 6000, clean, 4).why === 'no-gain');
+    /* One pull-back among many clean trims is the trim working. Raising is recommended only when the
+       pull-backs it would have prevented cost more than the saving it would give up -- both measured. */
+    const oneCheap = rec([{ chars: 7000, savedCarried: 5000, pulledFoot: 800 }, { chars: 9000, savedCarried: 5000, pulledFoot: 0 }]);
+    const outw = T.thresholdAdvice(grid, 6000, oneCheap, 2);
+    t('a pull-back that costs less than raising would give up says keep, not raise',
+      outw.advice === 'keep' && outw.why === 'backfired-outweighed' && outw.pulledCost === 800, JSON.stringify(outw));
+    const dear = rec([{ chars: 7000, savedCarried: 300, pulledFoot: 9000 }, { chars: 9000, savedCarried: 5000, pulledFoot: 0 }]);
+    const up = T.thresholdAdvice(grid, 6000, dear, 2);
+    t('a pull-back that costs more than raising gives up says raise, to a step that lets it through',
+      up.advice === 'raise' && up.to === 12000 && up.fixed === 9000 && up.givenUp === 5300, JSON.stringify(up));
+    const above = rec([{ chars: 25000, savedCarried: 100, pulledFoot: 9000 }]);
+    t('a pull-back from above every step is not fixed by raising, so it says keep',
+      T.thresholdAdvice(grid, 6000, above, 1).advice === 'keep');
+    t('a backfire never earns a step down, however clean the rest',
+      T.thresholdAdvice(grid, 6000, oneCheap, 99).advice !== 'try');
+    /* A pooled record holds withholds from an older, lower setting too; the current value is judged only on
+       what it withheld, or a raise already taken is recommended again on evidence it already answered. */
+    t('the trim record at a value counts only withholds over it',
+      (() => { const r = T.recordAbove({ rows: [{ chars: 7000, recovered: true }, { chars: 9000, recovered: false }, { chars: 13000, recovered: false }] }, 8000);
+        return r.fired === 2 && r.backfired === 0 && r.rows.every(w => w.chars > 8000); })());
+    t('a cap that is missing reads keeps its value whatever the grid says -- no value fixes coverage',
+      T.thresholdAdvice(grid, 6000, null, 99, { missing: true }).why === 'missing');
+    t('with no measurable pull-back (the Read cap), a step down is labelled unmeasured, not clean',
+      T.thresholdAdvice(grid, 6000, null, 5).why === 'unmeasured');
+    const at = T.autotune([], [], { maxChars: 5000, readMaxBytes: 60000 });
+    t("autotune splices the person's own value into the grid, so there is always a you-are-here row",
+      at.thresholds.maxChars.grid.some(g => g.value === 5000) && at.thresholds.maxChars.current === 5000
+      && at.thresholds.readMaxBytes.current === 60000, JSON.stringify(at.thresholds.maxChars.grid.map(g => g.value)));
+  }
+
   /* --write: applies MEASURED recommendations to tokenbrake.json (merge, not replace), and NEVER an estimate. */
   const cfg3 = mkdtempSync(join(tmpdir(), 'tokenbrake-tunew-'));
   const e3 = { ...process.env, CLAUDE_CONFIG_DIR: cfg3 };
@@ -3394,6 +3476,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('tune --write turns ON a feature with a clean measured record', rw.status === 0 && after.blobElide === true, JSON.stringify(after));
   t('tune --write does NOT write an estimate-only feature (gitView is a try/measure, not measured)', after.gitView === undefined, JSON.stringify(after));
   t('tune --write merges, preserving other keys', after.maxChars === 5000, JSON.stringify(after));
+  t('tune --write never sets a threshold -- they are recommend-only', after.maxChars === 5000 && after.readMaxBytes === undefined, JSON.stringify(after));
+  const pv = cli3(['tune']);
+  t("the tune preview shows both threshold grids, marking the person's own value",
+    /Thresholds, from your own sessions/.test(pv.stdout) && /5,000 .*<- yours/.test(pv.stdout) && /readMaxBytes/.test(pv.stdout),
+    pv.stdout.split('\n').filter(l => /Thresholds|yours/.test(l)).join(' | '));
   t('tune --write reports what it turned on with the measured reason', /Turned ON 1 feature/.test(rw.stdout) && /"blobElide": false -> true/.test(rw.stdout) && /measured clean/.test(rw.stdout), rw.stdout.split('\n').filter(l => /blobElide|Turned ON/.test(l)).join(' | '));
 
   /* F2: writeJson itself can throw (a root-owned or read-only config, a full disk). --write catches it and

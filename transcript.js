@@ -630,10 +630,15 @@ function commandTool(cmd) {
 /* The results the guard actually rewrote AND the model saw, which is what `reach` needs to classify a
    trimmed result as in-window by proof rather than by its post-trim size. Extracted from renderReport so a
    pooled view can use the same rule rather than a second, quietly different one. */
-function trimmedResults(parsed, ledgerRecs) {
+/* The ledger row the guard wrote for a result, by id, else by tool and command -- the one join every "what did
+   the guard do to this result" question goes through. */
+function offeredOf(parsed, ledgerRecs) {
   const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
-  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
-  return parsed.results.filter((r) => r.marker && offeredOf(r));
+  return (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+}
+function trimmedResults(parsed, ledgerRecs) {
+  const offered = offeredOf(parsed, ledgerRecs);
+  return parsed.results.filter((r) => r.marker && offered(r));
 }
 
 /* The guard's saving on one session, in tokens and dollars: for each result that carries the trim marker AND
@@ -830,8 +835,8 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
     const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : (l.gitview ? 'gitview' : 'trim')));
-    withholds.push({ id: r.id || null, kind, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
-      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false });
+    withholds.push({ id: r.id || null, kind, chars: Number(l.chars) || null, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
+      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false, pulledFoot: 0 });
   }
 
   /* A pull-back: a later result that read a saved output back into context. Three shapes, all the guard's own
@@ -876,7 +881,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     if (rec.kind === 'show') { const pre = withholds.filter((w) => w.stem && w.stem.startsWith(ref)); if (pre.length === 1) return pre[0]; }
     return null;
   };
-  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; } }
+  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; w.pulledFoot += rec.foot; } }
 
   const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
   const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
@@ -1099,7 +1104,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       recordedOriginal++;
       capSeen.add(key);
       reads.push({ id: r.id, file: r.file, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
-        via: r.name === 'Read' ? 'read-cap' : 'post' });
+        via: r.name === 'Read' ? 'read-cap' : 'post', reuse: (r.carriedTurns || 0) + 1 });
       continue;
     }
     let sh = r.shape || { bytes: r.chars, lines: r.lines, numbered: false, from: null, to: null };
@@ -1131,7 +1136,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
        maxChars is therefore a dead knob for a shell read, and a grid that does not know that overstates
        every row below it. */
     reads.push({ id: r.id, file: r.file, bytes: sh.bytes, lines: sh.lines, capped: source === 'ledger-post', ceiling, source,
-      via: r.name === 'Read' ? 'read-cap' : 'post' });
+      via: r.name === 'Read' ? 'read-cap' : 'post', reuse: (r.carriedTurns || 0) + 1 });
   }
   /* A cap row whose file never appears as an unbounded read means the transcript recorded the guard's
      rewritten input instead -- the read is in there carrying a `limit`, which is not a whole-file read.
@@ -1148,7 +1153,7 @@ function unboundedReads(parsed, ledgerRecs, opts) {
       && !claimed.has(x.id) && normReadPath(x.file, parsed.cwd) === key);
     if (res) claimed.add(res.id);
     reads.push({ id: res ? res.id : null, file: cap.what, bytes: cap.bytes, lines: cap.lines, source: 'ledger', capped: true, ceiling: null,
-      via: 'read-cap' });
+      via: 'read-cap', reuse: res ? (res.carriedTurns || 0) + 1 : null });
   }
   const sized = reads.filter((r) => !r.ceiling);
   /* Reads over `readMaxBytes` (from opts) the cap did NOT act on -- the guard had its chance and missed, the
@@ -1344,6 +1349,9 @@ function frontierVerdict(front, opts) {
    arithmetic over the reads -- the half of the readMaxBytes question that needs no session. The half it
    cannot answer is whether the model comes back for what was withheld, which is behavioural and costs money
    to find out (AB-TASK.md, "The Read cap's trigger"). */
+/* Whether the guard reaches the Read cap on a read at all: a shell read (via the POST hook) at or under maxChars
+   is returned on before any cap logic (guard.js:272); an unbounded Read has no floor. A null maxChars is no floor. */
+const capReaches = (r, maxChars) => !(maxChars != null && r.via === 'post' && (r.bytes || 0) <= maxChars);
 function triggerGrid(reads, triggers, limits, opts) {
   const med = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
   const totalBytes = reads.reduce((t, r) => t + (r.bytes || 0), 0);
@@ -1353,10 +1361,9 @@ function triggerGrid(reads, triggers, limits, opts) {
      saving a low trigger appears to offer is a saving on reads it never touches. Omitting opts keeps the old
      arithmetic exactly, so no existing caller changes meaning by being left alone. */
   const maxChars = opts && opts.maxChars != null ? Number(opts.maxChars) : null;
-  const gated = (r) => maxChars != null && r.via === 'post' && (r.bytes || 0) <= maxChars;
   return (triggers || []).map((trigger) => {
     const overBytes = reads.filter((r) => (r.bytes || 0) > trigger);
-    const caught = overBytes.filter((r) => !gated(r));
+    const caught = overBytes.filter((r) => capReaches(r, maxChars));
     const caughtBytes = caught.reduce((t, r) => t + r.bytes, 0);
     const byLimit = {};
     for (const L of (limits || [])) {
@@ -1509,6 +1516,92 @@ function reReadOpportunity(parsed) {
   return { n, carried };
 }
 
+/* ---- The two thresholds, per person (item 2 of the 2026-09-18 priority set) --------------------------------
+
+   `maxChars` and `readMaxBytes` ship as one value for everyone, and ab10 showed a global A/B cannot resolve a
+   global default (identical OFF/OFF arms differed by +-42.6% tokens). What CAN be answered is what each value
+   would reach on this person's own sessions, so the tuner prints that as a grid and recommends from it. It only
+   RECOMMENDS: lowering a threshold withholds more, the record behind it was measured at the current value, and
+   acting on it would be acting on an estimate -- which is what `tune --write` is built never to do. Shadow mode
+   is what would measure a lower value for free. */
+const MAX_CHARS_STEPS = [2000, 3000, 4000, 6000, 8000, 12000];
+/* Shared with `report --reads`, which tune's readMaxBytes line points people to: one list, so the two grids
+   show the same rows for the same knob. */
+const READ_MAX_STEPS = [10000, 25000, 30000, 45000, 60000];
+/* The candidates with the person's own value spliced in, so the grid always has a "you are here" row and the
+   step either way is the neighbour of what they actually run. */
+const stepsAround = (steps, current) => [...new Set([...steps, current])].filter(Number.isFinite).sort((a, b) => a - b);
+
+/* What each maxChars would put in the trim's reach, over shell results the caller has already sized and
+   filtered to the window (successful, under Claude Code's inline ceiling) -- each as `{ chars, reuse }`, where
+   a result the guard trimmed carries its ORIGINAL size from the ledger, not the trimmed text the model saw.
+   `withheldCarried` is an UPPER bound -- everything past the value, priced across every request it would no
+   longer sit in -- because the trim keeps error lines and a tail beyond the budget. maxChars is also the
+   trim's budget, so a lower value both reaches more results and cuts harder into the ones it already trims. */
+function shellGrid(rows, steps) {
+  return steps.map((value) => {
+    let n = 0, withheldCarried = 0;
+    for (const r of rows) if (r.chars > value) { n++; withheldCarried += Math.round((r.chars - value) / CHARS_PER_TOKEN) * r.reuse; }
+    return { value, n, withheldCarried };
+  });
+}
+
+/* What each readMaxBytes would catch, from the same sized reads `report --reads` grids and under the same
+   maxChars floor for shell reads (`capReaches`), with each caught read's withholding at readLimitLines priced
+   the same way. A read with no line count, or no result to take its carry from, is caught but not priced. */
+function readGrid(reads, steps, cfg) {
+  const L = cfg.readLimitLines;
+  return steps.map((value) => {
+    let n = 0, withheldCarried = 0;
+    for (const r of reads) {
+      if (!((r.bytes || 0) > value && capReaches(r, cfg.maxChars))) continue;
+      n++;
+      if (r.lines && r.reuse) withheldCarried += Math.round(r.bytes * Math.max(0, r.lines - L) / r.lines / CHARS_PER_TOKEN) * r.reuse;
+    }
+    return { value, n, withheldCarried };
+  });
+}
+
+/* The trim's record AT a maxChars: only withholds of results over it. A pooled record also holds withholds made
+   under an older, lower setting -- ones the current value already lets through whole -- and counting those
+   would keep re-recommending a raise the person already took, on evidence it already answered. */
+function recordAbove(measured, current) {
+  if (!measured) return null;
+  const rows = measured.rows.filter((w) => w.chars == null || w.chars > current);
+  return { fired: rows.length, backfired: rows.filter((w) => w.recovered).length, rows };
+}
+
+/* One rule for both knobs, the threshold form of decide(). A clean record with enough firings, where one step
+   down would take a material amount more, says try that step -- never further, and never "set it": the step
+   down has no record of its own. A measured backfire never earns a step down, and earns a raise only as the
+   weighing below allows. Anything else keeps the value. `measured` is null where pull-backs cannot be measured
+   at all (the Read cap: a ranged read after a cap is partly what the cap asks for, so it is not evidence of a
+   miss). `opts.missing` is a coverage problem no value fixes -- reads went over the cap uncapped in guarded
+   sessions -- so it keeps the value whatever the grid says. */
+function thresholdAdvice(grid, current, measured, fired, opts) {
+  if (opts && opts.missing) return { advice: 'keep', to: null, why: 'missing' };
+  if (measured && measured.backfired > 0) {
+    /* Weighed on the measured withholds alone, both sides exact: raising to a step lets every withhold at or
+       under it through whole, which gives up that withhold's recorded saving and spares its recorded pull-back.
+       Recommend the step with the best balance, and only if pulling back cost more than trimming saved -- one
+       pull-back among many clean trims is the trim working, not a threshold set too low. */
+    let best = null;
+    for (const g of grid) {
+      if (g.value <= current) continue;
+      let fixed = 0, givenUp = 0;
+      for (const w of measured.rows) if (w.chars != null && w.chars <= g.value) { fixed += w.pulledFoot; givenUp += w.savedCarried; }
+      if (fixed > givenUp && (!best || fixed - givenUp > best.fixed - best.givenUp)) best = { to: g.value, fixed, givenUp };
+    }
+    if (!best) return { advice: 'keep', to: null, why: 'backfired-outweighed', pulledCost: measured.rows.reduce((t, w) => t + w.pulledFoot, 0) };
+    return { advice: 'raise', to: best.to, why: 'backfired', fixed: best.fixed, givenUp: best.givenUp };
+  }
+  if (fired < MIN_FIRE) return { advice: 'keep', to: null, why: 'few-firings', min: MIN_FIRE };
+  const i = grid.findIndex((g) => g.value === current);
+  const gain = i > 0 ? grid[i - 1].withheldCarried - grid[i].withheldCarried : 0;
+  if (gain >= OPP_MIN_CARRIED) return { advice: 'try', to: grid[i - 1].value, why: measured ? 'clean' : 'unmeasured', gain };
+  return { advice: 'keep', to: null, why: 'no-gain' };
+}
+
 /* `opts.disabled` is the set of knobs written `false` in the raw tokenbrake.json. It cannot be derived from
    `cfg`: the caller hands us TUNE_DEFAULTS merged with the file, and every feature knob defaults to false
    there, so "absent" and "deliberately off" are the same value by the time it arrives. Only the raw file
@@ -1519,16 +1612,21 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const sessions = (parsedSessions || []).filter(Boolean);
 
   const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried
-  const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0 });
-    e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; };
+  /* `rows` keeps each withhold's original size, saving and pull-back cost, so a threshold can be weighed on
+     exactly the withholds a different value would have let through whole. */
+  const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0, rows: [] });
+    e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; e.rows.push(w); };
   let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
 
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
+  const sizedReads = [], shellRows = [];   // the two threshold grids' populations, pooled
+  const noTrim = Array.isArray(cfg.noTrim) ? cfg.noTrim.filter((x) => !String(x).startsWith('mcp__')) : [];
+  let carriedTotal = 0;
   let capOver = 0, capFired = 0, guarded = 0, sawLedger = false;
   /* Respect an explicit readMaxBytes including 0 (which the guard takes literally as "cap everything"); only a
      genuinely absent value falls back to the shipped default. */
-  const readMaxBytes = cfg.readMaxBytes == null ? 60000 : Number(cfg.readMaxBytes);
+  const readMaxBytes = cfg.readMaxBytes == null ? TUNE_DEFAULTS.readMaxBytes : Number(cfg.readMaxBytes);
 
   for (const p of sessions) {
     /* Self-protect: a transcript parsed with no sessionId of its own would make every ledger join below skip its
@@ -1553,6 +1651,21 @@ function autotune(parsedSessions, ledger, cfg, opts) {
 
     const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
     capFired += u.capped;
+    for (const rd of u.reads) if (!rd.ceiling) sizedReads.push(rd);   // a read at a ceiling is sized by what came back, not the file
+    /* A result the guard trimmed is in the transcript at its trimmed size; the ledger has what it was. Sizing it
+       by the transcript would drop every result the trim fired on out of the maxChars grid. */
+    const offered = offeredOf(p, led);
+    for (const r of p.results) {
+      carriedTotal += (r.tokens || 0) + (r.carried || 0);   // entry + carry, the basis every withheld figure uses
+      if ((r.name !== 'Bash' && r.name !== 'PowerShell') || r.isError) continue;
+      /* The trim never sees these whatever maxChars is: a single-file excerpt (`r.file` is set exactly when the
+         command matches EXCERPT_CMD) goes down the guard's read path, and a noTrim command is returned on first.
+         noTrim is matched against the whitespace-normalised command, so it is as close as the transcript allows. */
+      if (r.file || noTrim.some((x) => x && String(r.what || '').includes(String(x)))) continue;
+      const l = r.marker ? offered(r) : null;
+      const chars = l && Number(l.chars) ? Number(l.chars) : r.chars;
+      if (chars < HOST_CEILING) shellRows.push({ chars, reuse: (r.carriedTurns || 0) + 1 });
+    }
     /* Only a GUARDED session's uncapped over-threshold read is a "missing" signal: in an unguarded session
        (teleported, or read before install) the read went whole because the guard was not there, not because the
        cap failed -- counting it would manufacture a phantom config defect. So gate per-session, not on the
@@ -1580,7 +1693,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const entriesFor = (k) => toolCfgs.filter((v) => plainObj(v) && k in v);
   const on = (k) => !!cfg[k] || entriesFor(k).some((v) => !!v[k]);
   const scoped = (k) => entriesFor(k).length > 0;
-  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as exactly {fired, backfired, savedCarried}
+  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as {fired, backfired, savedCarried, rows}
   /* The read narrowings measure fired/backfired only (no out/ save, so no savedCarried); carry that shape. */
   const readMeasured = (fired, back) => fired > 0 ? { fired, backfired: back, savedCarried: null } : null;
 
@@ -1667,6 +1780,18 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict,
     why: capVerdict !== 'unmeasured' ? null : (guarded === 0 ? 'no-guard' : 'no-ledger') };
 
+  const maxChars = cfg.maxChars == null ? TUNE_DEFAULTS.maxChars : Number(cfg.maxChars);
+  const readLimitLines = Number(cfg.readLimitLines) || TUNE_DEFAULTS.readLimitLines;
+  const trimRec = recordAbove(measuredOf('trim'), maxChars), trimFired = trimRec ? trimRec.fired : 0;
+  const sg = shellGrid(shellRows, stepsAround(MAX_CHARS_STEPS, maxChars));
+  const rg = readGrid(sizedReads, stepsAround(READ_MAX_STEPS, readMaxBytes), { maxChars, readLimitLines });
+  const thresholds = { carriedTotal,
+    maxChars: { current: maxChars, grid: sg, measured: trimRec, fired: trimFired,
+      ...thresholdAdvice(sg, maxChars, trimRec, trimFired) },
+    readMaxBytes: { current: readMaxBytes, grid: rg, measured: null, fired: capFired,
+      ...thresholdAdvice(rg, readMaxBytes, null, capFired, { missing: capVerdict === 'missing' }) },
+  };
+
   const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [], excluded: [] };
   for (const f of features) {
     /* The summary is the line people act on, so a config-off feature (off, and either scoped to a tool or set
@@ -1696,7 +1821,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
      from "something fired that this net cannot price". */
   return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
-    netCarried, withholds, narrowings: reReadFired + deltaFired, features, readCap, summary,
+    netCarried, withholds, narrowings: reReadFired + deltaFired, features, readCap, thresholds, summary,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 
@@ -1972,5 +2097,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };
