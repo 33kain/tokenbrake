@@ -14,7 +14,8 @@ Selected from a 20-item brainstorm by comparison-scoring (marks in the session t
 5. **JSON/CSV/XML-aware shaping** — collapse long uniform arrays to schema + sample + count.
 6. **Repeated-result dedup** — replace an identical in-session result with a pointer to the first.
 7. **Config presets/profiles** — named `off`/`minimal`/`balanced`/`aggressive`, one command to apply.
-8. **Cost & pricing model** — carried/saved tokens → dollars via a per-model price table.
+8. **Cost view** — a per-model cost view of carried/saved tokens (built, then removed on 2026-09-18 under the
+   tokens-only rule).
 9. **Allowlist/denylist by command or path** — never-trim / always-trim rules.
 10. **Config what-if simulation** — replay a transcript under alternative config to estimate savings.
 
@@ -32,20 +33,20 @@ tool result
   → 6  dedup             (hash the ORIGINAL bytes, before shaping)
   → 5  JSON/CSV shaping or generic head/tail
   → 3  save full output → out/<id>.txt   (before the cut)
-  → ledger → feeds 8 (cost) and 10 (simulation)
+  → ledger → feeds 8 (cost view, since removed) and 10 (simulation)
 ```
 
 Config precedence: `allow/deny (9)` → `per-tool profile (2)` → `preset (7)` → global `tokenbrake.json` → defaults.
 
 Invariants that hold the set together:
 - **Fail-open per stage** — each stage catches its own error and passes the result through untouched.
-- **One ledger schema** — the single source of truth for `report`, cost, and simulation.
+- **One ledger schema** — the single source of truth for `report` and simulation.
 - **Simulation calls the SAME trim function as the guard** — otherwise its estimate diverges from reality.
 - **Dedup pointer resolves for retrieval** — a "same as #N" result must still be fetchable via `show`.
 
 ## Waves (build order: safe → risky)
 
-- **Wave 1 — config / report / diagnostics, no A/B needed.** presets (7), per-tool profiles (2), cost (8),
+- **Wave 1 — config / report / diagnostics, no A/B needed.** presets (7), per-tool profiles (2), cost view (8, since removed),
   doctor (4), retrieval (3). Adds value immediately without changing what enters context.
 - **Wave 2 — changes what enters context, A/B per `AB-TASK.md` before any default moves.** allow/deny (9),
   MCP trimming (1), JSON/CSV shaping (5), dedup (6).
@@ -64,7 +65,8 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
 - **Wave 1 — DONE.** All five shipped with tests (suite green, 397 checks):
   - increment 1: `preset`, `outputs`/`show`, `doctor [--fix]` — `cli.js` only, no guard-behavior change.
   - `tools` map per-tool profiles (2) — `guard.js` `toolConfig()`, committed guard copy re-synced.
-  - `report --cost [--model]` (8) — cost by token type/model + saving + what-if reprice. Reuses the new
+  - `report --cost [--model]` (8) — a cost view by token type/model (retired on 2026-09-18 under the
+    tokens-only rule; it now exits saying tokenbrake reports tokens only). Reused the new
     pure `transcript.trimSavings()`, extracted from `renderReport` (numbers unchanged, report byte-identical).
 - **Wave 2 — in progress.**
   - allow/deny (9) — DONE. `noTrim` (allowlist) and `alwaysCap` (denylist), substring match on command/path,
@@ -94,8 +96,8 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
     9,145, full output saved). A side finding: the guard's *content* is re-read from disk on each hook spawn, so
     `init --project` + a live call verifies the accept side in-session — no fresh container needed. **A/B measured
     2026-09-14** (AB-TASK.md, "MCP tool-output trimming", Opus, two single pairs): `mcpTrim` on **helped a glance
-    workload** and **hurt a content-hungry one** (recovery reads). The raw deltas (glance −25% cost / −18.5%
-    context; content-heavy +46% cost) are within this repo's own identical-arm noise (ab10: ±30% cost / ±42%
+    workload** and **hurt a content-hungry one** (recovery reads). The raw deltas (glance −18.5% context, −37%
+    cache writes; content-heavy +19% cache reads) are within this repo's own identical-arm noise (ab10: ±42%
     tokens) — read only the *direction*, not the magnitude. **Default stays OFF** (the burden of proof is on the flip, not on staying off);
     ships **opt-in, best per-tool** for glance-heavy MCP tools, pairs with `jsonShape`. The per-tool opt-in
     net-win is reasoned from the mechanism, not yet A/B-confirmed. **MCP (1) is closed.**
@@ -116,10 +118,10 @@ update `init` (copy both files), the `status` drift check, and the `test.mjs` by
 
 The ten features above trim the *response* (PostToolUse). The next direction narrows the *request*
 (PreToolUse): a semantically-targeted narrow result has a lower recovery-read rate than a generic head/tail
-trim, so lower net carried tokens — but a wrong narrowing forces a costlier full re-run, so a narrowing ships
+trim, so lower net carried tokens — but a wrong narrowing forces a full re-run that carries more, so a narrowing ships
 only where the need is predictable and only after it is validated. Measured in **tokens** throughout, never
-money (that is a hard rule; the `$` in `report --cost`, `PRICES` and the older AB-TASK/README language is
-grandfathered, to be cleaned up later, not extended).
+money (that is a hard rule; the older money language in `report --cost`, `PRICES` and the docs was removed
+on 2026-09-18).
 
 - **Step 0 — Backfire Auditor. DONE.** The gate every narrowing passes before its default moves. It is not a
   narrowing itself and changes nothing that enters context, so it ships on like Wave 1 (no A/B). `report

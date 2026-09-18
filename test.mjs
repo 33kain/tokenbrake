@@ -1777,17 +1777,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     T.readCapFiles(capLed, 'A').n + T.readCapFiles(capLed, 'B').n === cf.n,
     String(T.readCapFiles(capLed, 'A').n) + '+' + String(T.readCapFiles(capLed, 'B').n) + ' vs ' + String(cf.n));
 
-  console.log('\n-- the bill, and the guard\'s own cost');
-  /* ab10 measured that the saving lives in `carried`, so the report has to price a re-read, not a byte. */
-  const px = T.priceOf('claude-opus-5');
-  t('a re-read is priced at the cache-read rate and the first pass at the write rate',
-    Math.abs(T.usdOfTokens(1e6, 3e6, px) - (1 * px.write + 2 * px.read)) < 1e-9,
-    String(T.usdOfTokens(1e6, 3e6, px)));
-  t('carried below the first pass never prices negative', T.usdOfTokens(1e6, 0, px) === 1 * px.write,
-    String(T.usdOfTokens(1e6, 0, px)));
-  t('an unpriced model yields no dollar figure, never a guess', T.usdOfTokens(1e6, 2e6, T.priceOf('some-other-model')) === null);
-  t('the dominant model is the one most requests ran on',
-    T.dominantModel({ requests: [{ model: 'a' }, { model: 'b' }, { model: 'b' }] }) === 'b');
+  console.log('\n-- tokens, never money, and the guard\'s own cost');
+  /* The rule: every saving is stated in tokens (entered, carried, cache), never money. The pricing helpers are
+     gone from the module, so nothing can quietly start printing a dollar figure again. */
+  t('the module exports no pricing helper', ['priceOf', 'usdOfTokens', 'costOf', 'PRICES'].every(k => T[k] === undefined));
+  /* Claude Code writes <synthetic> entries with an all-zero usage; the old cost-based label dropped them, the
+     token-only one must too, or --compare labels a one-model session as mixed. */
+  t('a session label leaves out the <synthetic> placeholder model',
+    T.sessionFacts({ file: '/w/syn.jsonl', sessionId: 'syn', requests: [{ model: 'claude-opus-5', usage: { input_tokens: 1 } }, { model: '<synthetic>', usage: { input_tokens: 0 } }], results: [], compactions: [] }, []).model === 'claude-opus-5');
 
   /* A recovery read is the same file at a different offset -- the cost a trim can create. Distinct from a
      repeat read, which returns the same slice again (ab10 pair 5: 4 recovery reads, the smallest saving). */
@@ -2657,9 +2654,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(dir, { recursive: true, force: true });
 }
 
-/* ---- cost at list price, and report --compare -----------------------------
-   The formula must reproduce a real session record: arm B of the feature round (Opus 5) billed $2.381214
-   for 58 input, 13,902 output, 2,713,808 cache-read and 67,647 cache-write tokens. */
+/* ---- report and report --compare, in tokens only -------------------------------
+   Arm B of the feature round (Opus 5): 58 input, 13,902 output, 2,713,808 cache-read and 67,647 cache-write
+   tokens. Every figure the report and --compare print for it is a token count or a count, never money. */
 {
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
@@ -2676,13 +2673,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const armB = mk('armb0000', 'claude-opus-5', { input_tokens: 58, output_tokens: 13902, cache_read_input_tokens: 2713808, cache_creation_input_tokens: 67647 }, 4000);
   const armA = mk('arma0000', 'claude-opus-5', { input_tokens: 54, output_tokens: 16022, cache_read_input_tokens: 2614181, cache_creation_input_tokens: 74504 }, 8000);
   const odd = mk('oddm0000', 'claude-someday-9', { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }, 10);
-  console.log('\n-- cost at list price, and --compare');
-  const cB = T.costOf(T.parseTranscript(armB)), cA = T.costOf(T.parseTranscript(armA));
-  t('the Opus 5 formula reproduces the session record to the sixth decimal', cB.usd.toFixed(6) === '2.381214' && cA.usd.toFixed(6) === '2.452951', `${cB.usd.toFixed(6)} ${cA.usd.toFixed(6)}`);
-  t('the report carries the price line', /At list price: ~ \$2\.38 \(claude-opus-5; cache writes at the 1h rate\)/.test(T.renderReport(T.parseTranscript(armB), [])));
-  t('an unlisted model is reported as unpriced, not guessed', T.costOf(T.parseTranscript(odd)).usd === 0 && T.costOf(T.parseTranscript(odd)).unpriced.join() === 'claude-someday-9');
+  console.log('\n-- report and --compare, in tokens only');
+  const noMoney = (txt) => !/\$\s?\d|list price|dollar|USD|\bcost\b/i.test(txt.replace(/Every row is tokens or a count -- never money\./, ''));
+  const repB = T.renderReport(T.parseTranscript(armB), []);
+  t('the report prints no money: no dollar figure, no list price', noMoney(repB) && /Context processed: /.test(repB), (repB.match(/[^\n]*(\$\s?\d|list price)[^\n]*/) || [])[0]);
+  t('a model the project never priced reports exactly like any other', noMoney(T.renderReport(T.parseTranscript(odd), [])));
   const cmp = T.renderCompare(T.parseTranscript(armA), T.parseTranscript(armB), []);
-  t('--compare: A and B named, cost row with the change', /A: arma0000\.\.\.  claude-opus-5/.test(cmp) && /B: armb0000\.\.\./.test(cmp) && /API cost, list price\s+\$2\.45\s+\$2\.38\s+-3%/.test(cmp), cmp.split('\n').find(l => /API cost/.test(l)));
+  t('--compare: A and B named, no cost row, and says every row is tokens or a count', /A: arma0000\.\.\.  claude-opus-5/.test(cmp) && /B: armb0000\.\.\./.test(cmp)
+    && noMoney(cmp) && /Every row is tokens or a count -- never money\./.test(cmp), (cmp.match(/[^\n]*(\$\s?\d|cost)[^\n]*/i) || [])[0]);
   t('--compare: the rows the A/B rounds compared by hand', ['requests', 'cache-read tokens', 'output tokens', 'tool results entered', 'tool results carried', 'trimmed by the guard', 'repeat reads'].every(k => cmp.includes(k)));
   t('--compare: tool results entered halves, and the column says so', /tool results entered\s+2k\s+1k\s+-50%/.test(cmp), cmp.split('\n').find(l => /entered/.test(l)));
   /* Split carried by tool class: a Read result and a Bash result must land in different classes, so the
@@ -2918,9 +2916,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
-/* ---- Wave 1: report --cost (feature 8) -----------------------------------
-   One priced request, 1,000,000 tokens of each type on Opus 5 -> a total that is exact by construction:
-   5 + 25 + 0.5 + 10 = $40.50. Sonnet 5 reprices the same tokens to 2 + 10 + 0.2 + 4 = $16.20. */
+/* ---- report --cost is retired -------------------------------------------------
+   It stated sessions in money; tokenbrake states everything in tokens. It must say so and exit non-zero, never
+   fall through to the plain report where a script would read it as the old view. */
 {
   const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-cost-'));
   mkdirSync(join(cfg, 'projects', '-w'), { recursive: true });
@@ -2932,12 +2930,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const cost = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--cost', ...a], { encoding: 'utf8', env: e });
 
   let r = cost([]);
-  t('report --cost totals the session at list price', r.status === 0 && /Total \(list price\):\s+\$40\.50/.test(r.stdout), r.stdout.split('\n').find(l => /Total/.test(l)));
-  t('report --cost breaks the total down by token type', /output\s+1,000,000 tok\s+\$25\.00\s+62%/.test(r.stdout) && /cache write\s+1,000,000 tok\s+\$10\.00\s+25%/.test(r.stdout));
+  t('report --cost says it was removed, in favour of tokens, and exits non-zero',
+    r.status === 1 && /report --cost was removed: tokenbrake reports tokens only/.test(r.stdout) && !/\$\s?\d/.test(r.stdout), r.stdout.slice(0, 160));
   r = cost(['--model=sonnet']);
-  t('report --cost --model reprices the same tokens at the forced model rate', /What-if on claude-sonnet-5:\s+~ \$16\.20/.test(r.stdout) && /60% less/.test(r.stdout), r.stdout.split('\n').find(l => /What-if/.test(l)));
-  r = cost(['--model=bogus']);
-  t('report --cost --model rejects an unpriced model non-zero', r.status === 1 && /unpriced model/.test(r.stdout));
+  t('report --cost --model is refused the same way, never a repricing', r.status === 1 && /was removed/.test(r.stdout) && !/\$\s?\d/.test(r.stdout));
 
   rmSync(cfg, { recursive: true, force: true });
 }

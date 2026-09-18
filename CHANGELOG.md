@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The report is the product: `npx tokenbrake report` needs no install, and says whether the brake is worth it.**
+  README, package description and `help` lead with the report; the brake is step two. A session with no sign of
+  the guard gets a verdict line instead of "Acted on: 0". Single-file excerpts are no longer counted in the
+  trim's reach (the guard reads them like a Read), so the reach share is honest: 11.6% of carried over 55
+  sessions on the machine this was written on, not ~18%. The person's own and per-tool `maxChars` are used.
+- **`tune` recommends `maxChars` and `readMaxBytes` per person** from their own sessions, recommend-only.
+- **`report --reach` splits Read** into ranged / whole-under / whole-over-the-trigger / unsized.
+- **Tokens only, never money.** `report --cost` and `--model` repricing are removed (they now say so and exit
+  1); the report's list-price line and every dollar figure on its saving, still-within-reach and recovery lines
+  are gone; `--compare` drops its cost row. Every figure tokenbrake prints is tokens or a count.
+- The evidence moved from the README to `EVIDENCE.md`; the README states why it quotes no percentage.
+
 ## 0.3.0 — 2026-09-17
 
 - **`tokenbrake tune` — read your own recent sessions and get told which off-by-default features to turn on.**
@@ -143,14 +157,14 @@
   session read six files at 1, 8, 15, 16, 31 and 34 KB and **never tripped the 60,000-byte trigger once.**
 
 - **`report --reads`, and a sizing error it had to fix first.** `readMaxBytes` decides which reads get capped
-  and has never had an argument: 60,000 was a guess, and the one paid A/B lowering it to 25,000 cost +10% on
-  a task that said "read in full", which forbids the saving by construction. Half of that question is
+  and has never had an argument: 60,000 was a guess, and the one paid A/B lowering it to 25,000 came out at 34
+  requests against 25 and 1.5M tokens carried against 912k on a task that said "read in full", which forbids the saving by construction. Half of that question is
   arithmetic over a person's own reads — how many a lower trigger catches and how much of each it cuts — and
   this does that half for free.
   **The sizing error, found while building it and verified on this repo's own transcripts:** Claude Code
   numbers every line it delivers (`12→const x = 1`), and that numbering is Claude Code's, not the file's. It
   runs **5–6% of the delivered text on a 350-line file and grows with the line count**, while `readMaxBytes`
-  is compared against the file's real size on disk. Measuring a file by what its read cost therefore
+  is compared against the file's real size on disk. Measuring a file by what its read delivered therefore
   overstates every file, and overstates the long ones most — exactly at the boundary a trigger sits on. The
   numbering is now stripped, which recovers the real size to the byte: an unchanged `guard.js` came back as
   22,076 characters and strips to **20,832 bytes against 20,831 on disk**. The stripping also gives the line
@@ -281,9 +295,10 @@
   **Measured, not assumed:** the benchmark's Experiment A gained a spelling matrix that runs one file
   through every spelling, for a fixture under `readMaxBytes` and one over it, and fails the build if any is
   handled against intent.
-  **The cost of the old behaviour, measured:** in one paired run the guard shredded a 34-line range and a
+  **What the old behaviour did, measured:** in one paired run the guard shredded a 34-line range and a
   single-file grep on spelling alone; the model made four return trips for what had been cut, took three
-  extra rounds, and the pair came out at −8.0% where others in the same round reached −39%. One of those
+  extra rounds, and the pair came out with the smallest saving of the round (the paired figures were recorded in
+  cost only; not restated here — tokens-only record). One of those
   return trips was the model reading **tokenbrake's own overflow file** — the escape hatch paying for the
   saving with a round trip. Recorded in the benchmark's `results/DEVIATIONS.md`.
   Note what this trades: those commands are no longer trimmed at all below `readMaxBytes`, so the guard
@@ -291,28 +306,26 @@
 
 ## 0.2.5 — 2026-09-11
 
-- **`report` says what the guard did to the bill, and what the mechanism cost.** Four lines gain money,
-  priced at the session's own model and at list rate, with the first appearance of a result paid once at
-  the cache-write rate and every later re-read at the cache-read rate: the trim line ends with what it
+- **`report` says what the guard did, and what the mechanism took back.** Four lines gain a cost figure
+  (removed on 2026-09-18 under the tokens-only rule; not described here): the trim line ends with what it
   took off the session; `Still within reach` names what the guard could have trimmed and did not, weighted
   by carried tokens rather than by size; and a new `Recovery reads` line counts the model coming back for
-  more of a file it had already read, with its cost. A model with no published rate yields no figure
-  rather than a guess.
-  The benchmark is why. It measured that the saving lives in `carried` — a result is paid for again in
-  every later request that re-reads it — that the number of trims does not predict it (two trims produced
-  a 39% paired difference where seven produced 12%), and that **every run with the guard made more
-  recovery reads than its partner without**. Showing a saving without the cost that produced it would be
-  dishonest, so the two lines now sit together.
-- **A 22-session pre-registered benchmark says no cost saving may be quoted, and says why.**
+  more of a file it had already read.
+  The benchmark is why. It measured that the saving lives in `carried` — a result is read again in every
+  later request that re-reads it — that the number of trims does not predict it (the paired figures behind
+  that were recorded in cost only; not restated here), and that **every run with the guard made more
+  recovery reads than its partner without**. Showing a saving without the recovery that produced it would
+  be dishonest, so the two lines now sit together.
+- **A 22-session pre-registered benchmark says no saving may be quoted, and says why.**
   [33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench): five paired runs and three
   OFF-against-OFF control pairs on a synthetic incident review. The controls — identical configuration on
-  both sides, no hook anywhere — came out **5.7%, 18.4% and 30.3% apart on cost** and **42.6% apart on
-  tokens entered**. The paired runs' 28.8% lower cost and 35.7% fewer tokens both sit inside that noise.
-  The round's verdict flipped from *cost reduction* to *no measurable difference* when the third control
+  both sides, no hook anywhere — came out up to **42.6% apart on tokens entered**. The paired runs' 35.7%
+  fewer tool-result tokens entered sits inside that noise.
+  The round's verdict flipped from a reduction to *no measurable difference* when the third control
   was added, and the flip is recorded rather than smoothed.
   The sharp part of the round: **tokens entering context fell in every pair, while tokens *carried* fell
-  in only four of six and rose in two, once by 72.6%.** Carried is where the money is, so the hook
-  reliably shrinks what enters and does not reliably shrink what is paid for again on every later
+  in only four of six and rose in two, once by 72.6%.** Carried is where the tokens are, so the hook
+  reliably shrinks what enters and does not reliably shrink what is re-read on every later
   request — a trim that sends the model back for what was cut lengthens the session past where it
   started. What the same runs did establish: **22 runs, 22 scores of 38 of 38 against a hidden answer key,
   zero critical errors.** The hook never cost a correct answer.
@@ -375,9 +388,9 @@
   `head`, `tail`, no pipe) is treated like the Read tool: untouched up to `readMaxBytes`, capped at the
   first `readLimitLines` lines above it with a note. Until now the same bytes through `sed -n` were trimmed
   to head, tail and error-looking lines, the wrong three things to keep from source, and a model that met
-  that once sized every read after it to stay under `maxChars`: eighty-line `sed` ranges, 91 requests,
-  twice the bill on the three-arm audit (`AB-TASK.md`). The Read cap's note now also says that a few large
-  ranges cost less than many small ones.
+  that once sized every read after it to stay under `maxChars`: eighty-line `sed` ranges, 91 requests
+  on the three-arm audit (`AB-TASK.md`). The Read cap's note now also says that a few large ranges cost
+  fewer tokens than many small ones.
 - `report` credits a trim only when the model saw it. A ledger row means the guard offered a replacement;
   above Claude Code's own ~30,000-character ceiling the model gets a 2 KB persisted-output preview instead,
   and on `PostToolUseFailure` the replacement is ignored. Those now read "offered and not applied", with
@@ -385,14 +398,15 @@
   where the report had credited tokenbrake with 6k tokens Claude Code kept out.
 - `status` warns when the guard is installed at both user and project scope: it runs twice per call there.
 - `report` prints "Under the trim threshold": shell results at or under `maxChars`, with their tokens and
-  carried cost as a share of everything carried. The share the guard does not touch, measured, so the
+  carried tokens as a share of everything carried. The share the guard does not touch, measured, so the
   real-session files can say whether shape filters for small output are worth building.
 - Measured, not claimed: the excerpt rule was A/B'd against no hooks on the same audit before release
   (`AB-TASK.md`, "The fix, measured"). It removed the pathology it was written for — eighty-line `sed`
-  ranges, 91 requests, twice the bill — but the on arm still ran 45 requests to the off arm's 32 and cost
-  30% more, so by the protocol's own rule this is not a win, only strictly less than 0.2.2 did. On the
-  read-heavy audit shape the honest range across four runs each way is $4.60-$5.97 with hooks off and
-  $3.77-$9.63 with hooks on: the model's reading strategy moves that bill more than the guard does.
+  ranges, 91 requests — but the on arm still ran 45 requests to the off arm's 32 and carried 2.2M tokens
+  of tool results to its 1.4M, so by the protocol's own rule this is not a win, only strictly less than
+  0.2.2 did. On the read-heavy audit shape the four runs each way overlap entirely with hooks off and on
+  (the range was recorded in cost only; not restated here): the model's reading strategy moves a session
+  more than the guard does.
 
 ## 0.2.2 — 2026-09-09
 
@@ -406,7 +420,7 @@
   hookSpecificOutput.updatedToolOutput" in the debug log), against their own hooks reference, so a failing
   command's output still enters as Claude Code delivers it: capped by its own ~10,000-character error
   ceiling, middle elided to about 7,500. The registration stays because the docs promise the field and the
-  ledger now records what failures cost; `AB-TASK.md`, "The failing command", has the measurements and the
+  ledger now records what failures let in; `AB-TASK.md`, "The failing command", has the measurements and the
   one route that remains. Re-run `npx tokenbrake init` (or `init --project`) to pick the group up.
 - The shell trim keeps up to `errorContextLines` (default 3) lines after each error-looking line from the
   omitted middle, stopping at a blank line: the assertion, the expected/actual pair, the first stack frame.
@@ -419,8 +433,7 @@
   test name says. Found on the CONTEXA suite: "ok   error render call passes resp through" had been filling
   the `keepErrorLines` budget and the real `FAIL` lines further down never made the cut.
 - `report --compare <A> <B>`: two sessions side by side, the `AB-TASK.md` table as one command. Every report
-  also carries "At list price": the session's cost computed per request at its model's list price, cache
-  writes at the 1h rate; reproduces the Opus 5 A/B arms' session records to the sixth decimal.
+  also carried a cost line (removed on 2026-09-18 under the tokens-only rule; not described here).
 - `report` prints a "Repeat reads" line: same-shape reads (a Read of one path and range, or a single-file
   `cat`/`sed -n`/`head`/`tail`) that returned a file already in context in the same compaction window,
   with the tokens re-entered and carried. Measured, not acted on.
@@ -433,7 +446,7 @@
   the guard's own `tokenbrake/out/<id>.txt`) is capped at `persistedLimitLines` (default 80) whatever its size,
   with a note saying why. Reading those whole carried 96% of the untrimmed audit arm's context and 24% of the
   session that wrote the rule; the general `readMaxBytes` default stays at 60,000, because lowering it was
-  measured and cost more (`AB-TASK.md`).
+  measured and came out worse: 34 requests against 25, 1.5M tokens carried against 912k (`AB-TASK.md`).
 - `scripts/sweep-readmax.mjs` and `scripts/sim-persisted.mjs`: the trigger sweep, and the replay that shows what
   the persisted cap would have kept out of the sessions on this machine.
 - Project-scope install on this repository, pinned to `guard.js` by a test.
@@ -444,8 +457,8 @@
 - Claude Code plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json` (exec form, `${CLAUDE_PLUGIN_ROOT}/guard.js`),
   and a marketplace file in the same repository, so `claude plugin marketplace add 33kain/tokenbrake` then
   `claude plugin install tokenbrake@tokenbrake` installs it without touching a settings file.
-- Measured on an identical Cowork task, hooks off against on: Fable 5.1 $8.40 → $7.02, Opus 5 $5.97 → $3.77,
-  identical answers (`AB-TASK.md`).
+- Measured on an identical Cowork task, hooks off against on: cache reads Fable 5.1 4.62M → 2.72M, Opus 5
+  5.77M → 3.99M, identical answers (`AB-TASK.md`).
 - No change to the guard, the CLI or the report.
 
 ## 0.1.0 — 2026-09-05
