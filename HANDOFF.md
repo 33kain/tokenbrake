@@ -1091,7 +1091,7 @@ benchmark pool (`--cwd=tokenbrake-bench`) the same view prints Read at 73.6% wit
 -- whole reads dominate there, ranged reads dominate on the real sessions. That contrast is the evidence
 item 2 (per-person thresholds) will act on, and it is worth keeping as the first argument for it.
 
-### Item 2 — per-person thresholds, 2026-09-18
+### Item 2 — per-person thresholds, merged (PR #74), 2026-09-18
 
 Code complete and reviewed, suite green at 683 checks (from 659). **Recommend-only, by the user's decision:**
 `tune` prints a grid and one step of advice for `maxChars` and `readMaxBytes`; `tune --write` never sets a
@@ -1115,6 +1115,34 @@ the one list `report --reads` uses too. Shares are over entry + carry, the same 
 On this machine: `maxChars` keep 6,000 (1 of 22 pulled back, raising gives up more than it spares);
 `readMaxBytes` try 45,000 (cap fired 7x at 60,000; one step down takes up to ~437k more token-reads).
 
-Known and left: `reach()` still uses the constant `TRIM_CHARS` (6000) and counts excerpt reads in its window,
-so `report --reach` ignores a person's own `maxChars` -- pre-existing, worth one small follow-up. Next: items 1,
-4, 5 (independent).
+Known and left then: `reach()` used the constant `TRIM_CHARS` and counted excerpts in its window -- fixed in item 1.
+
+### Item 1 — the instrument is the product, 2026-09-18
+
+Code complete and reviewed, suite green at 692 checks (from 683).
+
+**The positioning:** README opens on `npx tokenbrake report` (no install, reads the transcripts Claude Code already
+keeps), the brake is "step two"; `package.json` description and keywords lead with the report; `help` is split
+into STEP ONE (report) and STEP TWO (the brake). NOT done: `site/` is a compiled bundle with no source here and
+its title still leads with the brake -- it needs changing wherever the site is built.
+
+**The fix that item 1 turned out to need.** Run as a fresh user, the report told them the guard "would have
+trimmed" a `sed -n` of a source file and put 55% of that session's carried tokens in the brake's reach. Both
+false: a single-file excerpt goes down the guard's READ path (whole up to readMaxBytes, capped above, never
+head/tail-trimmed). `reach()` counted excerpts in the trim window and used the constant 6000, not the person's
+maxChars. Now: one classifier (`trimClass`) behind `reach`, `inTrimWindow` and the advice line; `excerpt` is a
+parse-time fact mirroring the guard's EXCERPT; per-tool `tools.<tool>.maxChars` honoured as the guard's
+toolConfig applies it; a capped excerpt stays an excerpt. Honest numbers on this machine: the trim's window is
+**11.6%** of carried over 55 sessions and **7.5%** over the 24 guarded ones (the old count said ~18%).
+
+**The first-run verdict.** A session with no sign of the guard (no ledger row, no marker -- stated as that,
+because guardRan can miss a session the guard ran in) gets one line instead of "Acted on: 0": either what the
+brake could have acted on and `npx tokenbrake init`, or "too little to install it for work like this", at a
+chosen floor of 10% of carried (`BRAKE_WORTH_PCT`, sitting at about a typical session here). The "trimmed
+none" / "Read caps fired: none" lines now key on that same per-session fact, not "any ledger exists". The
+empty state no longer says to install first.
+
+Review loop: `/simplify` (one classifier, one `isShell`, one empty-buckets factory, `reach` counts `shell`
+itself, maxChars resolved once); `/code-review` (5 fixes: --reach verdict's shell count missed excerpts,
+guard-absent wording overclaimed, capped excerpt counted as a trim, per-tool maxChars ignored, a stale footnote).
+Next: items 4 and 5 (independent).
