@@ -2938,6 +2938,108 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg, { recursive: true, force: true });
 }
 
+/* ---- Shadow mode (item 5): an off feature runs its test, logs, and emits NOTHING --------------------------
+   The whole claim is that shadow changes nothing that enters context, so the first check is byte-identical
+   output with shadow on and off. Then: the row it writes, the rows it must not write, and that `tune` reads
+   the rows as an exact opportunity rather than the off-state estimate. */
+{
+  const tr = await import('./transcript.js');
+  const T = tr.default || tr;
+  console.log('\n-- shadow mode: evidence without a live run');
+  const runShadow = (text, cfgExtra, command) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shadow-'));
+    if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
+    const input = { session_id: 'shadowses', tool_use_id: 'toolu_sh_1', tool_name: 'Bash', tool_input: { command },
+      tool_response: bashResp(text) };
+    const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    const lp = join(dir, 'tokenbrake', 'ledger.jsonl');
+    const rows = existsSync(lp) ? readFileSync(lp, 'utf8').split('\n').filter(Boolean).map(parse) : [];
+    const outFiles = existsSync(join(dir, 'tokenbrake', 'out')) ? readdirSync(join(dir, 'tokenbrake', 'out')) : [];
+    rmSync(dir, { recursive: true, force: true });
+    /* Each run has its own config dir, and a trim note names the saved file's path inside it -- blank the dir
+       out (in both JSON-escaped and plain forms) so the comparison is of what the guard emitted, not where. */
+    const stdout = r.stdout.split(JSON.stringify(dir).slice(1, -1)).join('<DIR>').split(dir).join('<DIR>');
+    return { stdout, status: r.status, rows, shadows: rows.filter(x => x && x.ev === 'shadow'), outFiles };
+  };
+  const blob = 'A'.repeat(20000);
+  const lock = ['diff --git a/package-lock.json b/package-lock.json', 'index 1111111..2222222 100644',
+    '--- a/package-lock.json', '+++ b/package-lock.json', '@@ -1,80 +1,80 @@',
+    ...Array.from({ length: 80 }, (_, i) => `-    "pkg-${i}": "1.0.${i}",\n+    "pkg-${i}": "1.1.${i}",`),
+    'diff --git a/src/app.js b/src/app.js', '--- a/src/app.js', '+++ b/src/app.js', '@@ -1,1 +1,1 @@', '-const x = 1;', '+const x = 2;'].join('\n') + '\n';
+
+  for (const [label, text, cmd] of [['blob', blob, 'cat bundle.min.js | head -c 20000'], ['git diff', lock, 'git diff']]) {
+    const on = runShadow(text, null, cmd), off = runShadow(text, { shadow: false }, cmd);
+    t(`shadow changes nothing that enters context (${label}): output byte-identical with it on and off`,
+      on.stdout === off.stdout && on.status === 0 && off.status === 0, `${on.stdout.length} vs ${off.stdout.length}`);
+    t(`and it saves nothing: no out/ file beyond what the live path wrote (${label})`, on.outFiles.length === off.outFiles.length,
+      JSON.stringify({ on: on.outFiles, off: off.outFiles }));
+    t(`shadow off writes no shadow row (${label})`, off.shadows.length === 0);
+  }
+  const b = runShadow(blob, null, 'cat bundle.min.js | head -c 20000');
+  t('shadow on by default: an off blobElide logs what it would have withheld',
+    b.shadows.length === 1 && b.shadows[0].feature === 'blobElide' && b.shadows[0].chars === 20000
+    && b.shadows[0].kept > 0 && b.shadows[0].kept < 1000 && b.shadows[0].id === 'toolu_sh_1', JSON.stringify(b.shadows));
+  const gd = runShadow(lock, null, 'git diff');
+  t('and an off gitView logs its collapse, with the kept real-source body',
+    gd.shadows.length === 1 && gd.shadows[0].feature === 'gitView' && gd.shadows[0].collapsed === 1
+    && gd.shadows[0].kept < gd.shadows[0].chars, JSON.stringify(gd.shadows));
+  /* One decision feeds both paths, fitted the same way with the same saved-path note, so the shadow's kept is the
+     live feature's kept exactly -- the claim that makes a shadow row evidence rather than an estimate. */
+  const liveBlob = runShadow(blob, { blobElide: true }, 'cat bundle.min.js | head -c 20000').rows.find(x => x && x.blob);
+  const liveGit = runShadow(lock, { gitView: true }, 'git diff').rows.find(x => x && x.gitview);
+  t('the shadow measures what the live feature would emit, byte for byte',
+    liveBlob && liveGit && liveBlob.kept === b.shadows[0].kept && liveGit.kept === gd.shadows[0].kept,
+    JSON.stringify({ blob: [liveBlob && liveBlob.kept, b.shadows[0].kept], git: [liveGit && liveGit.kept, gd.shadows[0].kept] }));
+  t('a live feature is not also shadowed', runShadow(blob, { blobElide: true }, 'cat bundle.min.js | head -c 20000').shadows.length === 0);
+  t('output its test rejects writes no shadow row', runShadow('line of ordinary output\n'.repeat(900), null, 'npm test').shadows.length === 0);
+
+  /* The join: rows priced against the transcript, one per result, only for this session, only known features. */
+  const p = { sessionId: 'S', results: [{ id: 'a', chars: 20000, carriedTurns: 4 }, { id: 'b', chars: 8000, carriedTurns: 0 }, { id: 'c', chars: 6000, marker: true, carriedTurns: 1 }] };
+  const led = [
+    { ev: 'shadow', session: 'S', id: 'a', feature: 'blobElide', chars: 20000, kept: 400 },
+    { ev: 'shadow', session: 'S', id: 'a', feature: 'blobElide', chars: 20000, kept: 400 },   // a doubled install
+    { ev: 'shadow', session: 'S', id: 'b', feature: 'gitView', chars: 8000, kept: 2000 },
+    { ev: 'shadow', session: 'OTHER', id: 'b', feature: 'gitView', chars: 8000, kept: 2000 },
+    { ev: 'shadow', session: 'S', id: 'a', feature: '__proto__', chars: 1, kept: 0 },
+    { ev: 'shadow', session: 'S', id: 'zz', feature: 'gitView', chars: 8000, kept: 0 },       // not in this transcript
+  ];
+  /* A result the always-on trim already cut entered at its trimmed size; the feature's own saving is only what it
+     would have taken on top of that, or the trim's saving is counted twice. */
+  const trimmedFirst = T.shadowRecord(p, [{ ev: 'shadow', session: 'S', id: 'c', feature: 'blobElide', chars: 90000, kept: 400 }]);
+  t('a shadowed result the trim already cut is priced against what entered, not its pre-trim size',
+    trimmedFirst.blobElide.withheld === 1400 && trimmedFirst.blobElide.carried === 2800, JSON.stringify(trimmedFirst.blobElide));
+  const sr = T.shadowRecord(p, led);
+  t('shadowRecord prices each row as withheld tokens and carried token-reads, once per result',
+    sr.blobElide.n === 1 && sr.blobElide.withheld === 4900 && sr.blobElide.carried === 4900 * 5
+    && sr.gitView.n === 1 && sr.gitView.withheld === 1500 && sr.gitView.carried === 1500, JSON.stringify(sr));
+  t('and ignores other sessions, unknown features and results it cannot price',
+    Object.keys(sr).sort().join() === 'blobElide,gitView,ran' && !Object.prototype.hasOwnProperty.call(sr, '__proto__'));
+
+  const tp = { sessionId: 'S', file: '/w/S.jsonl', cwd: '/w', requests: [{}, {}, {}, {}, {}, {}], compactions: [],
+    results: [{ id: 'a', name: 'Bash', what: 'cat x', chars: 20000, tokens: 5000, afterReq: 0, isError: false, marker: false }] };
+  const at = T.autotune([tp], [{ ev: 'post', session: 'S', tool: 'Bash', chars: 10, sh: 1 }, led[0]], { blobElide: false });
+  const fb = at.features.find(f => f.key === 'blobElide');
+  t('tune reads a shadowed feature as an exact opportunity, never more than a "try"',
+    fb.bound === 'shadow' && fb.opportunity.n === 1 && fb.opportunity.withheld === 4900 && fb.status === 'try', JSON.stringify({ b: fb.bound, o: fb.opportunity, s: fb.status }));
+  /* Shadow ran (rows marked sh) and saw nothing: an answer, not a fallback to the off-state estimate. */
+  const idle = T.autotune([tp], [{ ev: 'post', session: 'S', tool: 'Bash', chars: 10, sh: 1 }], { gitView: false });
+  const fg = idle.features.find(f => f.key === 'gitView');
+  t('a shadow that ran and saw nothing reads as nothing to act on, not as an estimate to try',
+    fg.bound === 'shadow' && fg.opportunity.n === 0 && fg.status === 'idle' && idle.summary.idle.includes(fg.label), JSON.stringify({ b: fg.bound, s: fg.status }));
+  /* A session with no shadow marks keeps the estimate; one with them gives the exact record; the total says which. */
+  const tq = { ...tp, sessionId: 'Q', file: '/w/Q.jsonl', results: [{ ...tp.results[0], id: 'q', what: 'cat big.min.js | head', lines: 1 }] };
+  const mixed = T.autotune([tp, tq], [{ ev: 'post', session: 'S', tool: 'Bash', chars: 10, sh: 1 }, led[0]], { blobElide: false });
+  const fm = mixed.features.find(f => f.key === 'blobElide');
+  t('shadow and estimate are chosen per session, and a mixed total says which part is which',
+    fm.bound === 'mixed' && fm.opportunity.shadowN === 1 && fm.opportunity.estimateN >= 1 && fm.opportunity.shadowSessions === 1, JSON.stringify(fm.opportunity));
+  /* A gitView collapse can keep more than the trim let in; that result counts against the feature, never for it. */
+  const grew = T.shadowRecord({ sessionId: 'S', results: [{ id: 'g', chars: 6000, carriedTurns: 3 }] },
+    [{ ev: 'shadow', session: 'S', id: 'g', feature: 'gitView', chars: 40000, kept: 9000, sh: 1 }]);
+  t('a shadowed result that would grow context is counted apart, never as an opportunity',
+    grew.gitView.n === 0 && grew.gitView.grew === 1 && grew.gitView.withheld === 0 && grew.ran === true, JSON.stringify(grew.gitView));
+}
+
 /* ---- Wave 2: dedup of repeated results (feature 6) ------------------------
    The same result twice in a session is paid for twice; when it repeats, the guard hands back a pointer to
    the first copy. Off by default; A/B gates it. Bash/PowerShell + MCP, over dedupMinChars, honoring noTrim. */
