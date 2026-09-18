@@ -26,7 +26,7 @@ run twice with the tool **off** on both sides. Without one, a saving is indistin
 differently on the day.
 
 This project ran those controls. In a 22-session pre-registered benchmark
-([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)), OFF-against-OFF pairs with identical
+([`AB-TASK.md`, "ab10 closed"](https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought)), OFF-against-OFF pairs with identical
 configuration on both sides came out up to **42.6% apart on tokens entered**. The runs with the brake entered a
 median 35.7% fewer tool-result tokens, and that sits inside the noise. The sharper result is about tokens
 **carried**, the number that matters: tokens entering context fell in every pair with the brake, but tokens
