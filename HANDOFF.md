@@ -1211,3 +1211,18 @@ than what the guard saw -- an oversized MCP result, or shell output past the inl
 `hostSwapped` bucket, unpriced, never as growth: the feature acts before the swap, and the real cost there is the
 later re-read of the saved file, which the read cap governs. Marked results that would grow stay `grew`.
 Suite 711. Still not shadowed: `dedup`, `reReadElide`, `readAfterEdit` -- the per-session-state question.
+
+### guard.js importable — 2026-09-18 (step 1 of offline shadow, option B)
+
+`guard.js` runs `main()` only when it is `require.main` (every launcher -- init's exec-form hook, the plugin's
+hooks.json, status/doctor spawn tests -- starts it as `node guard.js <mode>`); required, it exports `DEFAULTS`,
+`EXCERPT` (now with the file as group 1), `GIT_DIFF`, `PERSISTED`. transcript.js uses those instead of copies:
+EXCERPT_CMD, PERSISTED (the copy had drifted -- missed `.json`), GIT_CMD, TUNE_DEFAULTS, TRIM_CHARS; cli.js
+guardCfg takes its defaults from them. The pin tests are replaced by contract tests: same objects; required, the
+guard reads no stdin, writes no ledger and prints nothing; run, it still answers. Consequence to remember: every
+cli command now loads guard.js, so a guard that throws at load takes the report down too (it defines only
+constants and functions at top level). Left for later: `stemOf` (mirrors saveOut's naming), PRESETS.balanced.
+
+Step 2 (next): pull dedup / reReadElide / readAfterEdit decisions into pure exported guard functions, then build
+the offline shadow in transcript.js on them -- conservative reReadElide (a shell command between reads
+disqualifies), compaction exclusion, a coverage count for edits without structuredPatch, and a sweep view.

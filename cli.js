@@ -197,7 +197,8 @@ const fmt = (n) => n.toLocaleString();
    the ranking; --where pools every session's ranged reads into the one distribution that can set
    readLimitLines. */
 function guardCfg() {
-  const cfg = { maxChars: transcript.TRIM_CHARS, readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
+  const D = transcript.GUARD_DEFAULTS;   // the guard's own defaults, not copies
+  const cfg = { maxChars: D.maxChars, readMaxBytes: D.readMaxBytes, readLimitLines: D.readLimitLines, persistedLimitLines: D.persistedLimitLines };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
     if (c.maxChars) cfg.maxChars = c.maxChars;

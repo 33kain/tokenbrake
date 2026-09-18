@@ -12,6 +12,9 @@
 - **Tokens only, never money.** `report --cost` and `--model` repricing are removed (they now say so and exit
   1); the report's list-price line and every dollar figure on its saving, still-within-reach and recovery lines
   are gone; `--compare` drops its cost row. Every figure tokenbrake prints is tokens or a count.
+- **`guard.js` is importable.** Run as a hook it behaves as before; required, it hands over its own `DEFAULTS` and
+  command patterns, so the report stops keeping copies. One copy had already drifted: the report's persisted-output
+  pattern missed the `.json` outputs the guard recognises.
 - The evidence moved from the README to `EVIDENCE.md`; the README states why it quotes no percentage.
 - **Shadow mode, on by default.** While `blobElide`, `gitView` or `mcpTrim` is off, the guard runs that feature's own decision
   on each shell result and logs what it would have withheld (`ev:'shadow'`), emitting and saving nothing; output is

@@ -139,7 +139,7 @@ const ARG_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s]+)`;
    which is a far worse and far more frequent outcome than letting `cat [ab].log` through. */
 const FILE_ = String.raw`(?:${Q_}|(?!-)[^|;&<>'"\s*?]+)`;
 const READ_ = String.raw`(?:cat(?:\s+-[bnAEsTv]+)*|sed\s+-n\s+['"]?[0-9]+,[0-9]+p['"]?|head(?:\s+-n?\s*[0-9]+)?` +
-  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+${FILE_}`;
+  String.raw`|tail(?:\s+-n?\s*[0-9]+)?|grep(?:\s+-(?![a-zA-Z]*[rRlL])[a-zA-Z]+)*\s+${ARG_})\s+(${FILE_})`;   // group 1: the file, for transcript.js
 const EXCERPT = new RegExp(
   String.raw`^\s*(?:cd\s+${PATH_}\s*&&\s*)?(?:${LABEL_}\s*(?:&&|;)\s*)?${READ_}` +
   String.raw`(?:\s*(?:&&|;)\s*${LABEL_})*\s*$`);
@@ -1085,7 +1085,7 @@ function handleReadPre(input, cfg) {
   });
 }
 
-(function main() {
+function main() {
   try {
     const cfg = loadConfig();
     if (!cfg.enabled) return;
@@ -1095,4 +1095,11 @@ function handleReadPre(input, cfg) {
     else handlePost(input, cfg);
   } catch { /* fail open */ }
   process.exitCode = 0;
-})();
+}
+
+/* Run as a hook (`node guard.js post` -- how init, the plugin and `status` all start it) or load as a library.
+   Loaded, it touches neither stdin nor the ledger and hands over its own definitions, so transcript.js asks the
+   guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
+   copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
+if (require.main === module) main();
+else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED };
