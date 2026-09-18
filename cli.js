@@ -596,7 +596,7 @@ function reachReport() {
 function readsReport() {
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
-  const TRIGGERS = [10000, 25000, 30000, 45000, 60000];
+  const TRIGGERS = transcript.READ_MAX_STEPS;   // one list with tune's readMaxBytes grid
   const LIMITS = [100, 200, 300, 500, 800, 1200];
   const cfg = guardCfg();
   const ledger = loadLedger();
@@ -1509,6 +1509,35 @@ function tuneReport() {
   console.log('\n  Read cap (always on): ' + capLine + '.');
   console.log('    For the exact readLimitLines/readMaxBytes values, the evidence is in: tokenbrake report --reads (and --where).');
 
+  /* The two thresholds, as what each value would reach on these sessions. Recommend-only: --write never sets
+     them (see thresholdAdvice), so every line here is a suggestion to try, never an applied change. */
+  const th = t.thresholds;
+  const pc = (x, of) => of ? (Math.round(1000 * x / of) / 10) + '%' : '-';
+  console.log('\n  Thresholds, from your own sessions (recommendations only -- --write never changes these):');
+  const knob = (name, x, col, unit) => {
+    console.log('    ' + name.padEnd(16) + col.padEnd(16) + 'up to withheld, token-reads (share of all carried)');
+    for (const g of x.grid) console.log('      ' + fmt(g.value).padStart(10) + String(g.n).padStart(8) + ' ' + unit.padEnd(9)
+      + ('~ ' + fmt(g.withheldCarried)).padStart(13) + ('  (' + pc(g.withheldCarried, th.carriedTotal) + ')').padEnd(10)
+      + (g.value === x.current ? '  <- yours' : ''));
+    const m = x.measured;
+    const pulled = m ? m.backfired + ' of ' + x.fired + ' withholds at ' + fmt(x.current) + ' pulled back' : '';
+    const why = x.why === 'backfired' ? pulled + '; at ' + fmt(x.to) + ' they would have passed whole, sparing ~ ' + fmt(x.fixed)
+        + ' token-reads of pull-back for ~ ' + fmt(x.givenUp) + ' of saving given up'
+      : x.why === 'backfired-outweighed' ? pulled + ' (~ ' + fmt(x.pulledCost) + ' token-reads), but no higher value spares more than it gives up in measured saving'
+      : x.why === 'few-firings' ? 'fewer than ' + x.min + ' firings at ' + fmt(x.current) + ' -- too little record to step from'
+      : x.why === 'missing' ? 'reads went over it uncapped in guarded sessions -- a coverage problem no value fixes (see Read cap above)'
+      : x.why === 'clean' ? 'clean at ' + fmt(x.current) + ' (' + x.fired + ' withholds, none pulled back), and one step down takes up to ~ ' + fmt(x.gain) + ' more token-reads'
+      : x.why === 'unmeasured' ? 'the cap fired ' + x.fired + 'x at ' + fmt(x.current) + ', and one step down takes up to ~ ' + fmt(x.gain) + ' more token-reads'
+      : 'one step down takes too little more to be worth the risk';
+    console.log('      ' + (x.advice === 'raise' ? 'Raise to ' + fmt(x.to) + ' -- ' + why + '.'
+      : x.advice === 'try' ? 'Try ' + fmt(x.to) + ' for a few sessions -- ' + why + '. Then re-run tune: the step has no record of its own.'
+      : 'Keep ' + fmt(x.current) + ' -- ' + why + '.'));
+  };
+  knob('maxChars', th.maxChars, 'reaches', 'results');
+  console.log('      (maxChars is also the trim\'s budget: a lower value cuts harder into what it already trims.)');
+  knob('readMaxBytes', th.readMaxBytes, 'catches', 'reads');
+  console.log('      (A Read cap\'s pull-back cannot be measured from transcripts; report --reads has the per-limit proxy.)');
+
   if (t.reach && t.guarded) {
     const W = Math.round(1000 * (t.reach.windowShareOfCarried || 0)) / 10;
     console.log('\n  Trim reach: ~ ' + W + '% of carried tokens sit where the trim can act (over the ' + t.guarded + ' guarded session(s)). report --reach breaks it down.');
@@ -1582,8 +1611,9 @@ function help() {
   npx tokenbrake tune                 read your recent sessions and recommend which off-by-default features to
       [--cwd=<text>]                  turn on: each feature's real record where it has fired (fired / pulled
       [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
-                                      where it has not, plus the Read cap's health. Prints the exact knob to
-                                      set. Benchmark sessions skipped
+                                      where it has not, plus the Read cap's health and a per-person grid and
+                                      advice for maxChars and readMaxBytes (recommend-only). Prints the exact
+                                      knob to set. Benchmark sessions skipped
       --write                         turn ON the features with a clean MEASURED record (estimates, and features
                                       that backfired, are left for you to decide). Merges into tokenbrake.json,
                                       never replaces; aborts rather than overwrite a malformed config

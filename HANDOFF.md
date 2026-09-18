@@ -1065,7 +1065,7 @@ Order: 1, 3 and 4 are independent and can land in any order; 2 depends on 3's po
 `/simplify` -> `/code-review` -> `/security-review` loop. Shadow mode changes nothing that enters context,
 so the default-OFF rule does not apply to it — that is the whole point of it.
 
-### Where item 3 stands — 2026-09-18
+### Item 3 — merged (PR #73), 2026-09-18
 
 Code complete and reviewed, suite green at 659 checks (from 642), all three hook spawns pass.
 
@@ -1090,3 +1090,31 @@ On this machine the view now prints: Read is 32.9% of everything carried, the ca
 benchmark pool (`--cwd=tokenbrake-bench`) the same view prints Read at 73.6% with the opposite internal shape
 -- whole reads dominate there, ranged reads dominate on the real sessions. That contrast is the evidence
 item 2 (per-person thresholds) will act on, and it is worth keeping as the first argument for it.
+
+### Item 2 — per-person thresholds, 2026-09-18
+
+Code complete and reviewed, suite green at 683 checks (from 659). **Recommend-only, by the user's decision:**
+`tune` prints a grid and one step of advice for `maxChars` and `readMaxBytes`; `tune --write` never sets a
+threshold, because the lower value has no record of its own until it runs. Writing a threshold waits for shadow
+mode (item 5) to measure the step first.
+
+The rule (`thresholdAdvice`, the threshold form of `decide()`): **try** one step down only on a clean record with
+>= MIN_FIRE firings AT the current value (`recordAbove` drops withholds from an older, lower setting) and a gain of
+>= OPP_MIN_CARRIED; **raise** only when the pull-backs raising would have prevented cost more than the saving it
+gives up -- both sides measured on the same withholds (`chars`, `savedCarried`, `pulledFoot` now ride on every
+backfire-audit withhold); otherwise **keep**. A first draft raised on any single pull-back and told this machine
+to go to 12,000 over 1 re-read in 22 trims -- giving up ~2M token-reads to spare ~10k. The Read cap's pull-back
+is not measurable from transcripts (a ranged read after a cap is partly what it asks for), so its advice says
+"unmeasured", and a `missing` cap keeps its value.
+
+Grids: `shellGrid` over successful shell results under the host ceiling, a TRIMMED one sized from its ledger row
+(the transcript holds its trimmed size), excluding single-file excerpts (read path) and `noTrim` commands;
+`readGrid` over `unboundedReads`' sized rows under the shared `capReaches` floor. Steps: `READ_MAX_STEPS` is now
+the one list `report --reads` uses too. Shares are over entry + carry, the same basis as every withheld figure.
+
+On this machine: `maxChars` keep 6,000 (1 of 22 pulled back, raising gives up more than it spares);
+`readMaxBytes` try 45,000 (cap fired 7x at 60,000; one step down takes up to ~437k more token-reads).
+
+Known and left: `reach()` still uses the constant `TRIM_CHARS` (6000) and counts excerpt reads in its window,
+so `report --reach` ignores a person's own `maxChars` -- pre-existing, worth one small follow-up. Next: items 1,
+4, 5 (independent).
