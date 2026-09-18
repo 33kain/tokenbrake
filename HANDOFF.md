@@ -1123,8 +1123,12 @@ Code complete and reviewed, suite green at 692 checks (from 683).
 
 **The positioning:** README opens on `npx tokenbrake report` (no install, reads the transcripts Claude Code already
 keeps), the brake is "step two"; `package.json` description and keywords lead with the report; `help` is split
-into STEP ONE (report) and STEP TWO (the brake). NOT done: `site/` is a compiled bundle with no source here and
-its title still leads with the brake -- it needs changing wherever the site is built.
+into STEP ONE (report) and STEP TWO (the brake). `site/` was a compiled React bundle with no source here, and most of its copy
+described a product that does not exist (cargo install, a `tokenbrake run` wrapper, `tokenbrake.toml`, v1.2.0,
+"68% average reduction", "cost reporting", a "−93%" share image). On 2026-09-18 it was replaced by a hand-written
+`site/index.html` whose source is the file itself: copy drawn from the README only, report first, no percentage
+beyond the README's own benchmark figures, tokens only. The share image is rendered from `site/og-image.html` (the
+command is in that file's header).
 
 **The fix that item 1 turned out to need.** Run as a fresh user, the report told them the guard "would have
 trimmed" a `sed -n` of a source file and put 55% of that session's carried tokens in the brake's reach. Both
