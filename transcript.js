@@ -1606,8 +1606,8 @@ function thresholdAdvice(grid, current, measured, fired, opts) {
    something this session can show. Only the features the guard shadows are read, and a row whose result is not
    in this transcript is skipped (it cannot be priced). One row per result and feature, so a doubled install
    does not count twice. */
-const SHADOWED = ['blobElide', 'gitView'];
-const emptyShadow = () => ({ n: 0, withheld: 0, carried: 0, grew: 0 });
+const SHADOWED = ['blobElide', 'gitView', 'mcpTrim'];
+const emptyShadow = () => ({ n: 0, withheld: 0, carried: 0, grew: 0, hostSwapped: 0 });
 function shadowRecord(parsed, ledgerRecs) {
   const byId = new Map(parsed.results.filter((r) => r.id).map((r) => [r.id, r]));
   const out = new Map(SHADOWED.map((k) => [k, emptyShadow()]));
@@ -1627,7 +1627,14 @@ function shadowRecord(parsed, ledgerRecs) {
        collapse keeps every real-source hunk up to the hook cap. That result is evidence against the feature, so
        it is counted apart (`grew`) and never as an opportunity. */
     const tok = Math.round(((r.chars || 0) - (Number(l.kept) || 0)) / CHARS_PER_TOKEN);
-    if (tok <= 0) { e.grew++; continue; }
+    /* Two different reasons the feature's output can be larger than what entered, told apart by the trim marker.
+       Marked: the always-on trim cut it, and the feature would have kept more (a gitView collapse keeps every
+       real-source hunk) -- real growth, evidence against it. Unmarked and far smaller than what the guard saw:
+       the HOST swapped the result for a ~2 KB preview and saved the rest to a file (an oversized MCP result, a
+       shell output past the inline ceiling). The feature acts before that swap, so comparing it to the preview
+       prices nothing real -- the cost there is the later re-read of the saved file, which the read cap governs.
+       Counted apart, never as growth and never as a saving. */
+    if (tok <= 0) { if (!r.marker && (Number(l.chars) || 0) > (r.chars || 0)) e.hostSwapped++; else e.grew++; continue; }
     e.n++; e.withheld += tok; e.carried += tok * ((r.carriedTurns || 0) + 1);
   }
   return { ran, ...Object.fromEntries(out) };
@@ -1679,10 +1686,12 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     const sr = shadowRecord(p, led);
     if (sr.ran) {
       shadowSessions++;
-      for (const k of SHADOWED) for (const f of ['n', 'withheld', 'carried', 'grew']) shadowed[k][f] += sr[k][f];
+      for (const k of SHADOWED) for (const f of Object.keys(emptyShadow())) shadowed[k][f] += sr[k][f];
     }
-    if (!sr.ran) { const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried; }
-    const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
+    if (!sr.ran) {
+      const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
+      const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
+    }
     const eo = editThenRead(p); edits.n += eo.n; edits.carried += eo.carried;
     const ro = reReadOpportunity(p); reReadOpp.n += ro.n; reReadOpp.carried += ro.carried;
     if (!sr.ran) { const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried; }
@@ -1794,13 +1803,13 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const offOrShadow = (k, estimate, bound) => {
     if (!shadowSessions) return [estimate, bound];
     const s = shadowed[k];
-    return [{ n: s.n + estimate.n, carried: s.carried + estimate.carried, withheld: s.withheld, grew: s.grew,
+    return [{ n: s.n + estimate.n, carried: s.carried + estimate.carried, withheld: s.withheld, grew: s.grew, hostSwapped: s.hostSwapped,
       shadowN: s.n, estimateN: estimate.n, shadowSessions, estimateBound: bound }, estimate.n ? 'mixed' : 'shadow'];
   };
   const features = [
     feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), ...offOrShadow('blobElide', blob, 'near')),
     feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), ...offOrShadow('gitView', gitOpp, 'upper')),
-    feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp, 'near'),
+    feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), ...offOrShadow('mcpTrim', mcp, 'near')),
     feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
     feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'upper'),
     feat('readAfterEdit', 'Read-After-Edit delta', 'readAfterEdit', readMeasured(deltaFired, deltaBack), edits, 'upper'),

@@ -2946,11 +2946,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const tr = await import('./transcript.js');
   const T = tr.default || tr;
   console.log('\n-- shadow mode: evidence without a live run');
-  const runShadow = (text, cfgExtra, command) => {
+  const runShadow = (text, cfgExtra, command, mcpTool) => {
     const dir = mkdtempSync(join(tmpdir(), 'tokenbrake-shadow-'));
     if (cfgExtra) writeFileSync(join(dir, 'tokenbrake.json'), JSON.stringify(cfgExtra));
-    const input = { session_id: 'shadowses', tool_use_id: 'toolu_sh_1', tool_name: 'Bash', tool_input: { command },
-      tool_response: bashResp(text) };
+    const input = mcpTool
+      ? { session_id: 'shadowses', tool_use_id: 'toolu_sh_1', tool_name: mcpTool, tool_input: {}, tool_response: [{ type: 'text', text }] }
+      : { session_id: 'shadowses', tool_use_id: 'toolu_sh_1', tool_name: 'Bash', tool_input: { command }, tool_response: bashResp(text) };
     const r = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify(input), encoding: 'utf8',
       env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
     const lp = join(dir, 'tokenbrake', 'ledger.jsonl');
@@ -2991,6 +2992,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the shadow measures what the live feature would emit, byte for byte',
     liveBlob && liveGit && liveBlob.kept === b.shadows[0].kept && liveGit.kept === gd.shadows[0].kept,
     JSON.stringify({ blob: [liveBlob && liveBlob.kept, b.shadows[0].kept], git: [liveGit && liveGit.kept, gd.shadows[0].kept] }));
+  /* mcpTrim, the third stateless feature: the same guarantees on an MCP content-block result. */
+  const mcpText = Array.from({ length: 400 }, (_, i) => '{"sha":"' + i.toString(16).padStart(40, '0') + '","author":"dev","message":"commit ' + i + '"}').join('\n');
+  const MT = 'mcp__github__list_commits';
+  const mOn = runShadow(mcpText, null, null, MT), mOff = runShadow(mcpText, { shadow: false }, null, MT);
+  t('shadow changes nothing that enters context (mcp): output byte-identical with it on and off',
+    mOn.stdout === mOff.stdout && mOn.status === 0 && mOn.stdout === '', `${mOn.stdout.length} vs ${mOff.stdout.length}`);
+  t('and it saves nothing (mcp)', mOn.outFiles.length === 0 && mOff.shadows.length === 0, JSON.stringify(mOn.outFiles));
+  const liveMcp = runShadow(mcpText, { mcpTrim: true }, null, MT).rows.find(x => x && x.mcp);
+  t('an off mcpTrim logs what it would have withheld, byte for byte what the live trim emits',
+    mOn.shadows.length === 1 && mOn.shadows[0].feature === 'mcpTrim' && mOn.shadows[0].chars === mcpText.length
+    && !!liveMcp && liveMcp.kept === mOn.shadows[0].kept, JSON.stringify({ shadow: mOn.shadows[0], live: liveMcp && liveMcp.kept }));
+  t('a noTrim entry for the tool keeps the shadow away too, as it keeps the live trim away',
+    runShadow(mcpText, { noTrim: ['mcp__github'] }, null, MT).shadows.length === 0);
   t('a live feature is not also shadowed', runShadow(blob, { blobElide: true }, 'cat bundle.min.js | head -c 20000').shadows.length === 0);
   t('output its test rejects writes no shadow row', runShadow('line of ordinary output\n'.repeat(900), null, 'npm test').shadows.length === 0);
 
@@ -3014,7 +3028,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     sr.blobElide.n === 1 && sr.blobElide.withheld === 4900 && sr.blobElide.carried === 4900 * 5
     && sr.gitView.n === 1 && sr.gitView.withheld === 1500 && sr.gitView.carried === 1500, JSON.stringify(sr));
   t('and ignores other sessions, unknown features and results it cannot price',
-    Object.keys(sr).sort().join() === 'blobElide,gitView,ran' && !Object.prototype.hasOwnProperty.call(sr, '__proto__'));
+    Object.keys(sr).sort().join() === 'blobElide,gitView,mcpTrim,ran' && !Object.prototype.hasOwnProperty.call(sr, '__proto__'));
 
   const tp = { sessionId: 'S', file: '/w/S.jsonl', cwd: '/w', requests: [{}, {}, {}, {}, {}, {}], compactions: [],
     results: [{ id: 'a', name: 'Bash', what: 'cat x', chars: 20000, tokens: 5000, afterReq: 0, isError: false, marker: false }] };
@@ -3034,8 +3048,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('shadow and estimate are chosen per session, and a mixed total says which part is which',
     fm.bound === 'mixed' && fm.opportunity.shadowN === 1 && fm.opportunity.estimateN >= 1 && fm.opportunity.shadowSessions === 1, JSON.stringify(fm.opportunity));
   /* A gitView collapse can keep more than the trim let in; that result counts against the feature, never for it. */
-  const grew = T.shadowRecord({ sessionId: 'S', results: [{ id: 'g', chars: 6000, carriedTurns: 3 }] },
+  const grew = T.shadowRecord({ sessionId: 'S', results: [{ id: 'g', chars: 6000, marker: true, carriedTurns: 3 }] },
     [{ ev: 'shadow', session: 'S', id: 'g', feature: 'gitView', chars: 40000, kept: 9000, sh: 1 }]);
+  /* A result the HOST swapped for a preview (no trim marker, far smaller than what the guard saw) is not growth:
+     the feature acts before the swap, so its cost is not priced here at all. */
+  const swapped = T.shadowRecord({ sessionId: 'S', results: [{ id: 'm', chars: 2000, marker: false, carriedTurns: 3 }] },
+    [{ ev: 'shadow', session: 'S', id: 'm', feature: 'mcpTrim', chars: 150000, kept: 6000, sh: 1 }]);
+  t('a result the host swapped for a preview is counted apart, not as growth and not as a saving',
+    swapped.mcpTrim.hostSwapped === 1 && swapped.mcpTrim.grew === 0 && swapped.mcpTrim.n === 0, JSON.stringify(swapped.mcpTrim));
+  /* And the estimator is off in a shadowed session, so mcpTrim is not counted twice there. */
+  const mcpSess = { sessionId: 'M', file: '/w/M.jsonl', cwd: '/w', requests: [{}, {}, {}, {}], compactions: [],
+    results: [{ id: 'mm', name: 'mcp__x__y', what: 'mcp__x__y', chars: 10000, tokens: 2500, afterReq: 0, isError: false, marker: false }] };
+  const am = T.autotune([mcpSess], [{ ev: 'post', session: 'M', tool: 'mcp__x__y', chars: 10000, sh: 1 },
+    { ev: 'shadow', session: 'M', id: 'mm', tool: 'mcp__x__y', feature: 'mcpTrim', chars: 10000, kept: 6000, sh: 1 }], { mcpTrim: false });
+  const fmc = am.features.find(f => f.key === 'mcpTrim');
+  t('in a shadowed session mcpTrim is read from its shadow alone, not also from the estimator',
+    fmc.bound === 'shadow' && fmc.opportunity.n === 1 && fmc.opportunity.estimateN === 0, JSON.stringify(fmc.opportunity));
   t('a shadowed result that would grow context is counted apart, never as an opportunity',
     grew.gitView.n === 0 && grew.gitView.grew === 1 && grew.gitView.withheld === 0 && grew.ran === true, JSON.stringify(grew.gitView));
 }

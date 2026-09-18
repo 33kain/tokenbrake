@@ -1201,3 +1201,13 @@ tokens-only pass had deleted ("on-arm requests materially above off-arm: a loss"
 void") are restored; result figures stay tokens-only. A dated amendment at the end of AB-TASK.md makes the third
 condition for every future round "tokens carried not worse beyond the OFF/OFF band". This settles the first of the
 two judgement calls in the tokens-only card above; the second (mcpTrim) was settled as inconclusive in PR #78.
+
+### Shadow mode — mcpTrim added, 2026-09-18
+
+`mcpTrim` is the third shadowed feature (stateless, same pattern: one `mcpCandidate` decision shared by the live
+trim and the shadow, measured with `fitPayload`, the shadow's `kept` equal to the live one byte for byte --
+tested). New in pricing: a result Claude Code had already swapped for a ~2 KB preview (no trim marker, far smaller
+than what the guard saw -- an oversized MCP result, or shell output past the inline ceiling) goes in its own
+`hostSwapped` bucket, unpriced, never as growth: the feature acts before the swap, and the real cost there is the
+later re-read of the saved file, which the read cap governs. Marked results that would grow stay `grew`.
+Suite 711. Still not shadowed: `dedup`, `reReadElide`, `readAfterEdit` -- the per-session-state question.

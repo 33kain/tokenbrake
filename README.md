@@ -279,8 +279,8 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
 
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
 
-`shadow` (default `true`) is evidence, not behaviour: while `blobElide` or `gitView` is off, the guard still runs
-that feature's own test on each shell result and, when it would have fired, writes one ledger row with what it would
+`shadow` (default `true`) is evidence, not behaviour: while `blobElide`, `gitView` or `mcpTrim` is off, the guard still runs
+that feature's own test on each shell or MCP result and, when it would have fired, writes one ledger row with what it would
 have withheld. It emits nothing and saves nothing, so what enters context is byte-identical with it on or off.
 `tokenbrake tune` then reads those rows as an exact count of what the feature would have withheld in tokens on your
 own sessions, in place of an estimate. It still recommends at most "try": the model saw the whole output, so whether

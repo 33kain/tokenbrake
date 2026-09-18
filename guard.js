@@ -66,7 +66,7 @@ const DEFAULTS = {
   gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
   gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
-  shadow: true,          // ON by default: an off-by-default feature (blobElide, gitView) still runs its own test and logs what it WOULD have withheld (ev:'shadow'), emitting nothing -- evidence for `tune` without a live run. Changes nothing that enters context.
+  shadow: true,          // ON by default: an off-by-default feature (blobElide, gitView, mcpTrim) still runs its own test and logs what it WOULD have withheld (ev:'shadow'), emitting nothing -- evidence for `tune` without a live run. Changes nothing that enters context.
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
 };
@@ -748,7 +748,15 @@ function handlePost(input, cfg) {
      inner text length, so it shares a basis with `kept` the way the shell rows do. */
   if (isMcp) {
     const body = mcp;   // resolved once above; rec.chars is already the inner-text length
-    if (cfg.mcpTrim && !failed && body && !noTrimmed(cfg, tool, true) && body.text.length > cfg.maxChars) {
+    /* One decision for the live trim and its shadow: the same test, the same trimText, the same fitting and the
+       same saved-path note -- so a shadow row's kept is what the live branch would have emitted. The shadow's
+       whole decision runs inside shadow()'s try/catch, so nothing it does can stop the logging below. */
+    const mcpCandidate = !failed && body && !noTrimmed(cfg, tool, true) && body.text.length > cfg.maxChars;
+    if (mcpCandidate && !cfg.mcpTrim && cfg.shadow) shadow(() => {
+      const f = fitPayload(evName, (t) => body.rebuild(t), (b) => trimText(body.text, cfg, outPathFor(input), b));
+      if (f) log({ ...rec, ev: 'shadow', feature: 'mcpTrim', kept: f.body.length });   // rec.chars is already the inner-text length
+    });
+    if (mcpCandidate && cfg.mcpTrim) {
       const saved = saveOut(input, body.text);
       /* Measured like the shell trim: an MCP body is JSON, so escaping is at its worst here -- a one-line
          dense result trimmed to 6,246 characters serialized to 12,377, past the ceiling, and was dropped. */
