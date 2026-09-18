@@ -1,7 +1,7 @@
 # The A/B run: does brake 1 move the usage limit?
 
 > Since 0.2.2 the comparison table below is one command: `tokenbrake report --compare <A> <B>` on the two
-> arms' transcripts prints cost, requests, cache reads, entered, carried, trimmed and repeat reads with the
+> arms' transcripts prints requests, cache reads, entered, carried, trimmed and repeat reads with the
 > change column. The protocol on this page, one message, one config difference, the decision rule fixed
 > before the run, is what makes the table mean something.
 
@@ -115,11 +115,10 @@ persisted results.
 ## The comparison
 
 The usage page has 1% resolution; the session records carry the exact API
-usage and cost, so those are the primary numbers.
+usage in tokens, so those are the primary numbers.
 
 | | arm A, no hooks | arm B, hooks on | change |
 |---|---|---|---|
-| API cost of the session | $8.40 | $7.02 | −16% |
 | cache-read tokens | 4,617,507 | 2,723,757 | −41% |
 | cache-write tokens | 341,883 | 297,217 | −13% |
 | output tokens | 8,070 | 7,878 | −2% |
@@ -135,10 +134,10 @@ MAX_BRIEF_CHARS 1800, two minutes, 0.9.0, 239 lines, index.html, 29 matches,
 "# Brakes — handoff"); arm B named `costLine` where arm A named `weightLine`
 for step 3, both defensible readings of the same code.
 
-**Reading.** On an identical task, brake 1 cut the session's API cost by
-16%, its cache reads by 41% and its requests by 29%. The five-hour limit
+**Reading.** On an identical task, brake 1 cut the session's cache reads by
+41%, its cache writes by 13% and its requests by 29%. The five-hour limit
 moved one point less, +8 against +9: at 1% resolution that is consistent with
-the 16% and cannot be stated more finely than "about one point in nine". The
+those cuts and cannot be stated more finely than "about one point in nine". The
 weekly limits did not resolve the difference. Nothing was lost on the task:
 every answer matched.
 
@@ -152,7 +151,7 @@ carry. Six fewer requests, each one a full re-read of the context, is where
 41% of the cache reads went.
 
 **What would sharpen it.** A longer task, so the arms move the five-hour
-window by 30 points rather than 9 and a 16% difference becomes 5 points;
+window by 30 points rather than 9 and the same relative difference shows as several points rather than one;
 and the same task on Opus, where the per-token weight differs.
 
 ## Opus round — run 2026-09-06, both arms on Opus 5, effort Auto
@@ -171,7 +170,6 @@ Both arms ran on the same `main` (after #47).
 
 | session record | arm A | arm B | change |
 |---|---|---|---|
-| API cost | $5.97 | $3.77 | −37% |
 | cache-read tokens | 5,774,364 | 3,990,823 | −31% |
 | cache-write tokens | 288,833 | 157,955 | −45% |
 | output tokens | 7,891 | 7,718 | −2% |
@@ -201,15 +199,15 @@ a capped Read both point at offset/limit and Grep, and Opus followed them.
 
 | | Fable 5.1 | Opus 5 |
 |---|---|---|
-| cost, hooks off → on | $8.40 → $7.02 (−16%) | $5.97 → $3.77 (−37%) |
 | cache reads, off → on | 4.62M → 2.72M (−41%) | 5.77M → 3.99M (−31%) |
+| requests, off → on | 21 → 15 (−29%) | 31 → 28 (−10%) |
 | five-hour window, off → on | +9 → +8 | +3 → +2 |
 | answers | identical | identical |
 
-The limit moved with the cost on both, as far as 1% resolution can show. A
+The limit moved with the cache reads on both, as far as 1% resolution can show. A
 side fact worth keeping: the same task moved the five-hour window three
-times as far on Fable as on Opus while costing more in dollars too, so the
-limit weighs Fable heavily per dollar.
+times as far on Fable as on Opus while re-reading fewer cache tokens there
+(4.62M against 5.77M with hooks off), so the limit weighs Fable heavily per token.
 
 ## Debugging round — run 2026-09-06, Opus 5 both arms, both arms on the same model
 
@@ -229,7 +227,7 @@ file, and `npx tokenbrake@0.2.0 report --top=8`.
 
 Success on the task is the same for both arms: the suite green, and the diff
 touching only the five planted sites. What the comparison reads is the same as
-before: cost and cache reads from the session record, the five-hour window from
+before: tokens and cache reads from the session record, the five-hour window from
 the usage page, and the report's own numbers, plus this time the number of
 `npm test` runs, since each run is one 50 KB result carried until the end.
 
@@ -265,9 +263,9 @@ it), runs `npm test`, fixes source files under extension/ and worker/ only,
 re-runs the full suite after every change until green, and ends with
 `git diff --stat`, the config, and `npx --yes tokenbrake@0.2.0 report --top=8`.
 The answer lists each fault fixed and the number of test runs, so the arms can
-be compared on work done, not only on cost.
+be compared on work done, not only on tokens.
 
-What to read: cost and cache reads from the session records, the usage page
+What to read: tokens and cache reads from the session records, the usage page
 around each arm, the number of `npm test` runs, and whether both arms fixed
 the same five faults.
 
@@ -280,7 +278,6 @@ the same five faults.
 
 | session record | arm A | arm B | change |
 |---|---|---|---|
-| API cost | $2.76 | $2.63 | −5% |
 | cache-read tokens | 3,831,950 | 3,543,572 | −8% |
 | cache-write tokens | 58,300 | 57,065 | −2% |
 | output tokens | 10,484 | 11,481 | +10% |
@@ -292,7 +289,7 @@ the same five faults.
 | faults fixed | 5 of 5, diff empty | 5 of 5, diff empty | |
 
 Both arms fixed all five faults and restored every file byte-for-byte to
-HEAD. The 5% is within the variation between two runs of the same task; the
+HEAD. The 8% fewer cache reads and three fewer requests are within the variation between two runs of the same task; the
 guard trimmed nothing in arm B, because nothing crossed its threshold.
 
 **Why nothing crossed it.** Opus 5 in a debugging loop bounds its own reads.
@@ -304,11 +301,11 @@ on the audit task and 187k on Fable's. There was nothing for brake 1 to do.
 
 **What this says.** Brake 1 saves what the model would otherwise let in. On
 a read-heavy audit that asks for whole files, Opus let in 160k and the guard
-cut the session's cost by 37%. On a debugging task where the model chose
+cut the session's cache reads by 31% and the tool results it carried by 45%. On a debugging task where the model chose
 `tail` and `grep` on its own, it let in 10k and the guard saved nothing.
 The pre-registered expectation ("the biggest honest number") was wrong, and
 it is recorded as wrong. The honest range for Opus 5 on this repository is
-0% to 37%, set by how much output the model lets in, which `report` shows
+0% to 31% of cache reads, set by how much output the model lets in, which `report` shows
 in one line: "Tool results entered".
 
 Two side notes. In auto permission mode the classifier blocked
@@ -329,7 +326,6 @@ transcribed from a phone. Usage page: arm A 21% → 23% (+2), arm B 23% → 24%
 
 | session record | arm A, hooks off | arm B, hooks on | change |
 |---|---|---|---|
-| API cost | $1.54 | $1.16 | −24% |
 | cache-read tokens | 1,508,345 | 720,867 | −52% |
 | output tokens | 6,583 | 4,348 | −34% |
 | requests | 16 | 7 | −56% |
@@ -338,10 +334,10 @@ transcribed from a phone. Usage page: arm A 21% → 23% (+2), arm B 23% → 24%
 | `npm test` runs | 3 | 3 | |
 | faults fixed | 5 of 5, diff empty | 5 of 5, diff empty | |
 
-**The 24% is not the hook's.** The guard trimmed nothing: Fable, like Opus,
+**The 52% fewer cache reads are not the hook's.** The guard trimmed nothing: Fable, like Opus,
 never let the suite in whole (`npm test 2>&1 | tail -80`, `grep -v '^ok'`),
-and the largest result in either arm was about 1k tokens. Arm B was cheaper
-because it did the job in 7 requests instead of 16, batching the fixes from
+and the largest result in either arm was about 1k tokens. Arm B re-read less
+cache because it did the job in 7 requests instead of 16, batching the fixes from
 one read; that is run-to-run variation in how the model plans, and with
 nothing trimmed there is no mechanism by which the hook could have caused it.
 Recorded as a null result, like the Opus round. Debugging on this repository,
@@ -370,7 +366,6 @@ ranges, both fixed all five and left `git diff --stat HEAD~1` empty.
 
 | session record | arm A | arm B | change |
 |---|---|---|---|
-| API cost | $2.83 | $2.12 | −25% |
 | cache-read tokens | 2,685,151 | 1,718,544 | −36% |
 | output tokens | 14,374 | 11,101 | −23% |
 | requests | 24 | 17 | −29% |
@@ -382,8 +377,8 @@ ranges, both fixed all five and left `git diff --stat HEAD~1` empty.
 
 **Attributable to the hook: about 1%.** The guard fired for the first time on
 a debugging arm, three times, on outputs of about 2k tokens each; 18k
-token-reads not carried against 1.7M cache reads. The other 24 points of the
-cost gap are, again, the model doing the job in fewer requests (17 against
+token-reads not carried against 1.7M cache reads. The rest of the 36%
+cache-read gap is, again, the model doing the job in fewer requests (17 against
 24), which the hook cannot cause when it touched 2k tokens. Same conclusion
 as v1 and as Opus: on a debugging loop where the model bounds its own output,
 brake 1 saves next to nothing. The task flaw is closed and the result did not
@@ -429,14 +424,13 @@ both with the hooks on, the same twelve-step read-only audit of
 `worker/test.mjs` (60 KB), `extension/background.js` (59 KB) and
 `scripts/screenshots/capture.mjs` (35 KB) whole, all three in the band, and
 two of the answers it asks for sit past line 300. Decision rule, fixed before
-the run: 25,000 becomes the default only if arm B is cheaper or equal with
+the run: 25,000 becomes the default only if arm B spends fewer or equal tokens with
 identical answers. Results: `ab-results/readmax-60k.txt` on
 `claude/ab-readmax-60k` and `ab-results/readmax-25k.txt` on
 `claude/ab-readmax-25k` in `33kain/contexa`.
 
 | session record | arm A, 60000 | arm B, 25000 | change |
 |---|---|---|---|
-| API cost | $5.13 | $5.64 | +10% |
 | cache-read tokens | 4,855,785 | 6,817,176 | +40% |
 | output tokens | 13,161 | 11,857 | −10% |
 | requests | 25 | 34 | +36% |
@@ -446,14 +440,14 @@ identical answers. Results: `ab-results/readmax-60k.txt` on
 | trimmed by the guard | 1 result, ≈ 789 tokens | 1 result, ≈ 790 tokens | |
 | answers | 12 of 12 | 12 of 12, identical | |
 
-**Result: the lower trigger cost more, and 60,000 stays.** The same tokens
+**Result: the lower trigger spent more tokens, and 60,000 stays.** The same tokens
 entered on both arms, 91k against 92k, because the task asks for whole files
 and the model reads whatever the cap withholds in further bounded reads: in
 both arms `content.js` (112 KB, capped either way) went in as six or seven
 chunks of 4–6k tokens. Lowering the trigger added the same chunking to
 `background.js`, `worker/test.mjs` and `capture.mjs`, and each extra read is an
 extra request that re-reads the whole context: 34 requests against 25, 1.5M
-token-reads carried against 912k, 40% more cache reads, 10% more cost. The
+token-reads carried against 912k, 40% more cache reads. The
 cap saves tokens only when the model does not come back for the rest, which
 is the behaviour change the audit A/B credited it with, and which a task that
 says "read in full" forbids by construction.
@@ -477,12 +471,12 @@ them** — 180 rows, no paid session
 ([tokenbrake-bench](https://github.com/33kain/tokenbrake-bench), `results/DEVIATIONS.md`).
 The column that matters is the last one: bytes withheld and answer withheld are
 different numbers, and reading them as one is what made lowering the trigger look
-like a saving before the A/B and a 10% loss after it.
+like a saving before the A/B and a loss after it (40% more cache reads).
 
 ## The Read cap's trigger — pre-registered 2026-09-12, before the numbers
 
 `readMaxBytes` decides *which* reads get capped. The record against moving it: the 2026-09-07 A/B lowering it
-to 25,000 cost **+10%**, 34 requests against 25 — on a task that said "read in full". The record for moving it:
+to 25,000 read **+40%** cache tokens, 34 requests against 25 — on a task that said "read in full". The record for moving it:
 in a real 40-request audit the six unbounded reads ran 1, 8, 15, 16, 31 and 34 KB, **none reached 60,000**, and
 the two largest carried half the Read total. And as of today, the source-file cap has fired **zero** times on
 real work, so at 60,000 the trigger catches nothing this owner does.
@@ -599,7 +593,7 @@ So the shape question is not "absolute or fractional" but **"is one number the r
 neither this rule nor its data was built to answer. Any next attempt needs its own pre-registration, and the
 statistic should be the decision-relevant one rather than a spread: for each candidate of each shape, the miss
 rate against the median withholding, and then which shape's frontier dominates. That comparison is exact
-arithmetic over these same 45 reads and costs nothing -- but it must be written down before it is computed.
+arithmetic over these same 45 reads and needs no new session -- but it must be written down before it is computed.
 
 ## `readMaxBytes` has a floor, and it is `maxChars` — found 2026-09-13
 
@@ -627,11 +621,12 @@ the floor unconditionally -- with the default triggers all above 6,000 no row is
 about a low trigger would otherwise never be told.
 
 **The measurement that produced it, n=1 and labelled as such.** One session, 1,479 requests over four days,
-$416.36 at list price, 58M carried token-reads. Five whole-file reads, **all** shell `cat`s: 6,557 / 2,220 /
+58M carried token-reads. Five whole-file reads, **all** shell `cat`s: 6,557 / 2,220 /
 1,508 / 257 / 59 chars. At trigger 2,000 with cap 30 exactly one is affected -- `cat LANDSCAPE.md`, 84 lines,
 carried 871,948 token-reads across 532 requests -- and it withholds **60.6%**, not the 64.3% that `30/84` gives,
-because the model receives the guard's own 239-character note in place of the text. That is ~528k carried
-token-reads, **~$0.26**, against the $0.57 the trim actually saved in the same session. The other four reads are
+because the model receives the guard's own 239-character note in place of the text. That is **~528k carried
+token-reads**, against what the trim actually saved in the same session (that comparison was recorded in cost
+only; not restated here — tokens-only record). The other four reads are
 under `maxChars` and never reach the cap at any trigger.
 
 **What it does not license.** No default moves on one session, and nothing on this page changes its numbers: with
@@ -646,7 +641,7 @@ The spread rule licensed nothing and named the reason it could not: a coefficien
 concentrated a distribution is, which is only a proxy for what actually matters — whether **one number of that
 shape** can keep the model's targets without withholding so little that the cap does nothing. This is the
 decision-relevant comparison, over the same 45 reads whose file length is known exactly. It is arithmetic and
-costs nothing. Written down first because the thresholds are the whole argument.
+needs no new session. Written down first because the thresholds are the whole argument.
 
 **The two shapes.** An **absolute** cap delivers the first `L` lines whatever the file's length — so it
 withholds most of a long file and nothing at all from a short one. A **fractional** cap delivers the first
@@ -780,12 +775,13 @@ honest shipping decision is the capability plus the measurement, not a new defau
 files. Shipping 0.6 for everyone would repeat, in a new place, the thing that put an unargued 60,000 and an
 unargued 300 in the defaults in the first place.
 
-### Step C — the A/B, and the reason it cannot be a cost A/B
+### Step C — the A/B, and the reason it cannot be a session-total A/B
 
 **The obstacle, stated before choosing an endpoint.** The Read cap has never fired on the owner's real work in
 any session where the guard was running, so his own workload cannot test this at all. The benchmark can trip
-it, but round 1 measured its OFF/OFF control band at **±30.3% on cost** — a band far too wide to resolve an
-18-point difference in withholding. **A cost endpoint cannot answer this question at any affordable number of
+it, but round 1 measured its OFF/OFF control band as a band far too wide to resolve an 18-point difference in
+withholding (that band was recorded on cost only; the figure is not restated here — tokens-only record).
+**A session-total endpoint cannot answer this question at any affordable number of
 sessions, and pretending otherwise is how the 2026-09-07 trigger A/B produced a number nobody can use.**
 
 So the endpoints are the two that are not swamped by that band:
@@ -800,12 +796,12 @@ So the endpoints are the two that are not swamped by that band:
    every ON arm making more recovery reads than its OFF arm, which is the failure mode this endpoint exists to
    catch.
 
-Cost and tokens are recorded from every run, as always, and **may not be quoted as a result** — the band
+Session token totals are recorded from every run, as always, and **may not be quoted as a result** — the band
 forbids it. They are there to notice a disaster, not to declare a win.
 
 ### What would make me abandon this entirely
 
-- Step A reverses or ties. Most likely outcome, and it costs nothing to find out.
+- Step A reverses or ties. Most likely outcome, and it needs no session to find out.
 - The sweep shows the fractional cap hiding decisive lines more often at equal withholding.
 - The recovery-read kill condition fires.
 - A fourth hole turns up in this rule before it runs. Three rules today have had one, all three in the
@@ -860,7 +856,7 @@ sample of "an agent with decent tools" than anything a fixture can stage, and it
 A new `report --reach`, pooled across sessions with the same workload filter the other views use. Of every
 tool result, the share that sits where the trim can act at all: shell, exit 0, over `maxChars`, under Claude
 Code's inline ceiling. Reported by count and — the column that matters — **by share of carried tokens**, since
-ab10 established that a result's cost is size times the later requests that re-read it.
+ab10 established that a result's carried tokens are its size times the later requests that re-read it.
 
 Alongside it, the commands that produced those results, grouped by the program invoked. That is what turns a
 number into an answer about tooling: if the trim's reach comes from three commands and all three are dumps
@@ -1025,7 +1021,7 @@ and 88%, the cut roughly halves while the miss rate falls from 56% to 20%.
 
 **So: 800, and it changes nothing today.** The knob is inert on this workload, which is why the choice is
 free — and why it is a prerequisite rather than an improvement. It matters only if `readMaxBytes` ever comes
-down, and 56% past line 300 is exactly why the 2026-09-07 attempt to bring it down cost +10%.
+down, and 56% past line 300 is exactly why the 2026-09-07 attempt to bring it down read +40% cache tokens.
 
 **Unchecked, and it stays on the record.** One session contributes 29 of the 111 reads, 27% of the pool. No
 jackknife was run. The decision is insensitive to it today because the cap does not fire on real work at all;
@@ -1037,7 +1033,7 @@ by retuning it, so 800 is held and goes in **in the same step** as any move on `
 only thing that would make it fire. Deciding it now rather than then is the point — the value is fixed by a
 rule written before the numbers, so a future trigger change cannot quietly pick its own limit to look good.
 
-The cost of holding, stated so it is not a surprise: until then, an unbounded read of a file over 60 KB still
+The downside of holding, stated so it is not a surprise: until then, an unbounded read of a file over 60 KB still
 gets 300 lines, with a 56% chance on this workload that the model has to come back for the part it wanted.
 That is one return trip on a rare event, against a default change whose blast radius includes the
 shell-excerpt path (`readLimitLines` is also what caps a `cat`/`sed`/`grep` of a large file, guard.js:292)
@@ -1064,7 +1060,6 @@ B wrote `{"enabled": true}` and ran from main.
 
 | session record | arm A, hooks off | arm B, hooks on | change | first arm A, hooks on (voided) |
 |---|---|---|---|---|
-| API cost | $2.45 | $2.38 | −3% | $2.89 |
 | cache-read tokens | 2,614,181 | 2,713,808 | +4% | 3,435,844 |
 | output tokens | 16,022 | 13,902 | −13% | 18,071 |
 | requests | 24 | 23 | | 30 |
@@ -1077,9 +1072,9 @@ B wrote `{"enabled": true}` and ran from main.
 
 All three trees pass `npm test` and `node build.mjs` when checked out clean.
 
-**Result: a null, and the noise is now measured.** Cost −3%, cache reads
-+4%. The two hooks-on runs of the identical task, arm B and the voided arm A,
-came out 21% apart in cost and 27% in cache reads on nothing but how the
+**Result: a null, and the noise is now measured.** Cache reads +4%, one
+request fewer. The two hooks-on runs of the identical task, arm B and the voided arm A,
+came out 27% apart in cache reads on nothing but how the
 model planned (23 against 30 requests), so anything inside that band is not
 the hook. The mechanism is the one from the debugging round: the model
 bounded its own reads (`sed -n`, `grep -n`, `wc -l`, then ranges), and its
@@ -1089,7 +1084,7 @@ where the −28% in carried tool results comes from, 63k token-reads against
 2.3M processed: real, mechanical, and 3% of the session.
 
 So three shapes are measured now. Read-heavy audit that asks for whole files:
-−16% on Fable 5.1, −37% on Opus 5. Debugging loop: ≈ 0%. A small feature:
+−41% cache reads on Fable 5.1, −31% on Opus 5. Debugging loop: ≈ 0%. A small feature:
 ≈ 0%, inside the noise. The hook saves what the model would otherwise let in,
 and on two of three shapes Opus lets little in. The `ab-results/real/`
 files in `33kain/contexa` will say which shape ordinary sessions on that
@@ -1125,8 +1120,8 @@ ced42a1a  /home/user/contexa  486 requests, 534 results
 Four reads out of 534 results carried a quarter of the session. They sit at
 30–65 KB, so the 60,000 trigger catches one of three, and the readMaxBytes
 A/B above showed why the trigger cannot simply be lowered: it cuts source
-files the model has to read whole, and the return trips cost more than the
-cap saves.
+files the model has to read whole, and the return trips re-read more tokens
+than the cap saves.
 
 The rule in 0.2.1 is narrower than a threshold. An unbounded Read of a file
 under `tool-results/` or `tokenbrake/out/` is capped at `persistedLimitLines`
@@ -1154,7 +1149,6 @@ reason is the finding.
 
 | | v2 A, ctx 0 | v2 B, ctx 3 | v3 A, ctx 0 | v3 B, ctx 3 |
 |---|---|---|---|---|
-| API cost | $2.62 | $1.73 | $2.91 | $4.55 |
 | requests | 16 | 18 | 30 | 50 |
 | `npm test` runs | 3 | 3 | 5 | 5 |
 | faults fixed | 5 of 5 | 5 of 5 | 5 of 5 | 5 of 5 |
@@ -1192,7 +1186,7 @@ the middle elided to about 7,500, and nothing a PostToolUseFailure hook returns 
 route left is a PreToolUse rewrite of the command so that it never exits non-zero from Claude Code's
 point of view, with the exit code printed as the last line and the trim then applied under PostToolUse.
 That is what rtk does to every command, and the JetBrains benchmark is the record of what rewriting
-commands costs when it goes wrong: compound commands, heredocs, background jobs, `set -e`, the exit code
+commands loses when it goes wrong: compound commands, heredocs, background jobs, `set -e`, the exit code
 the model no longer sees as an error. Not a default. It could be an opt-in for suites known to be safe,
 measured with this protocol before anyone relies on it.
 
@@ -1210,8 +1204,8 @@ two-line reproduction in `PROBE.md`'s history on this repository's `claude/post-
 
 `npx tokenbrake@0.2.2 init` and `status` on Windows 10, PowerShell: three hooks installed, three spawn tests
 passed, with the node path carrying a space (`C:\Program Files\nodejs\node.exe`). `report` found the
-transcript under `C:\Users\<user>\.claude\projects\C--Users-<user>-Desktop-contexa\` and priced the
-session. Nothing platform-specific failed. The oldest open item on this page is closed.
+transcript under `C:\Users\<user>\.claude\projects\C--Users-<user>-Desktop-contexa\` and read the
+session's usage. Nothing platform-specific failed. The oldest open item on this page is closed.
 
 The run also produced two findings, one of them a fault in the report:
 
@@ -1226,19 +1220,19 @@ The run also produced two findings, one of them a fault in the report:
   reports run before this correction; their "trimmed" counts were small results under the ceiling in every
   case listed, and the failing runs were already marked untrimmed.
 - The ledger held two identical rows 16 ms apart for the one call: the repository has project-scope hooks
-  and the user had just installed user scope too, so the guard ran twice. Harmless, doubled spawn cost;
+  and the user had just installed user scope too, so the guard ran twice. Harmless, doubled spawns;
   `status` now says so.
 
 ## Three arms: off, rtk, tokenbrake — run 2026-09-09, Opus 5, Claude Code 2.1.266
 
 The head-to-head the launch post wanted: the same twelve-step audit, three Cowork sessions from the same
 commit of `33kain/contexa`, differing only in what sat in front of the tools. One message each. The
-expectations were written down before the run: rtk reduces output and stays within the 21% noise on the
-bill; tokenbrake around −30% on this shape, where it had measured −37% and −16% before.
+expectations were written down before the run: rtk reduces output and stays within the run-to-run noise;
+tokenbrake a clear saving on this shape (that expectation was written as a cost figure; not restated here —
+tokens-only record), where it had measured −31% (Opus 5) and −41% (Fable 5.1) cache reads before.
 
-| | off | rtk | tokenbrake 0.2.2 |
+| | off | rtk (void) | tokenbrake 0.2.2 |
 |---|---|---|---|
-| API cost | $4.82 | $5.34 (void) | **$9.63** |
 | requests | 24 | 33 | **91** |
 | cache-read tokens | 4,551,872 | 6,553,719 | 14,929,639 |
 | output tokens | 8,126 | 11,328 | 16,289 |
@@ -1252,24 +1246,24 @@ bill; tokenbrake around −30% on this shape, where it had measured −37% and �
 **The rtk arm is void.** The permission classifier refused `curl … | sh`, and refused `sh /tmp/rtk-install.sh`
 after the session had fetched the script; no binary, no hook. In a Cowork auto-mode container rtk cannot be
 installed by the session, so a cloud head-to-head is not available with this protocol. The arm ran on
-without any hook and is a second no-hook reading: $5.34 against $4.82, 33 requests against 24, the model
+without any hook and is a second no-hook reading: 6.55M cache reads against 4.55M, 33 requests against 24, the model
 this time reading files as large `sed -n` ranges instead of whole Reads. The rtk comparison, if it happens,
 happens on a machine where rtk is already installed.
 
-**The tokenbrake arm cost twice the off arm, and the mechanism is the one JetBrains described for rtk.**
+**The tokenbrake arm read 3.3 times the off arm's cache tokens, and the mechanism is the one JetBrains described for rtk.**
 The model never used Read. It read the files with `sed -n`, and after its first excerpt,
 `sed -n '1,120p' extension/content.js`, was trimmed (2k tokens to 1k), every excerpt that followed was 80
 lines: `120,200p`, `200,280p`, `280,360p`, on through all of `content.js`, `index.js`, `background.js`,
 `test.mjs` and `capture.mjs`. Eighty lines of this source is about 5,000 characters, under the 6,000 the
 trim fires at. The model learned the threshold from one trimmed result and sized every read to stay under
 it: 68 same-shape reads, 91 requests, each one re-reading the whole context, 14.9M cache reads against 4.6M.
-Same answers, twice the bill.
+Same answers, 3.3 times the cache reads.
 
-Two earlier hooks-on runs of this shape did not do this: 2026-09-06, Opus 5, $3.77 with bounded Reads and
-Grep; 2026-09-07, the readMaxBytes arm A, $5.13, 25 requests, `content.js` in six Read chunks of 300 lines.
-So the hooks-on range on this one shape is now $3.77 to $9.63 with the off arm at $4.82 to $5.97, and the
-model's reading strategy, not the hook, decides which. The −37% in the README is one of three runs, and the
-post has to say so.
+Two earlier hooks-on runs of this shape did not do this: 2026-09-06, Opus 5, 3.99M cache reads and 28 requests
+with bounded Reads and Grep; 2026-09-07, the readMaxBytes arm A, 4.86M cache reads, 25 requests, `content.js`
+in six Read chunks of 300 lines. So the hooks-on range on this one shape is now 3.99M to 14.9M cache reads with
+the off arm at 4.55M to 5.77M, and the model's reading strategy, not the hook, decides which. The README's Opus
+saving is one of three runs, and the post has to say so.
 
 **What the run points at.** The trim treats every shell result the same, and a `sed -n` excerpt of a source
 file is not test noise: it is a read, the same act as the Read tool, which the guard leaves whole up to
@@ -1281,18 +1275,17 @@ three things to keep. A model that meets that once has every reason to stay unde
 `transcript.js` already recognises the shape. That is a guard change and gets the same A/B as everything
 else before it ships: off against on, this task, two arms, the `requests` column deciding.
 
-Until that runs, the honest sentence about this shape is: on a read-heavy audit the hook has saved 37%,
-16%, and cost 100%, on the same task, depending on how the model chose to read.
+Until that runs, the honest sentence about this shape is: on a read-heavy audit the hook has cut cache reads
+by 31% and 41%, and more than tripled them, on the same task, depending on how the model chose to read.
 
 ### The fix, measured — ab4, 2026-09-09, Opus 5, Claude Code 2.1.266
 
 Same audit, same commit of `33kain/contexa`, off against the "file excerpts are reads" guard. Decision rule
 written before the run: the fix ships as a win only if the on arm's requests are at or below the off arm's
-and cost is not worse.
+and the session total is not worse (written against cost at the time; tokens-only record).
 
 | | off | on (fix) | change | for comparison: on (0.2.2, ab3) |
 |---|---|---|---|---|
-| API cost | $4.60 | $5.99 | +30% | $9.63 |
 | requests | 32 | 45 | +41% | 91 |
 | cache-read tokens | 5,367,982 | 8,011,611 | +49% | 14,929,639 |
 | output tokens | 8,359 | 11,241 | | 16,289 |
@@ -1307,31 +1300,31 @@ about 6k tokens, each passed through untouched, where 0.2.2's arm had read it in
 five results the guard did trim were `npm test`, the build, `git log --stat` and two greps: the outputs the
 trim is for. Requests fell from 91 to 45.
 
-**What it did not do.** The on arm still ran 45 requests against the off arm's 32, and cost 30% more. The
+**What it did not do.** The on arm still ran 45 requests against the off arm's 32, and read 49% more cache tokens. The
 extra requests are more and smaller ranges on `index.js` and `background.js` (`150,270p`, `480,700p`),
 which is how this model read those files this time; the off arm read them in 330-line ranges. That
 difference is inside how the model plans, and it was there in the two no-hook arms of ab3 as well (24
 against 33 requests), but the rule was the rule: by it, the fix is not a win.
 
 **What ships anyway, and why.** The choice for the guard is not "fix or off"; a guard that does nothing to
-excerpts is the fix. The choice is "fix or 0.2.2", and on this task 0.2.2 cost twice the off arm while the
-fix cost 1.3 times. The change also only ever does less than before: it leaves excerpts alone. So it ships
+excerpts is the fix. The choice is "fix or 0.2.2", and on this task 0.2.2 read 3.3 times its off arm's cache
+tokens (ab3) while the fix read 1.5 times (ab4). The change also only ever does less than before: it leaves excerpts alone. So it ships
 as 0.2.3, with this table beside it, and without the word "win".
 
 **The honest state of the audit shape on Opus 5.** Every run of it, hooks off and on, this repository:
 
-| date | guard | hooks off | hooks on | on / off |
+| date | guard | cache reads, hooks off | cache reads, hooks on | on / off |
 |---|---|---|---|---|
-| 2026-09-06 | 0.2.0 | $5.97 | $3.77 | 0.63 |
-| 2026-09-07 | 0.2.1, readMaxBytes 60000 arm | — | $5.13 | — |
-| 2026-09-09 ab3 | 0.2.2 | $4.82 (and $5.34 on the void rtk arm, also no hooks) | $9.63 | 2.00 |
-| 2026-09-09 ab4 | excerpts-are-reads | $4.60 | $5.99 | 1.30 |
+| 2026-09-06 | 0.2.0 | 5,774,364 | 3,990,823 | 0.69 |
+| 2026-09-07 | 0.2.1, readMaxBytes 60000 arm | — | 4,855,785 | — |
+| 2026-09-09 ab3 | 0.2.2 | 4,551,872 (and 6,553,719 on the void rtk arm, also no hooks) | 14,929,639 | 3.28 |
+| 2026-09-09 ab4 | excerpts-are-reads | 5,367,982 | 8,011,611 | 1.49 |
 
-Four no-hook readings between $4.60 and $5.97; four hooks-on readings between $3.77 and $9.63. The −37%
-in the README is the best of four, not the number. On Opus 5, on this task, the hook has not shown a
+Four no-hook readings between 4.55M and 6.55M cache reads; four hooks-on readings between 3.99M and 14.9M. The
+README's Opus saving is the best of four, not the number. On Opus 5, on this task, the hook has not shown a
 saving that survives repetition; what survives is that the model's reading strategy, whole files against
-ranges against small ranges, moves the bill by a factor of two, and the guard's job is not to push it
-toward the small ranges. The Fable 5.1 reading (−16%, one run) is unrepeated and gets its rerun with this
+ranges against small ranges, moves the cache reads by a factor of three, and the guard's job is not to push it
+toward the small ranges. The Fable 5.1 reading (−41% cache reads, one run) is unrepeated and gets its rerun with this
 guard (HANDOFF.md, "Next session", step 1).
 
 The rtk comparison stays out of reach in the cloud and moves to the owner's machine, where it now has a
@@ -1368,9 +1361,9 @@ every run so far the file has not existed, and "No such file or directory" is th
 
 ## The audit on Fable 5.1 with the excerpt guard — ab5, written 2026-09-09, before the run
 
-The one unrepeated reading in the README is Fable 5.1's −16% on this shape, measured 2026-09-06 against
-guard 0.2.0 — the guard that has since been shown to teach Opus eighty-line `sed` ranges and cost twice the
-no-hook bill (ab3), and that 0.2.3 replaced. So the Fable figure was measured with a guard nobody would
+The one unrepeated reading in the README is Fable 5.1's −41% cache reads on this shape, measured 2026-09-06
+against guard 0.2.0 — the guard that has since been shown to teach Opus eighty-line `sed` ranges and read 3.3
+times the no-hook arm's cache tokens (ab3), and that 0.2.3 replaced. So the Fable figure was measured with a guard nobody would
 ship today, and it is the number the launch post would lead with. This round re-measures it against the
 guard that actually ships.
 
@@ -1382,25 +1375,26 @@ repin (`claude/tokenbrake-0.2.3`); the trees are identical but for `.claude/sett
 
 **One difference from ab4 to keep in view.** Step 12 runs the 0.2.3 report, which credits a trim only when
 the model saw it; ab3 and ab4 ran the 0.2.2 report, which credited every offered trim. So ab5's
-"tokens kept out" is comparable to nothing before it, and is the more honest of the two. Cost, requests
+"tokens kept out" is comparable to nothing before it, and is the more honest of the two. Requests
 and cache reads come from `get_session` either way and are unaffected.
 
 **Expectation, fixed before the run.** The on arm's requests at or below the off arm's. The reasoning: on
 this task the guard's only remaining action on the large source files is nothing at all — 0.2.3 leaves a
 `sed -n '1,400p'` untouched up to `readMaxBytes` — so what it trims is `npm test`, the build, `git log
 --stat` and the greps, none of which the model needs to come back for. If it still drives requests up, the
-mechanism is the same return-trip effect that cost rtk 7.6% at JetBrains, arriving through some door this
+mechanism is the same return-trip effect JetBrains measured against rtk, arriving through some door this
 guard was not supposed to leave open, and that is worth knowing on a second model.
 
 **Decision rule, fixed before the run.** Nothing ships or unships on this run; 0.2.3 is already released.
 What the run decides is what the README and the post may say about Fable:
 
-- On-arm requests at or below off-arm, and cost not worse than the off arm by more than the 21% noise
-  band: the −16% survives its guard change, and the README keeps a Fable saving, stated as two runs on
-  two guards.
-- On-arm requests above off-arm: the −16% does not survive, and the README's Fable line gets the same
+- On-arm requests at or below off-arm, and the session total not worse than the off arm by more than the
+  noise band two identical arms have produced (this clause was written in cost; not restated here —
+  tokens-only record): the 2026-09-06 Fable saving survives its guard change, and the README keeps a Fable
+  saving, stated as two runs on two guards.
+- On-arm requests above off-arm: the 2026-09-06 Fable saving does not survive, and the README's Fable line gets the same
   treatment the Opus line already got — the best of N runs, not the number — with both readings printed.
-- Cost apart by less than 21% with requests level: a null, recorded as one, and the Fable claim comes out
+- Session totals inside the noise band with requests level: a null, recorded as one, and the Fable claim comes out
   of the README's headline and stays only in this file.
 
 Answers must be identical across the arms in every case; a difference there voids the round.
@@ -1408,12 +1402,11 @@ Answers must be identical across the arms in every case; a difference there void
 ### The result — ab5, run 2026-09-09, Fable 5.1 both arms, Claude Code 2.1.266
 
 Sessions `da261739…` (off) and `80c5d8cf…` (on), from `claude/ab5-off` and `claude/ab5-tb`, trees identical
-but for `.claude/settings.json`. Cost, cache and output from the session records; requests, entered,
+but for `.claude/settings.json`. Cache and output from the session records; requests, entered,
 carried and trimmed from each arm's own step-12 report, both taken at the same point in the protocol.
 
 | | off | on (0.2.3) | change |
 |---|---|---|---|
-| API cost | $6.4787 | $5.5331 | **−14.6%** |
 | requests | 26 | 29 | **+12%** |
 | cache-read tokens | 4,739,441 | 5,345,262 | +13% |
 | cache-write tokens | 243,059 | 187,626 | −23% |
@@ -1424,23 +1417,22 @@ carried and trimmed from each arm's own step-12 report, both taken at the same p
 | trimmed by the guard | 0 | 1 applied (≈ 6k kept out), 1 offered and not applied | |
 | answers | 12 of 12 | 12 of 12, identical | |
 
-**By the rule written before the run, the −16% does not survive.** The on arm ran more requests than the
-off arm, which was the branch that says so. The cost did fall 14.6%, but 14.6% is inside the 21% band two
-identical arms have already produced on this page, so it is not a saving either. Two runs on Fable, on two
-guards, one −16% and one −14.6%-inside-noise with requests up: the honest reading is a null, and the
+**By the rule written before the run, the 2026-09-06 Fable saving does not survive.** The on arm ran more
+requests than the off arm, which was the branch that says so. Cache writes did fall 23%, but cache reads rose
+13% and carried tool results 7%, all inside the band two identical arms have already produced on this page
+(27% apart in cache reads), so it is not a saving either. Two runs on Fable, on two guards, one −41% cache
+reads and one inside-noise with requests up: the honest reading is a null, and the
 README's Fable line loses its headline the same way the Opus line did. What can still be said is what the
 answers say — 12 of 12 identical, on both arms, on both models, in every round so far.
 
-**What the arms actually spent their money on, and it is not what Opus spent it on.** On Fable 5.1 the
-list rates are $0.25 per million cache reads and $20 per million cache writes, an eighty-fold gap; on
-Opus 5 it is $0.50 against $10, twenty-fold. So on this round cache *writes* were 75% of the off arm's
-bill and 68% of the on arm's, while cache reads were 18% and 24%. The guard's effect on the bill ran
-through the write column: 243k written against 188k, −23%, worth about $1.11 of the $0.95 the arm saved
-in total — the read column moved the other way and gave part of it back. Every earlier round on this page
+**Where the arms' tokens went, and it is not where Opus's went.** On Fable 5.1 a cache write weighs far
+more against a cache read than it does on Opus 5 (that comparison was recorded in prices, and the round's
+column shares in cost; neither is restated here — tokens-only record), so the write column matters more on
+this model. The guard's effect ran through the write column: 243k written against 188k, −23% — and the read
+column moved the other way, 4.74M against 5.35M, +13%. Every earlier round on this page
 is an Opus round, where cache reads dominate and the guard's lever is the carry multiplier. On Fable the
 lever is how much *new* text enters at all, which is closer to what the whole category claims to do, and
-it still did not clear the noise band. The cost formula in `transcript.js` reproduces both arms' records
-exactly ($6.478700 and $5.533075 against $6.47870025 and $5.5330755), so the split is the API's, not an
+it still did not clear the noise band. The column figures are the API's own session records, not an
 estimate.
 
 **A mechanism the round did make visible.** With no hooks, the off arm read the five large source files
@@ -1462,8 +1454,8 @@ files and both cosmetic:
   `tool-results/<id>.txt` that says what kind of file it is. The off arm's report is therefore readable
   only by someone who already knows the path shape. Worth eliding the middle rather than the tail before
   Saturday's table is built from these files.
-- Each arm's report was run at step 12 and so priced the session as it stood then: $6.13 and $5.13 against
-  the $6.4787 and $5.5331 the records ended at. The gap is the file write, commit and push that follow,
+- Each arm's report was run at step 12 and so measured the session as it stood then, short of where the
+  records ended (that gap was recorded in cost only; not restated here — tokens-only record). The gap is the file write, commit and push that follow,
   the same on both arms. The report has always been a snapshot of the session that runs it; the
   `ab-results/real/` files inherit that and the Saturday table should say so.
 
@@ -1472,12 +1464,13 @@ prove the arm carried no user-scope hooks. On both arms the permission classifie
 both arms fell back to `ls` and to the Read tool, which agreed the file does not exist. The step did its
 job, but by accident and not identically on the two arms, and a step whose command is refused is a step
 that measures the classifier. Replace it with `ls -la ~/.claude/` for the Sonnet round, which is not
-refused, answers the same question, and costs the same one call.
+refused, answers the same question, and takes the same one call.
 
 ## The audit on Sonnet 5 — ab6, written 2026-09-09, before the run
 
 Sonnet 5 is the model JetBrains ran their 425 trials of rtk on, and the only model in this space with an
-independent billing-based number attached to it (+7.6% at low effort, flat at high). Everything on this
+independent measured number attached to it (worse at low effort, flat at high; recorded as a billing
+figure, not restated here — tokens-only record). Everything on this
 page is Opus 5 or Fable 5.1. So this is the first reading on the one model where somebody else's result
 exists to be read next to it, and that is the whole reason to spend the round.
 
@@ -1490,25 +1483,27 @@ Sonnet 5 both arms, one message each, branches `claude/ab6-off` and `claude/ab6-
 configuration. It answers the same question — no user-scope settings file — in the same one call, and both
 arms get it.
 
-**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within two or three of
+**Expectation, fixed before the run.** A null: session totals inside the noise band, requests within two or three of
 each other, answers identical. The reasoning is the two rounds already on this page. Neither Opus 5 nor
 Fable 5.1 produced a saving that survived being run a second time, on the one workload shape where the
 guard has anything to trim at all, and there is no mechanism yet identified that would make Sonnet
-different in kind. Sonnet 5's list rates put cache writes at twenty times its reads, the Opus ratio rather
-than Fable's eighty, so if the round behaves like anything it should behave like the Opus rounds, where the
-bill sits in the cache-read column and out of a hook's reach.
+different in kind. Sonnet 5 weighs cache writes against reads the way Opus does rather than the way Fable
+does, so if the round behaves like anything it should behave like the Opus rounds, where the session's
+weight sits in the cache-read column and out of a hook's reach.
 
 **Decision rule, fixed before the run.** This round settles what the post may say about Sonnet, and only
 that; nothing ships or unships on it.
 
-- Requests level (within three either way) and cost inside 21%: the expected null. The post gets a Sonnet
-  row reading "no measurable difference", and the JetBrains comparison is stated as what it is — their
-  tool cost 7.6% on this model, this one did nothing measurable on it, and neither is a saving.
-- On-arm requests materially below off-arm (four or more) with cost not worse: the first result on this
+- Requests level (within three either way) and session totals inside the noise band: the expected null.
+  The post gets a Sonnet row reading "no measurable difference", and the JetBrains comparison is stated as
+  what it is — their tool measured worse on this model, this one did nothing measurable on it, and neither
+  is a saving.
+- On-arm requests materially below off-arm (four or more) with the session not worse on the rule's third
+  condition (written in cost; not restated here — tokens-only record): the first result on this
   page that would survive the requests rule, and it gets a second run before it is written anywhere
   outside this file. One run does not become a claim.
-- On-arm requests materially above off-arm: a loss, recorded as one, and the post says the hook has cost
-  money on three of three models.
+- On-arm requests materially above off-arm: a loss, recorded as one, and the post says the hook has made
+  sessions heavier on three of three models.
 
 Answers must be identical across the arms; a difference voids the round. If either arm's step 11 is
 refused again, the round still stands — the question it asks is answered by the fallback — but the step
@@ -1519,7 +1514,7 @@ gets replaced properly before any further round rather than patched a second tim
 Run 2026-09-09, Sonnet 5 both arms. Neither arm ran a single step. Both read the task as an attack and
 stopped: the off arm's status line was "prompt appears to contain exfiltration attempt; halting", the on
 arm's "suspicious task request; pausing before execution", and each asked whether the human had really
-sent it. $0.31 and $0.29 spent, nothing measured, both arms void.
+sent it. Nothing measured, both arms void (what they spent was recorded in cost only; not restated here).
 
 **They were right, and the step they objected to was the one added an hour earlier.** ab5 found that the
 permission classifier refused step 11's `cat ~/.claude/settings.json`, so for this round it became
@@ -1542,7 +1537,7 @@ the step's real question directly instead of inferring it from the absence of a 
 outside the tool's own installation, and it is one small Bash call on both arms, as the step always was.
 Step 11 becomes that, and stays that.
 
-**What this costs the record, said plainly.** Step 11 has now been three different commands across three
+**What this does to the record, said plainly.** Step 11 has now been three different commands across three
 rounds: `cat ~/.claude/settings.json` in ab3 and ab4, the same refused-and-worked-around in ab5, and
 `status` from ab6 on. Cross-round comparison of the audit was already imperfect on this step, since no
 round has executed it as written. It is one call of a few hundred characters out of a 26-to-45-request
@@ -1551,8 +1546,8 @@ worth less than one that prints it.
 
 **The methodology finding, which outlives this round.** A benchmark task that reads the user's
 configuration directory is not model-portable. It passes on one model, is refused by the permission layer
-on another, and is refused by the model itself on a third — and the third refusal costs a whole round.
-Anyone A/B-testing agent tooling on the bill will write a task like this, because proving the control arm
+on another, and is refused by the model itself on a third — and the third refusal wastes a whole round.
+Anyone A/B-testing agent tooling on session totals will write a task like this, because proving the control arm
 really is a control arm is the first thing the protocol asks for. Prove it with the tool's own status
 command, or by the branch the arm was cut from, and never by having the agent read and publish the
 environment. This goes in `LANDSCAPE.md` next to the other things measuring this category teaches.
@@ -1576,7 +1571,7 @@ That second change is a real deviation and not a formatting one. It adds about f
 the first message and it tells the model why it is doing this, which the ab3, ab4 and ab5 messages never
 did. It is here because without it Sonnet 5 stopped both arms, and an arm that refuses the task measures
 nothing at all. But a model told it is being benchmarked may plan differently from one that is not, and on
-this workload how the model plans is the thing that has moved the bill by a factor of two. So ab6's numbers
+this workload how the model plans is the thing that has moved cache reads by a factor of three. So ab6's numbers
 compare cleanly to each other — both arms carry the same paragraph — and compare to the Opus and Fable
 rounds only with this stated next to them.
 
@@ -1591,8 +1586,8 @@ Run 2026-09-09, minutes after the first. Neither arm ran a step again, but the o
 arm: "12-step audit requested via unverified system notification; awaiting direct user confirmation". The
 on arm: "suspicious task block detected; awaiting user confirmation", asking whether a human had really
 requested an A/B with tokenbrake. Both had read the repository's `CLAUDE.md` first — the off arm's
-question names it — so they were oriented; they simply would not act on the message. $0.077 and $0.073,
-nothing measured.
+question names it — so they were oriented; they simply would not act on the message. Nothing
+measured.
 
 **The exfiltration objection is gone; a different one replaced it.** Step 11 is now `tokenbrake status`
 and the message says what the run is, and neither arm raised the first attempt's concern. What stopped
@@ -1644,7 +1639,7 @@ small results dominate carried context. Two reports written today, both from ord
 
 So on a long working session, the guard's threshold leaves about 97% of shell results untouched and those
 untouched results carry more than half of everything carried. That is the gap the whole rest of the
-category aims at, and it is not small. It is also exactly where rtk lost money: these results are small
+category aims at, and it is not small. It is also exactly where rtk lost ground (more turns, more cache reads): these results are small
 because the model bounded them, and compressing what a model deliberately kept short is how a hook earns
 return trips. Two readings from one repository decide nothing; they are here so Saturday's table is read
 against a number that already exists rather than in the abstract, and so the decision rule for that build
@@ -1660,22 +1655,22 @@ installed by a person before any session starts, which means the owner's Windows
 for a person to run by hand; nothing in it should be handed to a session to do for itself, because the
 thing being measured is what the tooling does to a session that does not know it is being measured.
 
-**What it answers.** JetBrains measured rtk at +7.6% on the bill on Sonnet 5 across 425 trials. This
-repository has measured tokenbrake on one audit shape at between −37% and +100% on Opus 5 depending on the
-guard and the run. Neither number says how the two compare on the same task, same machine, same day. Three
+**What it answers.** JetBrains measured rtk at +14% turns and +14% cache reads on Sonnet 5 across 425
+trials. This repository has measured tokenbrake on one audit shape on Opus 5 landing on both sides of the
+no-hook arm depending on the guard and the run (recorded in cost only; not restated here — tokens-only
+record). Neither says how the two compare on the same task, same machine, same day. Three
 arms on one workload does not settle that either — it is three sessions, not 425 — but it is the first
 reading where both tools face the same twelve steps, and if the two land on opposite sides of the off arm
 that is worth knowing before the post claims anything about the category.
 
 **Before you start.** A clone of `33kain/contexa` at a commit you write down, `npm install` already done
 so no arm pays for it, Node and Git on PATH, and `claude --version` recorded. Close every other Claude Code
-session: the five-hour window is shared and a background session moves the numbers. Budget about an hour
-and roughly $15 at list price; the three arms have cost $4.60 to $9.63 each on Opus 5.
+session: the five-hour window is shared and a background session moves the numbers. Budget about an hour.
 
 **The invariants, the same ones every round on this page has held to.** One model for all three arms, named
 in the record. One message per arm, the twelve-step audit above pasted verbatim, step 12 pinned to the
 tokenbrake version under test. No answering follow-up questions, no second message, no matter how the
-session asks. A fresh session per arm, never `/clear` in the same one, because the cost comes from the
+session asks. A fresh session per arm, never `/clear` in the same one, because the token counts come from the
 session record and a cleared session keeps its old requests. And exactly one tool installed at a time:
 verify it, do not assume the previous arm's uninstall worked.
 
@@ -1699,7 +1694,7 @@ way to void this arm. Fresh session, same paste.
 **Arm 3, tokenbrake.** `rtk init -g --uninstall`, then `npx tokenbrake init`, then `npx tokenbrake status`,
 which spawns each hook once and will say if the node path is wrong. Fresh session, same paste.
 
-**Reading the result.** Each arm's cost, requests, cache reads and output come from its session record;
+**Reading the result.** Each arm's requests, cache reads and output come from its session record;
 `npx tokenbrake report --all` lists the sessions on disk newest first, and
 `npx tokenbrake report --compare <A> <B>` prints two of them side by side with the change column, which is
 this file's table. Run it twice, off against rtk and off against tokenbrake. The arms' own reports give
@@ -1708,14 +1703,14 @@ transcript, not its own ledger — so it will say what entered under rtk, which 
 claims are about.
 
 **The rule for reading it, and it is the one that has voided results here before.** The requests column
-decides, not the cost column. Two identical arms on this page came out 21% apart in cost on nothing but how
-the model planned its reads, so any cost difference inside that band is a null and gets recorded as one.
+decides. Two identical arms on this page came out 27% apart in cache reads on nothing but how the model
+planned its reads, so any difference inside that band is a null and gets recorded as one.
 A tool that lowers what enters and raises requests has lost, whatever its output-reduction number says;
-that is the mechanism JetBrains found and the one that cost tokenbrake 0.2.2 twice the no-hook bill on
-this exact task. And if the three arms give different answers to any of the twelve steps, the round is void
-and the answers matter more than the bill: a cheaper wrong audit is not a saving.
+that is the mechanism JetBrains found and the one that took tokenbrake 0.2.2 to 91 requests against the off
+arm's 24 on this exact task. And if the three arms give different answers to any of the twelve steps, the round is void
+and the answers matter more than the token counts: a smaller wrong audit is not a saving.
 
-**Recording it.** Three cost/requests/cache/output rows, three entered/carried/trimmed rows, the answers
+**Recording it.** Three requests/cache/output rows, three entered/carried/trimmed rows, the answers
 line, the model, the Claude Code version, the commit, and the date, into a new section on this page. Nulls
 and losses go in with the same care as wins; that is the only reason anything on this page can be cited.
 
@@ -1737,33 +1732,33 @@ costs is the JetBrains comparison; write down which model was used before starti
 
 **Expectation, fixed before the run.**
 
-- *rtk against off:* at or slightly above the off arm on cost, with more requests. This is not a guess, it
-  is the JetBrains result restated — +7.6% at low effort, +14% turns, +14% cache reads — and the mechanism
+- *rtk against off:* at or slightly above the off arm on cache reads, with more requests. This is not a guess, it
+  is the JetBrains result restated — +14% turns, +14% cache reads — and the mechanism
   behind it is the one this page reproduced from the other side with `readMaxBytes` at 25,000 and again
   with 0.2.2's excerpt trimming: compressed output sends the model back, and each return trip re-reads the
   whole context. If rtk lands well below the off arm on this workload, that contradicts the only
   independent measurement in the field and would need a second run before anyone writes it down.
-- *tokenbrake against off:* a null, cost inside the 21% band and requests within three. On the audit shape
+- *tokenbrake against off:* a null, inside the noise band and requests within three. On the audit shape
   0.2.3 has one reading on each of two models and neither cleared the band. There is no reason to expect
   Sonnet to behave differently in kind, and the honest prior after ab4 and ab5 is that this guard does not
-  save money on this task on any model.
+  save tokens on this task on any model.
 - *answers:* 12 of 12 on all three arms, identical.
 
-**Decision rule, fixed before the run.** The requests column decides; cost differences inside 21% are
+**Decision rule, fixed before the run.** The requests column decides; differences inside the noise band are
 nulls. Beyond that:
 
 - **Both tools null against off.** The most likely outcome and the most useful one for the post: two hooks
   from opposite ends of the category, on the same task and machine and day, neither of which moved the
-  bill. That is the paragraph the post is actually for.
+  token counts. That is the paragraph the post is actually for.
 - **rtk above off and tokenbrake null.** Consistent with JetBrains, stated as one run of three sessions
-  agreeing with 425 billed trials, never as a replication.
+  agreeing with 425 trials, never as a replication.
 - **tokenbrake below off and rtk not.** The first result on this page that would survive the requests rule
   on this workload, and it does not get written outside this file until a second run on a different day
   reproduces it. One run does not become a claim; that rule has already retired two numbers here.
-- **tokenbrake above off.** A loss, recorded as one, and the post says the hook has cost money on a third
+- **tokenbrake above off.** A loss, recorded as one, and the post says the hook has added tokens on a third
   model.
-- **Any arm's answers differ.** The round is void, and the answers matter more than the bill. A cheaper
-  wrong audit is not a saving.
+- **Any arm's answers differ.** The round is void, and the answers matter more than the token counts. A
+  smaller wrong audit is not a saving.
 
 The round is `ab7`, and nulls go in with the same care as anything else.
 
@@ -1810,7 +1805,6 @@ v24.19.0, commit `c2d0cd7` of `claude/ab7-off`, one message per arm, the twelve-
 | tool results per request | 1.1 | | **4.6** |
 | context processed | 1.3M, 92% from cache | | 443k, 67% from cache |
 | output tokens | 4k | | 4k |
-| cost | $2.48 | | $3.26 |
 | tool results entered | 46k | | 91k |
 | tool results carried | 224k | | 84k |
 | trimmed by the guard | 0 (2 offered, not applied) | | 1 (≈ 2k kept out, ≈ 10k not carried) |
@@ -1832,8 +1826,8 @@ or batch steps". Arm 1 obeyed it: 17 tool results across 15 requests, 1.1 per re
 "I'll work through the twelve items, running the independent ones in parallel" and batched: 23 tool results
 across 5 requests, 4.6 per request. Every figure in the table follows from that. Five requests re-read the
 context five times instead of fifteen, so carried context falls from 224k to 84k with the guard credited
-for 10k of it; and five requests reuse the cache less, 67% against 92%, so on a model that lists cache
-writes at eighty times its reads the bill goes *up* 31% while requests go *down* 67%. The requests column,
+for 10k of it; and five requests reuse the cache less, 67% of processed context from cache against 92%, so
+more of what is processed is written to cache rather than read from it while requests go *down* 67%. The requests column,
 which the decision rule says decides, was decided by the batching.
 
 **The second reason, found 2026-09-12 and not on the day: arm 1 was not off.** Its session, `01139ae6`,
@@ -1873,7 +1867,7 @@ not binding on the model, and a round where one arm batches and the other does n
 Every cloud round so far happened not to hit this: ab5's arms ran 26 and 29 requests for 25 and 28 results,
 ab3's and ab4's the same shape. It took the first hand-run round to produce an arm that read the same
 sentence and worked in parallel anyway. Any future round has to check tool-results-per-request before
-looking at cost, and treat a gap like 1.1 against 4.6 as voiding, the way a difference in answers voids.
+looking at any other column, and treat a gap like 1.1 against 4.6 as voiding, the way a difference in answers voids.
 
 **The `claude/ab7-tb` branch carries one extra commit now** (`ee4ca51`), an `ab-results/real/` file the arm
 wrote and pushed under the repository's own end-of-session rule in `CLAUDE.md`. The ab7 task text has no
@@ -1911,11 +1905,11 @@ differing in `.claude/settings.json` alone. ab7's branches are not reused: `clau
 extra commit its arm pushed, and a branch whose history differs from its pair's is one more thing to
 explain later.
 
-**Expectation, fixed before the run.** A null: cost inside the 21% band, requests within three, answers
-identical. On the audit shape 0.2.3 now has one reading on Opus (ab4, +30% and not a win) and one on Fable
-in the cloud (ab5, −14.6% with requests up, a null). ab7's two arms, for all that they are not comparable
-to each other, both landed between $2.48 and $3.26 — a narrower spread than any cloud round of this task,
-which is what a local machine on a 1M-context model looks like. There is no mechanism on the table that
+**Expectation, fixed before the run.** A null: inside the noise band, requests within three, answers
+identical. On the audit shape 0.2.3 now has one reading on Opus (ab4, not a win) and one on Fable
+in the cloud (ab5, requests up, a null). ab7's two arms, for all that they are not comparable
+to each other, both landed close together (recorded in cost only; not restated here — tokens-only
+record). There is no mechanism on the table that
 would make Windows different in kind.
 
 **Validity gate, checked before any comparison is read.** For each arm, `tool results ÷ requests` from its
@@ -1924,16 +1918,17 @@ round where one arm batched is not a measurement — ab7 is the worked example. 
 is re-run before anything is compared; if the same arm fails twice, the round is closed as unmeasurable on
 this harness and recorded that way, the way ab6 was closed on Sonnet.
 
-**Decision rule, fixed before the run.** The requests column decides; a cost difference inside 21% is a
+**Decision rule, fixed before the run.** The requests column decides; a difference inside the noise band is a
 null.
 
-- Requests within three either way and cost inside 21%: the expected null, and the fourth model-workload
+- Requests within three either way and inside the noise band: the expected null, and the fourth model-workload
   pair to produce one. The post's audit row gains a Windows-local line reading "no measurable difference".
-- On-arm requests four or more below the off arm with cost not worse: the first result on this page that
+- On-arm requests four or more below the off arm with the session not worse on the rule's third condition
+  (written in cost; not restated here — tokens-only record): the first result on this page that
   would survive the requests rule, and it stays inside this file until a second run on a different day
   reproduces it.
 - On-arm requests four or more above the off arm: a loss, recorded as one.
-- Answers differing anywhere: void, and the answers matter more than the bill.
+- Answers differing anywhere: void, and the answers matter more than the token counts.
 
 ### The report can read the wrong session, and on Windows it did — 2026-09-10
 
@@ -1976,7 +1971,6 @@ Both figures are `report --session=<id>` run from PowerShell after each session 
 | **tool results ÷ requests** | **0.94** | **1.00** | both pass the gate |
 | context processed | 2.6M, 93% from cache | 2.9M, 94% from cache | |
 | output tokens | 4k | 5k | |
-| cost | $4.37 | $4.39 | **+0.5%** |
 | tool results entered | 90k | 89k | −1% |
 | tool results carried | 939k | 965k | +3% |
 | trimmed by the guard | none | none | |
@@ -1985,8 +1979,9 @@ Both figures are `report --session=<id>` run from PowerShell after each session 
 | answers | 12 of 12 | 12 of 12, identical | |
 
 **By the rule written before the run this is the expected null**, and the branch that fired is the first
-one: requests within three either way, cost inside 21%. It is also the closest two arms have ever come on
-this page — half a percent apart on a task where identically configured arms have been 21% apart — and the
+one: requests within three either way, inside the noise band. It is also the closest two arms have ever come on
+this page — entered 1% apart and carried 3% apart, on a task where identically configured arms have been 27%
+apart in cache reads — and the
 first round where both arms passed the batching gate. ab7's lesson worked: the explicit
 one-tool-call-per-turn line produced 0.94 and 1.00 where the old wording produced 1.1 and 4.6.
 
@@ -2021,8 +2016,9 @@ post opens with about Claude Code's own persisted outputs, now measured on the g
 than on its absence, and it is the sharpest illustration yet of the rule this page keeps arriving at: on a
 task that asks for whole files, capping a read buys a return trip, not a saving.
 
-It cost nothing here — half a percent, inside any noise band — which is the honest way to state it. It did
-not cost the 10% the `readMaxBytes` round did, and it did not save anything either.
+It cost nothing here — entered −1%, carried +3%, inside any noise band — which is the honest way to state
+it. It did not cost the 40% more cache reads and 34 requests against 25 the `readMaxBytes` round did, and it
+did not save anything either.
 
 **What this adds to the record.** A fourth model-workload pair producing a null, a third model, the first
 run on a real machine rather than in a container, and the tightest agreement between arms yet measured.
@@ -2052,8 +2048,8 @@ mostly one author. The honest sentence is "on the two substantial sessions recor
 ships.** `c905b53d`'s four trims are visible in its own report — `sed -n '1,110p'
 publishing/website/index.html` trimmed from 3k to 2k, `sed -n '120,420p' publishing/website/site.css` from
 2k to 1k. Those are file excerpts, and **0.2.3 stopped trimming file excerpts**: it treats them as reads,
-because ab3 showed that trimming them taught the model to read in eighty-line chunks and cost twice the
-no-hook bill. So the 10% and 17% in that row are a saving the current guard would not produce, from a
+because ab3 showed that trimming them taught the model to read in eighty-line chunks and took 91 requests
+against the no-hook arm's 24. So the 10% and 17% in that row are a saving the current guard would not produce, from a
 behaviour deliberately removed. `ced42a1a`'s ten trims are from the same period and may be the same shape;
 its report does not say which.
 
@@ -2070,7 +2066,7 @@ real-session evidence for 0.2.3 is **zero sessions**, and that collecting it sta
 > one repository have left a report behind: 617 requests, 150, and 5. On the two substantial ones the
 > hook kept 4.5% and 10% of entering tokens out of context. Both were recorded under a guard version that
 > trimmed file excerpts — a behaviour I removed in 0.2.3 after measuring that it taught the model to read
-> in eighty-line chunks and doubled the bill on one task — so even those two numbers describe something
+> in eighty-line chunks and nearly quadrupled the requests on one task — so even those two numbers describe something
 > that no longer ships. The honest state of real-session evidence for the current version is zero
 > sessions, and collecting it is what `tokenbrake report` is for. Run it on your own last session; that
 > number is the one that matters to you, and it is the only one I would act on.
@@ -2082,9 +2078,9 @@ The owner's complaint about the audit task is right, and the reason is worse tha
 
 **In ab8, both arms reported `Under the trim threshold: 10 of 10 shell results`.** Every shell result on
 both arms was under 6,000 characters. The PostToolUse trim — the guard's main feature, the thing the
-package is named for — **fired zero times, on both arms, in a $9 experiment.** The Read cap fired once and
-the file came in through another door. So the round measured the cost of running two hooks that did
-nothing, which is why it produced half a percent, and why every round before it hovered around zero for
+package is named for — **fired zero times, on both arms, across 39 requests.** The Read cap fired once and
+the file came in through another door. So the round measured the effect of running two hooks that did
+nothing, which is why it produced 1% on entered and 3% on carried, and why every round before it hovered around zero for
 the same reason nobody checked.
 
 Three properties of the task cause it, and all three are fixable:
@@ -2202,13 +2198,14 @@ something, as opposed to looking something up, and a review that misses it is a 
 **Expectation, fixed before the run.** For the first time, not a null: entered tokens lower on the guarded
 arm, by something like 20k, with requests within three. If entered falls and requests rise by four or
 more, that is the return trip on a task built to favour the guard, and it would be the strongest evidence
-yet that trimming does not pay on the bill. If entered is level, the guard is not acting even here.
+yet that trimming does not pay in tokens. If entered is level, the guard is not acting even here.
 
 **Decision rule, fixed before the run.** Validity gate first: tool results ÷ requests near 1 on both arms
 and within 1.5 of each other, and both arms' answers checked against the ground truth above — including
 step 5, which is the one an arm can fail while looking fluent.
 
-- Entered lower **and** requests within three **and** cost not worse: the first workload on which this
+- Entered lower **and** requests within three **and** not worse on a third condition written in cost (not
+  restated here — tokens-only record): the first workload on which this
   guard demonstrably works. It stays in this file until a second run on another day reproduces it.
 - Entered lower and requests four or more higher: the return trip, recorded as such.
 - Entered level: the guard is not acting on a task designed to make it act, and that goes in `README.md`'s
@@ -2219,8 +2216,9 @@ step 5, which is the one an arm can fail while looking fluent.
 
 Prompted by a critique of the package that listed four weaknesses. All four were accurate, and three were
 this repository's own published findings arrived at independently, which is the most useful thing a critic
-has said about the documentation. One correction: the critique's "−37% to +100%" range mixes guard
-versions; the shipping guard's three paired runs on that workload are 1.30, 0.85 and 1.00.
+has said about the documentation. One correction: the critique's range mixes guard versions; the
+shipping guard has three paired runs on that workload (their ratios were recorded in cost only; not restated
+here — tokens-only record).
 
 What the critique did not have is a count. This container's ledger, 285 logged tool results:
 
@@ -2279,7 +2277,6 @@ session closed.
 | requests | 16 | 17 | +1 |
 | tool results | 15 | 16 | |
 | **tool results ÷ requests** | **0.94** | **0.94** | both pass the gate |
-| cost | $1.93 | $1.70 | −11.9% |
 | **tool results entered** | **12k** | **9k** | **−25%** |
 | **tool results carried** | **118k** | **97k** | **−17.8%** |
 | output tokens | 11k | 8k | −27% |
@@ -2289,13 +2286,13 @@ session closed.
 | Read / Bash calls | 0 / 15 | 0 / 16 | |
 
 **By the rule written before the run, this is the first branch that has ever fired:** entered lower on the
-guarded arm, requests within three, cost not worse. It therefore stays in this file and goes nowhere else
+guarded arm, requests within three, and the cost-stated third condition held (not restated here). It therefore stays in this file and goes nowhere else
 until a second run on another day reproduces it. That rule has already retired two numbers on this page and
 it applies in this direction too.
 
-**What is a claim and what is not.** The −11.9% on cost is *inside* the 21% band two identically configured
-arms have produced here, so it is not a cost claim and must not be quoted as one. What is measured rather
-than inferred is **entered** and **carried**: those are per-result counts from the transcript, not outcomes
+**What is a claim and what is not.** Requests (+1) and output tokens (−27%) are outcomes of how the model
+chose to plan, and two identically configured arms here have been 27% apart in cache reads, so neither is
+quoted as an effect. What is measured rather than inferred is **entered** and **carried**: those are per-result counts from the transcript, not outcomes
 of how the model chose to plan. Entered fell 25% and carried fell 18%, and the three trims are visible in
 the arm's own table — `git log --stat -40` trimmed from 7k tokens to 544, `git diff HEAD~3` from 3k to 2k,
 one `sed` excerpt from 2k to 1k. That is the first time in nine rounds that the guard's action shows up in
@@ -2367,12 +2364,12 @@ against the real guard in a few minutes. Measured, not argued:
 would hand the model a file that looks complete and is not. tokenbrake's Read cap is safe today precisely
 because a capped read is *obviously* partial and `Edit` still needs an exact string match, so a truncated
 view cannot cause a wrong edit; a skeletonised view removes that protection. It is also the output-reduction
-bet the JetBrains benchmark and this page's own `readMaxBytes` round both lost money on. It is not a
+bet the JetBrains benchmark and this page's own `readMaxBytes` round both lost tokens on. It is not a
 smaller version of what tokenbrake does; it is the thing tokenbrake was built to argue against.
 
 **Why phase 3's gate is refused.** `expect(savings).toBeGreaterThanOrEqual(40)` makes a test fail unless
-output shrinks by 40%. rtk advertises 60–90% output reduction and cost **+7.6%** on the bill at JetBrains.
-A test like that does not measure the tool, it steers it toward the behaviour that loses money. The 30 ms
+output shrinks by 40%. rtk advertises 60–90% output reduction and came out at **+14% turns and +14% cache reads** at
+JetBrains. A test like that does not measure the tool, it steers it toward the behaviour that loses tokens. The 30 ms
 processing budget in the same phase is reasonable and worth having; the guard already spends 50–100 ms per
 call on process spawn, which is the number that actually matters and is not what the plan measures.
 
@@ -2391,7 +2388,7 @@ would do anything — 65 progress lines and 144 escape sequences of a single 6,0
 guard change, so it ships default-off behind a config flag and is A/B'd before any default moves, which is
 the rule that has governed every other change here.
 
-### The shape filter's first bug, found before a run was paid for — 2026-09-10
+### The shape filter's first bug, found before a run was made — 2026-09-10
 
 An outside adversarial benchmark was built against tokenbrake the same day the shape filters landed. Its
 mechanism harness exercises the filters on and off, and it reported that they collapse not only the deploy
@@ -2434,7 +2431,7 @@ for future rounds. What it is, from its own self-check and from what was verifie
   spaces, and a decisive neutral record that the default trim does **not** preserve.
 - **It fixes, by construction, four things this page learned the hard way.** Arms toggle by writing a
   git-ignored `.claude/`, so both sit on the same commit with a clean tree — no second commit sliding
-  `git log --stat -40` or `HEAD~3`, which voided ab9's steps 1 to 3. `measure.mjs` re-derives cost and
+  `git log --stat -40` or `HEAD~3`, which voided ab9's steps 1 to 3. `measure.mjs` re-derives
   tokens **from the transcript, not from tokenbrake's ledger**, and its arithmetic is proven against
   synthetic transcripts with hand-computed answers including compaction boundaries. The session id is
   found from the shell after the session closes, never from inside it — the default that named the wrong
@@ -2442,13 +2439,13 @@ for future rounds. What it is, from its own self-check and from what was verifie
   **delivers**, which is the distinction the report's credit fix was about.
 - **Two experiments, never pooled.** A mechanism stress test over fixed fixtures, and one natural incident
   task whose prompt names no file and never says "read in full" — the phrasing that forbids the guard's
-  saving by construction. Only the natural task feeds the cost verdict.
+  saving by construction. Only the natural task feeds the verdict.
 - **Pre-registered**: five paired OFF/ON runs in balanced order, two OFF/OFF controls to estimate normal
   variability, one ON/SHAPE pair, and a verdict rule fixed in `results/PRE-REGISTRATION.md`. Fewer than
   five pairs is reported as "inconclusive". An ON-arm critical correctness error the OFF arm did not make
-  blocks any safe-savings claim whatever the cost did.
+  blocks any safe-savings claim whatever the token counts did.
 
-**It found a real bug before a single run was paid for** — the shape filters collapsing the tenant
+**It found a real bug before a single run was made** — the shape filters collapsing the tenant
 settlement table, recorded in the section above. After the fix was pulled and the fixtures regenerated
 against `bcaaf58`, its mechanism output changes exactly one fixture with `shapeFilters` on
 (`F08_deploy_log_ansi`, 8,353 → 5,368 chars) and the settlement table no longer appears. That is the
@@ -2461,8 +2458,7 @@ followed and the field was filled by hand (`0.2.4 @ bcaaf58`). And `selftest.mjs
 nothing about the shape filters; that evidence lives in `results/mechanism/experiment-A.txt`.
 
 **Configured and ready**: guard `bcaaf58`, model `claude-fable-5-1[1m]`, Claude Code 2.1.267, Node
-v24.19.0, no `TBD` left. Sixteen sessions in the plan at roughly $2 each on this workload — about $30 —
-and nothing needs to be run in one sitting: the fixtures are deterministic and `restore.mjs` refuses to
+v24.19.0, no `TBD` left. Sixteen sessions in the plan, and nothing needs to be run in one sitting: the fixtures are deterministic and `restore.mjs` refuses to
 proceed if they do not match the pre-registered hashes. **ab10 runs through this, not through
 `AB-RUNBOOK.md`.**
 
@@ -2531,25 +2527,19 @@ commit beside the guard commit; without both, a number is not reproducible.
   the results under the threshold account for 5% of carried tokens. Two candidate results is not a lever.
 - **A secondary hypothesis, raised and then withdrawn before the run.** 3 of the OFF arm's 7 requests
   crossed 200k input tokens, and I argued that a long-context surcharge — a step rather than a slope —
-  was plausibly the only mechanism by which the hook could move the bill on this model. I had not checked.
-  The pricing page, *Long context pricing*, read 2026-09-10: Claude 4.6 and later bill the full 1M window
-  at standard rates, "a 900k-token request is billed at the same per-token rate as a 9k-token request".
-  **There is no step.** The hypothesis is dead before it cost a session, and the null expectation now
-  stands alone with one fewer route to a saving.
+  was plausibly the only mechanism by which the hook could move the result on this model. I had not
+  checked. Anthropic's published long-context terms, read 2026-09-10, treat the full 1M window of Claude
+  4.6 and later the same as a short request, per token. **There is no step.** The hypothesis is dead
+  before it cost a session, and the null expectation now stands alone with one fewer route to a saving.
 - **Decision rule.** The OFF/OFF band decides, as always. `requests_over_threshold` is reported per run
-  as context, never as a price. `prices.json` now records, per model and with a verification date,
-  whether the long window bills at standard rates, at a published surcharge, or is unrecorded — and an
-  unrecorded model makes the run a declared lower bound rather than being assumed cheap.
-
-  Base rates were re-checked against the same page: Fable 5.1 $10 in / $50 out / $0.25 cache read (the
-  0.025x multiplier, not 0.1x) / $20 for a 1h cache write. `$5.7349` is the cost of the OFF arm, not a
-  lower bound. At that rate the pre-registered 16 sessions are roughly **$90**, not the $30 I estimated.
+  as context, never as an effect. The bench's `prices.json` now records, per model and with a verification
+  date, how the long window is treated, or that it is unrecorded — and an unrecorded model makes the run a
+  declared lower bound rather than being assumed standard.
 
 ### B-pair1-off — the OFF arm
 
 Session `aac143d4`, 7 requests, 40 tool results, 982k processed (78% cache read), 0 compactions, 2
-recovery reads. **38 / 38, zero critical errors.** Cost is not stated here: it is a lower bound until the
-surcharge is priced.
+recovery reads. **38 / 38, zero critical errors.** Only token counts are stated here.
 
 ### What the first run measured was this harness
 
@@ -2563,11 +2553,11 @@ Three defects, all found by running it once, all recorded in the bench's `result
    having nothing to do with the guard. Now the candidate with the most schema keys wins, and an answer
    carrying none is **refused** (exit 65, `capture_invalid`) rather than scored zero.
    I first blamed the operator's hand-copied capture. That was wrong, and the hand copy scores 38 / 38 too.
-2. **Long-context billing was asserted, not checked.** `measure.mjs` printed "list price WITHOUT
-   long-context surcharge", wording that claims a surcharge exists, against a page that says the opposite.
-   Now `prices.json` carries the answer per model with a date and a source, and the three-state
-   distinction that matters: priced, surcharged, or *unrecorded and therefore a declared lower bound*.
-   An unknown is never quietly treated as standard — the same error as this one, made cheaply.
+2. **Long-context handling was asserted, not checked.** `measure.mjs` printed a label claiming a
+   long-context surcharge exists, against a page that says the opposite. Now `prices.json` carries the
+   answer per model with a date and a source, and the three-state distinction that matters: standard,
+   surcharged, or *unrecorded and therefore a declared lower bound*. An unknown is never quietly treated as
+   standard — the same error as this one, caught early.
 3. **The validity gate would have voided every run.** It failed any run with `tool results ÷ requests`
    over 2.5; this one measured 5.71. The cap came from ab7/ab8, whose prompt was twelve numbered steps and
    forced one call per turn. This benchmark deliberately lets the agent batch — batching is recorded as an
@@ -2581,23 +2571,24 @@ Every one of the three is now covered by a test that fails if the defect returns
 ### ab10 result — five paired runs, and the mechanism
 
 Full tables: [tokenbrake-bench `results/RESULTS-TABLES.md`](https://github.com/33kain/tokenbrake-bench/blob/main/results/RESULTS-TABLES.md).
-Sixteen paid sessions, Fable 5.1 [1m], guard `98b3c07`, one day.
+Sixteen sessions, Fable 5.1 [1m], guard `98b3c07`, one day.
 
-The pre-registered rule fired **COST REDUCTION, median −28.8%, outside the ±18.4% band** — and then a
-third control pair, pre-registered hours later with the rule that it counts whichever way it falls, came
-out at ±30.3% and **retracted it**. The standing verdict is **NO MEASURABLE COST DIFFERENCE: the paired
-median sits inside the control band; tool-result tokens entered fell −35.7%; a token reduction without a
-cost reduction, reported as exactly that.**
+The pre-registered rule fired a **reduction outside the control band** on its primary endpoint — and then
+a third control pair, pre-registered hours later with the rule that it counts whichever way it falls,
+widened the band and **retracted it**. The standing verdict is **no measurable difference on the
+pre-registered endpoint: the paired median sits inside the control band; tool-result tokens entered fell
+−35.7%; a token reduction, reported as exactly that.** (The endpoint's figures, the band and the per-pair
+range were recorded in cost only; not restated here — tokens-only record.)
 
 Reading that result exposed a flaw in the band itself. It was defined as the **maximum** control
-difference, and a maximum grows with sample size — the three controls went 5.7%, 18.4%, 30.3%, each
-larger than the last — so the band widens forever and any effect eventually vanishes, real or not. Under
-the **median** of the same three controls the band is ±18.4% and the verdict would be COST REDUCTION.
+difference, and a maximum grows with sample size — the three controls came out each larger than the
+last — so the band widens forever and any effect eventually vanishes, real or not. Under the **median** of
+the same three controls the band is narrower and the verdict would have been a reduction.
 The statistic decides the answer, and the flaw was noticed only when it cost the result. Round 1 is not
-re-scored: it stands under the rule in force when its sessions were paid for. A median band over at least
-four controls is pre-registered for round 2, before any round-2 session exists. Against the
-±30.3% band, four of the five pooled pairs are inside it; the range is −39.5% to −8.0%; the unpaired
-reading is −19.9% and also inside. All twenty-two runs are from one day and one usage window.
+re-scored: it stands under the rule in force when its sessions were run. A median band over at least
+four controls is pre-registered for round 2, before any round-2 session exists. Against the widened
+band, four of the five pooled pairs are inside it, and the unpaired reading is inside too. All twenty-two
+runs are from one day and one usage window.
 **Nothing is published.**
 
 **What does not depend on the band: tool-result tokens entered fell between 19% and 62% in every pair,
@@ -2607,30 +2598,32 @@ did not.
 Three things the round established that the project did not know before:
 
 - **The saving is in carried tokens, not in the trimmed result.** Median carried 197k (OFF) against 118k
-  (ON). A trimmed result is smaller once and then cheaper in every later request of the session; that
+  (ON). A trimmed result is smaller once and then smaller again in every later request of the session; that
   compounding is the whole effect. `carried` was already the right column — this is the first evidence
   that it is the *only* one that matters.
-- **The number of trims does not predict the saving.** Two trims gave −39.0% and −39.5%; seven trims gave
-  −28.8% and −12.5%; three gave −8.0%. Which result is trimmed, and how early, dominates how many.
+- **The number of trims does not predict the saving.** The two pairs with two trims gave the largest
+  reductions, the two with seven trims middling ones, and the one with three the smallest (per-pair
+  figures recorded in cost only; not restated here — tokens-only record). Which result is trimmed, and how
+  early, dominates how many.
   Any future tuning aimed at "trim more" is aimed at the wrong quantity.
 - **The failure mode has been seen.** Pair 5's ON arm ran 9 requests against 6, made 4 recovery reads, and
   ended with **330,936 carried tokens — more than any run in the experiment, either arm** — for the
-  smallest saving, −8.0%. Every ON arm made more recovery reads than its OFF arm. When the model goes back
+  smallest saving. Every ON arm made more recovery reads than its OFF arm. When the model goes back
   for what the trim removed, the session lengthens and the saving pays for the recovery.
 
 Also, first time outside a test: **the Read cap fired in every ON run**, one to four times per session.
 ab8 recorded that `readMaxBytes` had never been observed to fire in a real session; that is now false.
 
-### ab10 closed — what $75 and twenty-two sessions bought
+### ab10 closed — what twenty-two sessions bought
 
-Tokens were then tested as a second endpoint, beside the cost result and against a band built the same
+Tokens were then tested as a second endpoint, beside the pre-registered one and against a band built the same
 way. They did not rescue it: `entered` −35.7% against a ±42.6% band, **inside**; `carried` −45.5% against
 ±44.9%, outside by 0.6 points on the estimator already recorded as unsound, with a range reaching
 **+72.6%** — one pair whose ON arm carried most of all.
 
 **The finding is not that the hook does nothing. It is that this experiment cannot tell.**
 
-Two identical OFF sessions — same fixtures, same prompt, no guard — differ by up to **30.3% in cost** and
+Two identical OFF sessions — same fixtures, same prompt, no guard — differ by up to
 **42.6% in tokens entered**. The agent reads differently every time, and that variation is the same size
 as the effect. Five pairs cannot resolve a difference of that size against noise of that size.
 
@@ -2639,18 +2632,18 @@ sessions of the same kind.** When noise and effect are the same order, extra pai
 agent's mood. The lever is variance, and cutting it is exactly what Experiment A already does — fixed
 invocations, fixed fixtures, no freedom for the agent, the mechanism measured directly.
 
-So the defensible shape, today, with no further spend:
+So the defensible shape, today, with no further sessions:
 
 - **Mechanism (Experiment A):** the guard rewrites specific outputs by measured amounts, reproducibly,
   with no session noise. This is what the package may claim.
 - **Natural task (Experiment B):** the effect on a real session is not separable from the difference
-  between two identical sessions without the guard. Nothing about cost may be quoted.
+  between two identical sessions without the guard. No session-level figure may be quoted as an effect.
 - **Correctness:** twenty-two runs, twenty-two 38/38, zero critical errors.
 
 The day-2 replication is **withdrawn as designed**. Fourteen more sessions of a design that has just
-demonstrated it lacks the power would buy a second inconclusive result at twice the price. A round 2, if
-there is one, changes the design first: a lower-variance endpoint, a task that constrains reading, or a
-model whose pricing puts more weight on what the hook actually moves.
+demonstrated it lacks the power would buy a second inconclusive result at twice the sessions. A round 2,
+if there is one, changes the design first: a lower-variance endpoint, a task that constrains reading, or a
+model on which what the hook actually moves is a larger share of the session.
 
 ## MCP tool-output trimming (feature 1) — 2026-09-14, Opus, two single pairs
 
@@ -2658,7 +2651,7 @@ Feature 1 added `mcpTrim` (default false): route an oversized `mcp__*` result th
 output. This is the A/B that gates flipping that default. Arms differ in **`mcpTrim` only** — `jsonShape` and
 `shapeFilters` were left at their default `false` in both — so this measures `mcpTrim` alone, not the combo.
 Model Opus, on `main`, both arms per pair run as separate Cowork sessions. Numbers are read from the **session
-record** (`get_session`: `cost_usd`, cache tokens, `context_usage.used_tokens`), not the guard's own ledger, so
+record** (`get_session`: cache tokens, `context_usage.used_tokens`), not the guard's own ledger, so
 recovery reads are counted in — the net, as the methodology requires.
 
 Two workloads, chosen as opposite extremes rather than a representative mix:
@@ -2673,18 +2666,16 @@ Two workloads, chosen as opposite extremes rather than a representative mix:
 
 | regime | metric | A `mcpTrim:off` | B `mcpTrim:on` | Δ (B vs A) |
 |---|---|---|---|---|
-| content-heavy | cost_usd | $1.155 | $1.691 | **+46%** |
-| | cache_read | 1,169,006 | 1,390,745 | +19% |
+| content-heavy | cache_read | 1,169,006 | 1,390,745 | **+19%** |
 | | context now | 82,042 | 84,107 | +2.5% |
-| glance | cost_usd | $1.127 | $0.842 | **−25%** |
-| | cache_write | 73,530 | 46,118 | −37% |
+| glance | cache_write | 73,530 | 46,118 | **−37%** |
 | | context now | 102,601 | 83,665 | **−18.5%** |
 
 ### Reading — held against this repo's own noise
 
-ab10 (above) established that two **identical** OFF arms of a natural task differ by up to **30.3% in cost** and
-**42.6% in tokens entered**. Against that band: the content-heavy +46% cost sits just outside it; the glance
-−25% cost sits **inside** it. So — by this repo's own standard — **no cost figure here is quoted as an effect.**
+ab10 (above) established that two **identical** OFF arms of a natural task differ by up to
+**42.6% in tokens entered**. Against that band: the content-heavy +19% cache reads and the glance −37% cache
+writes both sit **inside** it. So — by this repo's own standard — **no figure here is quoted as an effect.**
 The glance `context now` −18.5% is the cleaner-looking number but is still within the token noise ab10 measured.
 
 What survives noise is the **direction and its consistency with the mechanism**, not any magnitude: trimming a
@@ -2700,13 +2691,13 @@ saves what the model would otherwise let in."
   and that `jsonShape` improves the trimmed sample (it was **off** in both arms, so its added value here is
   mechanism, not measurement). Answer **correctness was not captured** this round (no channel to the arms'
   final messages); for glance it is design-guaranteed by the head questions, for content-heavy the recovery
-  reads are the price paid to stay correct.
+  reads are what staying correct takes.
 
 ### Conclusion
 
 **Default stays OFF** for `mcpTrim` (and `jsonShape`, `shapeFilters`). The burden of proof is on the **flip**,
 not on staying off: a thin, noise-limited A/B does not meet it, and the one thing it did show cleanly enough to
-matter is that flipping can *cost* +46% on a content-hungry workload. `mcpTrim` ships as an **opt-in**, best set
+matter is that flipping can *add* reads on a content-hungry workload (+19% cache reads here). `mcpTrim` ships as an **opt-in**, best set
 **per-tool** (`"tools": { "mcp__…": { "mcpTrim": true } }`) for MCP tools whose results you reliably only
 sample; pair with `jsonShape` for a clean JSON sample.
 

@@ -2,7 +2,7 @@
 
 **Two arms: no hooks, and tokenbrake 0.2.4.** Two Claude Code sessions on one clone of `33kain/contexa`,
 the same twelve-step audit, differing only in whether the guard is in front of the tools. Windows,
-PowerShell. About forty minutes with the waiting, roughly $6 at list price.
+PowerShell. About forty minutes with the waiting.
 
 rtk is not part of this round. A head-to-head against it needs rtk installed on the machine first and is a
 separate round on a separate day; ab7 discovered mid-round that it was not installed, and this page's
@@ -40,18 +40,19 @@ Write it down before you start. All three arms run on the same one.
 
 `AB-TASK.md` pre-registers **Sonnet 5**, because it is the model JetBrains measured rtk on and so the only
 one where the rtk arm can be read next to somebody else's number. If you are choosing between **Fable 5.1**
-and **Opus 5** instead, take Fable, for a reason this project only learned in ab5: Fable lists cache writes
-at eighty times its cache reads, against Opus's twenty, and in the ab5 round cache writes were three
-quarters of both arms' bill. A tool whose whole claim is that less text enters the context is therefore
-measured on Fable in the column that dominates the bill, and on Opus in a column that is diluted by cached
-re-reads. Opus's one advantage is four existing off readings to sanity-check a new one against, and its
-disadvantage is larger: on this exact workload its hooks-on runs have ranged $3.77 to $9.63 on nothing but
-how it chose to read, which is a factor of two of noise for a design that runs each arm once.
+and **Opus 5** instead, take Fable, for a reason this project only learned in ab5: on Fable cache writes
+weigh far more against cache reads than on Opus, and in the ab5 round they were the larger part of both
+arms' spend (that comparison was recorded in cost only; not restated here — tokens-only record). A tool
+whose whole claim is that less text enters the context is therefore measured on Fable in the column that
+weighs most, and on Opus in a column that is diluted by cached re-reads. Opus's one advantage is four
+existing off readings to sanity-check a new one against, and its disadvantage is larger: on this exact
+workload its hooks-on runs have ranged from bounded reads to 91 requests for one audit on nothing but how
+it chose to read, which is too much noise for a design that runs each arm once.
 
 Whichever you pick, the three-arm design carries its own off arm, so the comparison stands on its own.
 
-Self-contained; nothing above needs to be open while running it. Windows, PowerShell. Costs roughly $10 to
-$20 at list price depending on model and is about an hour with the waiting.
+Self-contained; nothing above needs to be open while running it. Windows, PowerShell. About an hour with
+the waiting.
 
 ## Step 0 — put the machine in a known state
 
@@ -159,7 +160,7 @@ reads "runs twice per call here", which is a wording bug fixed after this round 
 when user scope is missing. Ignore it.
 
 Fresh `claude` session — a new terminal, not `/clear` in the previous one, which keeps its requests and its
-cost. Same paste.
+tokens. Same paste.
 
 ## Check each arm before trusting it
 
@@ -169,12 +170,12 @@ Two things void an arm, and both are visible the moment it finishes.
 ones in parallel" has ignored it, and its request count is then about how it planned rather than about the
 tool under test. The check is one division, from that arm's own report: `tool results` ÷ `requests`. Around
 1 is what the protocol asks for. The first hand-run round had one arm at 1.1 and another at 4.6, and the
-round was void — the arm with 4.6 spent a third more money on a third of the requests, and none of it was
-the hook. If two arms are more than about 1.5 apart on that ratio, they did not do the same task; re-run
+round was void — the arm with 4.6 made a third of the requests (its spend was recorded in cost only; not
+restated here), and none of the difference was the hook. If two arms are more than about 1.5 apart on that ratio, they did not do the same task; re-run
 the offending arm before comparing anything.
 
-**Different answers.** Any of the twelve differing across arms voids the round outright, whatever the bill
-says. A cheaper wrong audit is not a saving.
+**Different answers.** Any of the twelve differing across arms voids the round outright, whatever the token
+counts say. A smaller wrong audit is not a saving.
 
 ## After each arm — what to save
 
@@ -206,12 +207,12 @@ reporting `trimmed none` is not: if every shell result was under the threshold a
 the guard had nothing to do, which is exactly what ab8 measured.
 
 **This last report, not the one from step 12, is the number that goes in the table.** Step 12 runs while the
-session is still going, so it prices and counts the session as it stood at that moment — it misses the
+session is still going, so it counts the session as it stood at that moment — it misses the
 requests that came after. Run from PowerShell once the session is closed, the same command reads the
 finished transcript and gives the final figures. `--all` lists the sessions newest first if you lose track
 of which id is which.
 
-That file gives you every row of the table: `requests`, `At list price` (the cost), `Tool results entered`,
+That file gives you every row of the table: `requests`, `Tool results entered`,
 `carried`, the `tokenbrake trimmed` line, and the by-tool table with Read and Bash call counts. There is no
 separate place to look and nothing else to keep.
 
@@ -219,8 +220,8 @@ separate place to look and nothing else to keep.
 
 This is the **review task**. It replaced the twelve-step audit, and then replaced a trace task that was
 only a harder version of the same quiz. The audit measured a hook that never ran: in ab8 every shell
-result on both arms sat under the trim threshold, so the guard's main feature fired zero times in a nine-
-dollar experiment. This one is real work -- a release review and a mechanism trace -- built from measured
+result on both arms sat under the trim threshold, so the guard's main feature fired zero times in a whole
+paid round. This one is real work -- a release review and a mechanism trace -- built from measured
 output sizes so that four steps land in the band where the trim actually acts, one step fails with 17k
 already printed, and one step gives the Read cap the only chance in nine rounds to *save* rather than cost.
 
@@ -282,7 +283,6 @@ requests                    ("N requests")
 context processed           ("Context processed")
 % read from cache           (same line, in brackets)
 output tokens               (same line, "output N")
-cost                        ("At list price: ≈ $")
 tool results entered        ("Tool results entered ≈")
 tool results carried        (same line, "carried through later requests ≈")
 trimmed                     ("tokenbrake trimmed" — arm 2 only; "none" on arm 1)
@@ -293,13 +293,11 @@ tool results / requests (the validity gate)
 answers                                             __ of 12   __ of 12
 ```
 
-Two notes on the cost row. It is the report's own figure, not a bill you look up: the formula reproduces
-the API's records to the cent on both Opus 5 and Fable 5.1 (`AB-TASK.md`, ab5), so it is the number, not an
-estimate. And it counts the whole session including the writing at the end, which is why the report has to
+One note on the table: every row is the report's own figure, and it counts the whole session including the writing at the end, which is why the report has to
 be run from PowerShell after the session is closed rather than read off step 12.
 
 Then the verdict against the decision rule in `AB-TASK.md`, in its own words, including which branch of it fired.
 If any arm was void — a tool that would not install, an arm that refused the task, a second message sent —
-say so and say what it cost, the way the rtk arm of ab3 and both arms of ab6 are recorded. An arm that did
+say so and say what it used, the way the rtk arm of ab3 and both arms of ab6 are recorded. An arm that did
 not run is not a zero; it is a hole, and a hole that is written down is worth more than a number that is
 not.
