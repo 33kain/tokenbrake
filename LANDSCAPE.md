@@ -76,7 +76,7 @@ space hits all three, and none is about any tool's design.
    evidence about another. The category's habit of quoting one percentage, model-free, is the thing to
    stop doing first.
 4. **The noise is the same size as every saving anyone advertises.** A 22-session pre-registered benchmark
-   ([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)) ran three OFF-against-OFF
+   ([`AB-TASK.md`, "ab10 closed"](AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought)) ran three OFF-against-OFF
    control pairs — identical configuration on both sides, no hook anywhere, the same task. They came out
    **5.7%, 18.4% and 30.3% apart on cost**, and **42.6% apart on tool-result tokens**. The agent reads
    differently every time, and nothing in the setup varied.

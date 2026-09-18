@@ -3,8 +3,8 @@
 Everything measured about the brake so far, the losses included. It moved here from the top of the README on
 2026-09-18, word for word: it is the most important thing to read before installing the brake, and the wrong
 second thing to read about a report you can run without installing anything. The full protocol and every
-number are in [`AB-TASK.md`](AB-TASK.md); the pre-registered benchmark is
-[33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench).
+number are in [`AB-TASK.md`](AB-TASK.md), including the pre-registered benchmark
+(its raw runs are in a private repository).
 
 **Tokens only (2026-09-18).** Later the same day every dollar and cost figure was removed from this file
 under the project's tokens-only rule: results are stated in tokens entered, tokens carried, cache tokens
@@ -80,7 +80,7 @@ worst, 91 requests for one audit, came from a guard behaviour since removed.
 
 **And now the number behind that sentence: two identical sessions without the hook differ by up to 42.6%
 in tokens entered.** A 22-session pre-registered benchmark
-([33kain/tokenbrake-bench](https://github.com/33kain/tokenbrake-bench)) ran a synthetic incident review
+([`AB-TASK.md`, "ab10 closed"](AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought)) ran a synthetic incident review
 five times with the hook and five times without, plus three OFF-against-OFF control pairs — the same
 configuration on both sides, no hook at all. Those controls came out up to **42.6% apart on tokens
 entered**. The paired runs with the hook showed a median 35.7% fewer tool-result tokens entered, and **that
