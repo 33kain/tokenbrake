@@ -1169,3 +1169,12 @@ cost-only results marked "(recorded in cost only; not restated here -- tokens-on
 calls left for the user: pre-registered decision rules whose third condition was written in cost are marked,
 not rewritten; and AB-TASK still calls the content-heavy mcpTrim result "a real backfire", a verdict that rested
 on +46% cost -- its remaining token figure (+19% cache reads) sits inside the 42.6% noise band.
+
+### Pre-registered rules — settled 2026-09-18
+
+The user's call: the past rounds' decision rules quote their original "cost not worse" / "cost inside 21%"
+conditions verbatim, marked as pre-registered (never rewritten after the run); the two rule branches the
+tokens-only pass had deleted ("on-arm requests materially above off-arm: a loss" and "answers differing anywhere:
+void") are restored; result figures stay tokens-only. A dated amendment at the end of AB-TASK.md makes the third
+condition for every future round "tokens carried not worse beyond the OFF/OFF band". This settles the first of the
+two judgement calls in the tokens-only card above; the second (mcpTrim) was settled as inconclusive in PR #78.
