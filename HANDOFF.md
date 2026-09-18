@@ -1167,8 +1167,9 @@ every dollar tail are gone; `--compare` dropped its cost row. Docs: every dollar
 EVIDENCE/AB-TASK/AB-RUNBOOK/CHANGELOG/FEATURES-PLAN/HANDOFF, token figures kept where the same record had them,
 cost-only results marked "(recorded in cost only; not restated here -- tokens-only record)". Two judgement
 calls left for the user: pre-registered decision rules whose third condition was written in cost are marked,
-not rewritten; and AB-TASK still calls the content-heavy mcpTrim result "a real backfire", a verdict that rested
-on +46% cost -- its remaining token figure (+19% cache reads) sits inside the 42.6% noise band.
+not rewritten; and the content-heavy mcpTrim result, once "a real backfire" on +46% cost, is now INCONCLUSIVE
+(the user's call, 2026-09-18): its token figure (+19% cache reads) sits inside the 42.6% noise band. Default
+stays OFF either way.
 
 ### Item 5 — shadow mode, first cut (blobElide + gitView), 2026-09-18
 
