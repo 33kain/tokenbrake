@@ -1391,7 +1391,7 @@ function triggerGrid(reads, triggers, limits, opts) {
    by a test in test.mjs, the same way stemOf is pinned to saveOut. cli.js merges the user's tokenbrake.json
    over this, so a knob the user changed is respected and only the rest fall back to the default. */
 const TUNE_DEFAULTS = {
-  mcpTrim: false, dedup: false, readAfterEdit: false, reReadElide: false, blobElide: false, gitView: false,
+  mcpTrim: false, dedup: false, readAfterEdit: false, reReadElide: false, blobElide: false, gitView: false, shadow: true,
   maxChars: 6000, blobMinChars: 4000, blobMaxLine: 2000, dedupMinChars: 1000, gitViewMinChars: 2000,
   readMaxBytes: 60000, readLimitLines: 300,
 };
@@ -1594,6 +1594,45 @@ function thresholdAdvice(grid, current, measured, fired, opts) {
   return { advice: 'keep', to: null, why: 'no-gain' };
 }
 
+/* Shadow mode (guard `shadow: true`, on by default): an off-by-default feature still runs its own decision on
+   every result and logs ev:'shadow' with what it WOULD have withheld (`chars` -> `kept`), emitting nothing.
+   This joins those rows to the transcript by tool_use_id and prices them the way every saving here is priced:
+   withheld tokens, and those tokens times every request they would no longer have sat in. Withheld is measured
+   against what ENTERED context -- the transcript's own size for the result -- not the row's pre-trim `chars`:
+   a shadowed blob or diff over maxChars was still cut by the always-on trim, whose saving is already counted,
+   so only what the feature would have taken on top of it is its own. It is the withhold side exactly -- the
+   guard's own test on the real output, not an estimate -- and nothing about the backfire side: the model saw
+   the output as delivered, so whether it would have come back for the part the feature withholds is not
+   something this session can show. Only the features the guard shadows are read, and a row whose result is not
+   in this transcript is skipped (it cannot be priced). One row per result and feature, so a doubled install
+   does not count twice. */
+const SHADOWED = ['blobElide', 'gitView'];
+const emptyShadow = () => ({ n: 0, withheld: 0, carried: 0, grew: 0 });
+function shadowRecord(parsed, ledgerRecs) {
+  const byId = new Map(parsed.results.filter((r) => r.id).map((r) => [r.id, r]));
+  const out = new Map(SHADOWED.map((k) => [k, emptyShadow()]));
+  const seen = new Set();
+  let ran = false;
+  for (const l of ledgerRecs || []) {
+    if (!l) continue;
+    if (parsed.sessionId && l.session && l.session !== parsed.sessionId) continue;
+    if (l.sh) ran = true;   // the guard ran this session with shadow on: a zero below is "saw none", not "never looked"
+    if (l.ev !== 'shadow' || !out.has(l.feature) || !l.id) continue;
+    const r = byId.get(l.id);
+    const key = l.feature + '|' + l.id;
+    if (!r || seen.has(key)) continue;
+    seen.add(key);
+    const e = out.get(l.feature);
+    /* A feature can emit MORE than entered: the always-on trim cuts a big diff to maxChars, while a gitView
+       collapse keeps every real-source hunk up to the hook cap. That result is evidence against the feature, so
+       it is counted apart (`grew`) and never as an opportunity. */
+    const tok = Math.round(((r.chars || 0) - (Number(l.kept) || 0)) / CHARS_PER_TOKEN);
+    if (tok <= 0) { e.grew++; continue; }
+    e.n++; e.withheld += tok; e.carried += tok * ((r.carriedTurns || 0) + 1);
+  }
+  return { ran, ...Object.fromEntries(out) };
+}
+
 /* `opts.disabled` is the set of knobs written `false` in the raw tokenbrake.json. It cannot be derived from
    `cfg`: the caller hands us TUNE_DEFAULTS merged with the file, and every feature knob defaults to false
    there, so "absent" and "deliberately off" are the same value by the time it arrives. Only the raw file
@@ -1610,6 +1649,8 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; e.rows.push(w); };
   let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
 
+  const shadowed = Object.fromEntries(SHADOWED.map((k) => [k, emptyShadow()]));
+  let shadowSessions = 0;
   const blob = { n: 0, carried: 0 }, mcp = { n: 0, carried: 0 }, edits = { n: 0, carried: 0 }, reReadOpp = { n: 0, carried: 0 }, gitOpp = { n: 0, carried: 0 };
   const reachSessions = [];
   const sizedReads = [], shellRows = [];   // the two threshold grids' populations, pooled
@@ -1635,11 +1676,16 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     reReadFired += a.reReads.fired; reReadBack += a.reReads.backfired;
     netCarried += a.net; withholds += a.withholds.length;
 
-    const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried;
+    const sr = shadowRecord(p, led);
+    if (sr.ran) {
+      shadowSessions++;
+      for (const k of SHADOWED) for (const f of ['n', 'withheld', 'carried', 'grew']) shadowed[k][f] += sr[k][f];
+    }
+    if (!sr.ran) { const bo = blobOpportunity(p, cfg); blob.n += bo.n; blob.carried += bo.carried; }
     const mo = mcpOpportunity(p, cfg); mcp.n += mo.n; mcp.carried += mo.carried;
     const eo = editThenRead(p); edits.n += eo.n; edits.carried += eo.carried;
     const ro = reReadOpportunity(p); reReadOpp.n += ro.n; reReadOpp.carried += ro.carried;
-    const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried;
+    if (!sr.ran) { const go = gitOpportunity(p, cfg); gitOpp.n += go.n; gitOpp.carried += go.carried; }
 
     const u = unboundedReads(p, led, { sessionId: p.sessionId, readMaxBytes });
     capFired += u.capped;
@@ -1705,6 +1751,9 @@ function autotune(parsedSessions, ledger, cfg, opts) {
       return isOn ? 'keep' : 'try';   // clean but too few to be sure: keep it if already on, else worth a try
     }
     if (opp && (opp.n >= OPP_MIN_N || (opp.carried || 0) >= OPP_MIN_CARRIED)) return isOn ? 'keep' : 'try';
+    /* The shadow ran and the feature would have acted on nothing: not "no signal, measure it" but a measured
+       none -- on this work there is nothing for it to do. */
+    if (opp && opp.shadowSessions && !opp.n) return isOn ? 'keep' : 'idle';
     return isOn ? 'keep' : 'measure';
   };
   /* `bound` is the honesty of the opportunity estimate, decided HERE where the estimator lives rather than
@@ -1738,9 +1787,19 @@ function autotune(parsedSessions, ledger, cfg, opts) {
       bound, measured, opportunity: opp || null, status };
   };
 
+  /* A feature the shadow saw fire is judged on that, not on the off-state estimator: the same decision (still only
+     an opportunity -- the backfire side is unmeasured -- so at most a "try"), exact instead of estimated. */
+  /* Chosen per SESSION above: a session the shadow ran in contributes its exact record (zero included -- "saw
+     none" is an answer), one it did not contributes the estimate. The bound says which the total is made of. */
+  const offOrShadow = (k, estimate, bound) => {
+    if (!shadowSessions) return [estimate, bound];
+    const s = shadowed[k];
+    return [{ n: s.n + estimate.n, carried: s.carried + estimate.carried, withheld: s.withheld, grew: s.grew,
+      shadowN: s.n, estimateN: estimate.n, shadowSessions, estimateBound: bound }, estimate.n ? 'mixed' : 'shadow'];
+  };
   const features = [
-    feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), blob, 'near'),
-    feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), gitOpp, 'upper'),
+    feat('blobElide', 'Binary-Blob Elider', 'blobElide', measuredOf('blob'), ...offOrShadow('blobElide', blob, 'near')),
+    feat('gitView', 'Change-Aware Git View', 'gitView', measuredOf('gitview'), ...offOrShadow('gitView', gitOpp, 'upper')),
     feat('mcpTrim', 'MCP output trim', 'mcpTrim', measuredOf('mcp'), mcp, 'near'),
     feat('dedup', 'Duplicate-result pointer', 'dedup', measuredOf('dedup'), null, 'near'),   // no stored opportunity signal: dedup hashes bodies, which parseTranscript drops
     feat('reReadElide', 'Read-After-Read elision', 'reReadElide', readMeasured(reReadFired, reReadBack), reReadOpp, 'upper'),
@@ -1784,7 +1843,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
       ...thresholdAdvice(rg, readMaxBytes, null, capFired, { missing: capVerdict === 'missing' }) },
   };
 
-  const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [], excluded: [] };
+  const summary = { turnOn: [], tryThese: [], review: [], leaveOff: [], measure: [], keep: [], excluded: [], idle: [] };
   for (const f of features) {
     /* The summary is the line people act on, so a config-off feature (off, and either scoped to a tool or set
        false -- read from `note`) contributes to it ONLY from a genuine turn-on: a clean measured record whose
@@ -1802,6 +1861,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     else if (f.status === 'try') summary.tryThese.push(f.label);
     else if (f.status === 'review') summary.review.push(f.label);
     else if (f.status === 'measure') summary.measure.push(f.label);
+    else if (f.status === 'idle') summary.idle.push(f.label);
     else if (f.status === 'keep') summary.keep.push(f.label);
     else summary.leaveOff.push(f.label);
   }
@@ -1814,6 +1874,7 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   return { sessions: sessions.length, guarded,
     reach: reachPooled(reachSessions.filter((s) => s.ran)),
     netCarried, withholds, narrowings: reReadFired + deltaFired, features, readCap, thresholds, summary,
+    shadowOn: cfg.shadow !== false,
     thin: guarded < MIN_FIRE };   // a note, not a gate: a handful of sessions is a weak base for a recommendation
 }
 
@@ -2092,5 +2153,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };

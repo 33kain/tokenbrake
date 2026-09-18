@@ -13,6 +13,10 @@
   1); the report's list-price line and every dollar figure on its saving, still-within-reach and recovery lines
   are gone; `--compare` drops its cost row. Every figure tokenbrake prints is tokens or a count.
 - The evidence moved from the README to `EVIDENCE.md`; the README states why it quotes no percentage.
+- **Shadow mode, on by default.** While `blobElide` or `gitView` is off, the guard runs that feature's own decision
+  on each shell result and logs what it would have withheld (`ev:'shadow'`), emitting and saving nothing; output is
+  byte-identical either way. `tune` reads those rows as the exact withheld tokens on your own sessions, per session,
+  with "saw nothing" as an answer (`idle`) and results a feature would have grown counted against it.
 
 ## 0.3.0 — 2026-09-17
 

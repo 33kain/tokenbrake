@@ -66,6 +66,7 @@ const DEFAULTS = {
   gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
   gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
+  shadow: true,          // ON by default: an off-by-default feature (blobElide, gitView) still runs its own test and logs what it WOULD have withheld (ev:'shadow'), emitting nothing -- evidence for `tune` without a live run. Changes nothing that enters context.
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
   alwaysCap: []          // denylist: read paths / file-excerpt commands matching these are capped even under readMaxBytes
 };
@@ -207,6 +208,14 @@ function fitsCap(p) { const j = serialize(p); return j !== null && j.length <= H
    Returns the body it sent, so the ledger records what the model actually received -- or null when nothing
    was emitted at all, which is the fail-open case the tail comment explains. */
 function emitFitted(hookEventName, wrap, render) {
+  const f = fitPayload(hookEventName, wrap, render);
+  if (!f) return null;
+  emitJson(f.json);
+  return f.body;
+}
+/* The fitting half of emitFitted, with no side effect: the body and serialized payload the guard WOULD emit, or
+   null when it would emit nothing. Shadow mode measures with this, so its `kept` is byte-for-byte the live one. */
+function fitPayload(hookEventName, wrap, render) {
   const payloadOf = (b) => payload(hookEventName, wrap(b));
   /* Serialized ONCE per body and carried: the loop's measurement, the final fit check and the emission all
      read the same string, where they were three JSON.stringify calls over the same ~9.5 KB payload. */
@@ -241,9 +250,38 @@ function emitFitted(hookEventName, wrap, render) {
      the text will help. Returning null means "nothing emitted": the original passes through untouched, which
      is the honest fail-open, and the caller logs no kept/saved claim for it. */
   if (json === null || json.length > HOOK_OUTPUT_CAP) return null;
-  emitJson(json);
-  return body;
+  return { body, json };
 }
+/* Shadow mode: run an off-by-default feature's own decision and record what it would have withheld, emitting
+   nothing and saving nothing. Its own try/catch, because a shadow must never change what the real path does --
+   the guard fails open, and a shadow that threw would take the real trim down with it. */
+function shadow(fn) { try { fn(); } catch { /* a shadow is best-effort evidence, never behaviour */ } }
+
+/* The blob descriptor and the collapsed git body, built in one place for the live branch and its shadow. */
+function blobDescriptor(text, ml, keep, saved, budget) {
+  const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
+  const h = text.slice(0, Math.max(0, Math.min(keep, budget)));
+  return `${h}${text.length > h.length ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
+}
+function gitBody(g, saved) {
+  return `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
+}
+const isBlob = (text, ml, cfg) => ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare;
+/* The git collapse, or null when it collapses nothing or does not shrink. A diff that names no gitCollapse path
+   cannot collapse anything, so a substring pre-screen skips the split-and-join on the common case -- which
+   matters now that the shadow runs this on every git diff with gitView off. */
+function planGit(text, cfg) {
+  const pats = Array.isArray(cfg.gitCollapse) ? cfg.gitCollapse : [];
+  if (!pats.some((p) => p && text.includes(String(p)))) return null;
+  const gd = collapseGitDiff(text, pats);
+  return gd.collapsed && gd.text.length < text.length ? gd : null;
+}
+/* The live gitView's acceptance test, whole: the emitted body (collapse + note) is smaller than the diff and its
+   payload fits the hook cap. See the live branch for why each half is there. */
+function gitPays(body, text, evName, wrap) {
+  return body.length < text.length && body.length <= HOOK_OUTPUT_CAP && fitsCap(payload(evName, wrap(body)));
+}
+
 function log(rec) {
   try {
     fs.mkdirSync(TB_DIR, { recursive: true });
@@ -255,13 +293,16 @@ function short(s, n) { s = String(s || ''); return s.length > n ? s.slice(0, n) 
 /* Save a full result to out/<session>-<toolUseId>.txt before it is cut, so nothing withheld from the model is
    lost -- the trim note names the path and `tokenbrake show <id>` retrieves it. Best-effort: any error => no
    saved copy, and the caller passes null on to the note. */
+/* Where saveOut puts a result, computed without writing it -- the shadow names the same path in its note. */
+function outPathFor(input) {
+  const sid = String(input.session_id || 'session').slice(0, 8).replace(/[^\w-]/g, '_');   // sanitize (as sessionStatePath does): a crafted session_id must not put `/` or `..` in the out/ filename
+  const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
+  return path.join(TB_DIR, 'out', `${sid}-${tid}.txt`);
+}
 function saveOut(input, text) {
   try {
-    const outDir = path.join(TB_DIR, 'out');
-    fs.mkdirSync(outDir, { recursive: true });
-    const sid = String(input.session_id || 'session').slice(0, 8).replace(/[^\w-]/g, '_');   // sanitize (as sessionStatePath does): a crafted session_id must not put `/` or `..` in the out/ filename
-    const tid = String(input.tool_use_id || Date.now()).slice(-10).replace(/[^\w-]/g, '');
-    const saved = path.join(outDir, `${sid}-${tid}.txt`);
+    fs.mkdirSync(path.join(TB_DIR, 'out'), { recursive: true });
+    const saved = outPathFor(input);
     fs.writeFileSync(saved, text);
     return saved;
   } catch { return null; }
@@ -645,7 +686,10 @@ function handlePost(input, cfg) {
     what: isShell ? short(ti.command, 120) : (ti.file_path || ti.pattern || ti.url || ti.description || undefined),
     id: input.tool_use_id || undefined,
     transcript: input.transcript_path || undefined,
-    failed: failed || undefined
+    failed: failed || undefined,
+    /* Shadow was on for this call. Without it a session whose shadow saw nothing to act on reads the same as one
+       where shadow never ran, and tune would fall back to an estimate the shadow had already answered. */
+    sh: cfg.shadow ? 1 : undefined
   };
 
   /* Resolve the MCP body once (features 1/6): its inner text is the size basis -- rec.chars was the
@@ -743,22 +787,30 @@ function handlePost(input, cfg) {
      wanted whole and rarely a blob. Logged as ev:'post' with blob:true; a plain
      trim to the backfire audit (marker + saved out/), so report --backfire counts it and a re-read of the saved
      file as a pull-back with no new machinery. */
+  /* Binary-Blob Elider and Change-Aware Git View each have ONE decision (isBlob / planGit, the same renderer, the
+     same fitting) that goes one of two ways: live (the feature is on) emits it, and shadow (the feature is off,
+     shadow on) logs what it would have emitted -- with the same saved-path note -- and emits and saves nothing.
+     Shared pieces, so the shadow cannot drift from what the live path would do. */
+  /* The shadow's WHOLE decision runs inside shadow()'s try/catch, the test included: anything it throws must
+     never reach the guard's outer fail-open, which would exit before the live trim below ever ran. */
+  if (isShell && !failed && !cfg.blobElide && cfg.shadow && text.length >= cfg.blobMinChars) shadow(() => {
+    const ml = maxLineLen(text);
+    if (!isBlob(text, ml, cfg)) return;
+    const f = fitPayload(evName, wrapShell, (budget) => blobDescriptor(text, ml, cfg.blobKeepChars, outPathFor(input), budget));
+    if (f) log({ ...rec, ev: 'shadow', feature: 'blobElide', chars: text.length, kept: f.body.length });
+  });
   if (isShell && !failed && cfg.blobElide && text.length >= cfg.blobMinChars) {
     const ml = maxLineLen(text);
-    if (ml >= cfg.blobMaxLine && ml >= text.length * cfg.blobLineShare) {
-      const saved = saveOut(input, text);
-      const keep = cfg.blobKeepChars;   // the ceiling is emitFitted's job alone; blobKeepChars means what it says
-      const note = saved ? ` Full output saved to ${saved} — Read it if you need the raw bytes.` : '';
+    if (isBlob(text, ml, cfg)) {
       /* Measured like the others. This branch's kept head is base64 or minified source BY CONSTRUCTION, so it
          is the most escape-dense body the guard ever emits -- `blobKeepChars` is 160 by default, which is why
          a fixed character reserve ever appeared to hold, but raising it is a one-knob change and at 8,000
-         this emitted 16,474. Math.max(0) below is NOT dead: `keep` comes from config, and a negative
-         blobKeepChars would make slice() cut from the END of the blob. */
-      const renderBlob = (budget) => {
-        const h = text.slice(0, Math.max(0, Math.min(keep, budget)));
-        return `${h}${text.length > h.length ? '…' : ''}\n\n[tokenbrake] withheld ~${Math.round(text.length / 1024).toLocaleString()} KB of blob-like output (longest line ${ml.toLocaleString()} chars — looks minified or encoded, not prose).${note}`;
-      };
-      const descriptor = emitFitted(evName, wrapShell, renderBlob);
+         this emitted 16,474. Math.max(0) in blobDescriptor is NOT dead: `keep` comes from config, and a
+         negative blobKeepChars would make slice() cut from the END of the blob. The ceiling is the fitter's
+         job alone; blobKeepChars means what it says. */
+      const keep = cfg.blobKeepChars;
+      const saved = saveOut(input, text);
+      const descriptor = emitFitted(evName, wrapShell, (budget) => blobDescriptor(text, ml, keep, saved, budget));
       // chars = the (possibly shaped) text we actually withheld, not the pre-shape rec.chars
       log({ ...rec, chars: text.length, blob: true, saved, ...outcome(descriptor) });
       return;
@@ -772,34 +824,32 @@ function handlePost(input, cfg) {
      the marker, so report --backfire counts it (kind 'gitview') and a re-read of the saved file as a pull-back.
      Skipped if the collapsed body would still exceed the hook output cap -- a huge all-real-source diff is left
      to the normal trim below. Not on a failed command. */
-  if (isShell && !failed && cfg.gitView && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''))) {
-    const g = collapseGitDiff(text, cfg.gitCollapse);
-    if (g.collapsed && g.text.length < text.length) {
+  const gitCandidate = isShell && !failed && text.length >= cfg.gitViewMinChars && GIT_DIFF.test(String(ti.command || ''));
+  if (gitCandidate && !cfg.gitView && cfg.shadow) shadow(() => {
+    const gd = planGit(text, cfg);
+    if (!gd) return;
+    const body = gitBody(gd, outPathFor(input));
+    if (gitPays(body, text, evName, wrapShell)) log({ ...rec, ev: 'shadow', feature: 'gitView', chars: text.length, kept: body.length, collapsed: gd.collapsed });
+  });
+  if (gitCandidate && cfg.gitView) {
+    const gd = planGit(text, cfg);
+    if (gd) {
       const saved = saveOut(input, text);
-      const body = `${g.text}\n[tokenbrake] collapsed ${g.collapsed} generated/lockfile diff${g.collapsed > 1 ? 's' : ''} above; real-source hunks kept.${saved ? ` Full diff saved to ${saved} — Read it if you need the collapsed parts.` : ''}`;
+      const body = gitBody(gd, saved);
       /* Act only when the FULL emitted body (collapse + the summary note that names the saved path) is actually
          smaller than the original AND fits the hook cap. A tiny generated hunk in an otherwise large real-source
-         diff can shrink `g.text` yet leave `body` bigger than the diff once the note is added -- emitting that
-         would grow context and log kept > chars, poisoning the A/B. When it does not pay off (or a huge
+         diff can shrink the collapse yet leave `body` bigger than the diff once the note is added -- emitting
+         that would grow context and log kept > chars, poisoning the A/B. When it does not pay off (or a huge
          all-real-source diff would still overflow the cap), fall through to the normal trim below; that path
-         re-saves the same out/ file (idempotent, same tool_use_id) -- accepted for this uncommon case. */
-      /* The cap test is on the EMITTED payload, not on `body`: a collapsed diff whose kept real-source hunks
+         re-saves the same out/ file (idempotent, same tool_use_id) -- accepted for this uncommon case.
+         The cap test is on the EMITTED payload, not on `body`: a collapsed diff whose kept real-source hunks
          are quote- or backslash-dense passed the character check and serialized past the ceiling (measured
-         10,456 at 60 such lines, 17,058 at 100), so the collapse was dropped, the whole diff entered, and the
-         ledger logged the saving anyway. Below the window it fits; above it, `body` exceeds the budget and
-         this falls through to the trim as it already did. */
-      /* body.length is a free and SOUND precondition, not a replacement for the payload check: JSON escaping
-         never shrinks a string, so a body already past the ceiling cannot serialize under it. Without it the
-         common case -- a collapse that then falls through to the trim anyway -- serializes a diff that can
-         run to hundreds of KB. Measured, fitsCap on a 515 KB body costs 0.7 ms plain and 5.3 ms NUL-dense,
-         against ~0.1 microseconds for the length test. */
-      if (body.length < text.length && body.length <= HOOK_OUTPUT_CAP) {
-        const gitPayload = payload(evName, wrapShell(body));
-        if (fitsCap(gitPayload)) {
-          log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
-          emit(gitPayload);
-          return;
-        }
+         10,456 at 60 such lines, 17,058 at 100). body.length first is a free and SOUND precondition (JSON
+         escaping never shrinks a string), and spares serializing a diff that can run to hundreds of KB. */
+      if (gitPays(body, text, evName, wrapShell)) {
+        log({ ...rec, gitview: true, chars: text.length, kept: body.length, saved });   // chars = the diff we withheld
+        emit(payload(evName, wrapShell(body)));
+        return;
       }
     }
   }
