@@ -198,9 +198,10 @@ const fmt = (n) => n.toLocaleString();
    readLimitLines. */
 function guardCfg() {
   const D = transcript.GUARD_DEFAULTS;   // the guard's own defaults, not copies
-  const cfg = { maxChars: D.maxChars, readMaxBytes: D.readMaxBytes, readLimitLines: D.readLimitLines, persistedLimitLines: D.persistedLimitLines };
+  const cfg = { maxChars: D.maxChars, readMaxBytes: D.readMaxBytes, readLimitLines: D.readLimitLines, persistedLimitLines: D.persistedLimitLines, raw: {} };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
+    if (c && typeof c === 'object' && !Array.isArray(c)) cfg.raw = c;   // the file as written, for the report's replay
     if (c.maxChars) cfg.maxChars = c.maxChars;
     if (c.readMaxBytes) cfg.readMaxBytes = c.readMaxBytes;
     if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
@@ -927,8 +928,10 @@ function report() {
   let parsed;
   try { parsed = transcript.parseTranscript(file); } catch (e) { console.log('Could not read ' + file + ': ' + e.message); return; }
   /* The report's "Where you read" line compares against the cap the user actually runs, not the default. */
-  const { readLimitLines, maxChars, toolMaxChars } = guardCfg();
-  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars }));
+  /* raw: the config as written, so the replay line applies the person's own settings (thresholds, noTrim,
+     alwaysCap, per-tool entries) the way the guard would. */
+  const { readLimitLines, maxChars, toolMaxChars, raw } = guardCfg();
+  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars, userCfg: raw }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
 
@@ -1398,6 +1401,14 @@ function tuneReport() {
        built not to make. An on-but-silent feature gets the plain fact instead. */
     if (f.on) return 'on, but has not fired in these sessions -- nothing here matched it yet';
     const o = f.opportunity;
+    if (f.bound === 'offline') {
+      if (!o.shadowSessions) return 'off; it ran live in every session here, so its measured record above is the evidence';
+      const cov = f.key === 'readAfterEdit' && t.editsNoPatch ? ' (' + t.editsNoPatch + ' of ' + t.editsTotal + ' edits carried no line ranges and could not be replayed)' : '';
+      return o.n
+        ? 'off; replayed on ' + o.shadowSessions + ' session(s) of your transcripts with the guard\'s own decision, it would have acted on ' + o.n
+          + ' result(s), withholding ~ ' + fmt(o.withheld) + ' tokens (~ ' + fmt(o.carried) + ' carried token-reads)' + cov + '. Whether the model would have come back for it is not measured'
+        : 'off; replayed on ' + o.shadowSessions + ' session(s) of your transcripts with the guard\'s own decision, it would have acted on nothing' + cov;
+    }
     if (!o || !o.n) return 'not fired, and no off-state signal seen here -- turn it on for a session to measure (a feature\'s wins can be invisible until it runs)';
     /* Shadow rows are the guard's own test on the real output, so the withhold side is exact. What they cannot
        say is whether the model would have come back for it: it saw the output as delivered. */
@@ -1415,8 +1426,7 @@ function tuneReport() {
     const what = f.key === 'gitView' ? ' large git diff/show result(s) (gitView acts only on those touching a lockfile/minified path)'
       : f.key === 'blobElide' ? ' blob-like shell result(s)'
       : f.key === 'mcpTrim' ? ' MCP result(s) over maxChars'
-      : f.key === 'reReadElide' ? ' whole-file re-read(s)'
-      : f.key === 'readAfterEdit' ? ' edit-then-whole-read(s)' : ' result(s)';
+      : ' result(s)';
     return 'not fired; would act on ' + bound + o.n + what + (o.carried ? ' (~ ' + fmt(o.carried) + ' carried token-reads)' : '');
   };
   console.log('\n  Off-by-default features:');

@@ -286,6 +286,13 @@ have withheld. It emits nothing and saves nothing, so what enters context is byt
 own sessions, in place of an estimate. It still recommends at most "try": the model saw the whole output, so whether
 it would have come back for the withheld part is not something a shadow can measure. `shadow: false` turns it off.
 
+The three features that remember earlier calls in a session — `dedup`, `reReadElide`, `readAfterEdit` — are measured
+differently: `tune` replays your transcripts in order and asks the guard's own decision functions at each step, so
+it needs no install and works on every session already on disk. It is deliberately conservative where a transcript
+cannot see what the guard sees: a re-read counts only if no shell command, edit or compaction came between the two
+reads, and a result the trim already cut cannot be matched as a duplicate. Edits without line data are counted and
+reported rather than guessed. A session where the feature actually ran is judged on its real record instead.
+
 A `tools` map overrides any of these knobs per tool, keyed by tool name (`Bash`, `PowerShell`, `Read`). A
 tool's entry is merged over the base config for that tool only — knobs it omits keep their base value — so you
 can trim one tool hard and leave another loose, or switch the guard off for a single tool with

@@ -396,16 +396,56 @@ function readRecord(session, rec) { appendSessionState(readsPath(session), rec);
    guard does not consult compaction; a small `since` is the proxy for "the read is recent, so the model still
    has it". Null when the file was not read whole this session. */
 function priorRead(session, file) {
-  let last = null, since = 0;
+  const records = [];
   try {
     for (const line of fs.readFileSync(readsPath(session), 'utf8').split('\n')) {
       if (!line) continue;
-      let o; try { o = JSON.parse(line); } catch { continue; }
-      if (!o || !o.file) continue;
-      if (o.file === file) { last = o; since = 0; } else if (last) { since++; }
+      try { records.push(JSON.parse(line)); } catch { /* skip a bad line */ }
     }
   } catch { /* no state yet */ }
+  return priorReadIn(records, file);
+}
+
+/* ---- The stateful features' decisions, as pure functions ------------------------------------------------
+   The live guard reads its per-session state from disk and calls these; transcript.js's offline shadow keeps
+   the same state in memory while replaying a transcript and calls the SAME functions -- so the replay cannot
+   drift from what the guard decides. Nothing below touches the filesystem, stdin or the ledger. */
+/* Re-read: the latest record of `file` and how many other whole-reads came after it. */
+function priorReadIn(records, file) {
+  let last = null, since = 0;
+  for (const o of records || []) {
+    if (!o || !o.file) continue;
+    if (o.file === file) { last = o; since = 0; } else if (last) { since++; }
+  }
   return last ? { size: last.size, mtime: last.mtime, since } : null;
+}
+/* Re-read: elide when the file was read whole before, is unchanged (same size and mtime) and the read is recent. */
+function reReadDecision(prior, size, mtime, nLines, cfg) {
+  return !!prior && cfg.reReadKeepLines > 0 && cfg.reReadKeepLines < nLines
+    && prior.size === size && prior.mtime === mtime && prior.since < cfg.reReadRecency;
+}
+/* Read-after-edit: the window around the latest edit's ranges, or null when it would not narrow. */
+function editWindow(recs, nLines, cfg) {
+  const latest = (recs || []).reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
+  const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);
+  if (!ranges.length) return null;
+  const ctx = cfg.editContextLines;
+  const editFrom = Math.min(...ranges.map(r => r[0])), editTo = Math.max(...ranges.map(r => r[1]));
+  const from = Math.max(1, editFrom - ctx);
+  const to = editTo + ctx;
+  const limit = to - from + 1;
+  return editFrom <= nLines + 1 && limit <= cfg.readLimitLines && limit < nLines ? { from, to, limit } : null;
+}
+/* The notes the two Read narrowings add as additionalContext -- in one place, so the replay prices them too. */
+function deltaNote(base, from, to, nLines) {
+  return `${base}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${Math.min(to, nLines)} of ${nLines}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.`;
+}
+function reReadNote(base, keep, nLines) {
+  return `${base}: you already read this file whole earlier this session and it is unchanged, so tokenbrake is showing only the first ${keep} lines instead of re-adding all ${nLines}. Read with an explicit offset/limit if you need part of it again.`;
+}
+/* Dedup: the pointer that replaces a repeat of an earlier result. */
+function dedupPointer(prior) {
+  return `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
 }
 
 /* Shape filters, OFF by default and A/B'd before any default moves.
@@ -721,7 +761,7 @@ function handlePost(input, cfg) {
       const h = hashOf(dtext);
       const prior = h ? dedupLookup(input.session_id, h) : null;
       if (prior) {
-        const pointer = `[tokenbrake] identical to an earlier result this session (${prior.chars.toLocaleString()} chars). Full: tokenbrake show ${prior.id}`;
+        const pointer = dedupPointer(prior);
         /* The pointer is ~110 characters, but the PAYLOAD carrying it need not be small: for MCP,
            rebuild() keeps every non-text sibling block (an image, a resource) and spreads the original
            response around it. Measured, a duplicate screenshot result emitted 40,306 characters against a
@@ -1017,21 +1057,13 @@ function handleReadPre(input, cfg) {
      and it must hide something (limit < nLines). `to` is left unclamped so a last-line edit on a file with no
      trailing newline (where nLines counts one short) still shows. */
   if (cfg.readAfterEdit && nLines != null && !persisted && st.size <= cfg.readMaxBytes && !matchesAny(cfg.alwaysCap, fp)) {
-    const recs = editLookup(input.session_id, path.resolve(fp));
-    const latest = recs.reduce((a, b) => (b && (b.t || 0) >= (a && a.t || 0) ? b : a), null);
-    const ranges = (latest && Array.isArray(latest.ranges) ? latest.ranges : []).filter(r => Array.isArray(r) && r.length === 2);
-    if (ranges.length) {
-      const ctx = cfg.editContextLines;
-      const editFrom = Math.min(...ranges.map(r => r[0])), editTo = Math.max(...ranges.map(r => r[1]));
-      const from = Math.max(1, editFrom - ctx);
-      const to = editTo + ctx;
-      const limit = to - from + 1;
-      if (editFrom <= nLines + 1 && limit <= cfg.readLimitLines && limit < nLines) {
-        log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, offset: from, limit });
-        emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, offset: from, limit },
-          additionalContext: `${path.basename(fp)}: you edited this file this session, so tokenbrake narrowed this read to the region you edited (lines ${from}-${Math.min(to, nLines)} of ${nLines}) -- a read right after an edit is usually a verify. Read with an explicit offset/limit for the rest of the file.` } });
-        return;
-      }
+    const w = editWindow(editLookup(input.session_id, path.resolve(fp)), nLines, cfg);
+    if (w) {
+      const { from, to, limit } = w;
+      log({ ev: 'read-delta', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, offset: from, limit });
+      emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, offset: from, limit },
+        additionalContext: deltaNote(path.basename(fp), from, to, nLines) } });
+      return;
     }
   }
 
@@ -1043,12 +1075,12 @@ function handleReadPre(input, cfg) {
      write -- changes size or mtime and fails the equality check below, so this reaches only genuine unchanged
      re-reads. The one thing the guard does not consult is compaction (it never sees the context window); that
      risk is mitigated by reReadRecency and, default-OFF, gated by the Backfire Auditor before the default moves. */
+  /* reReadDecision checks the keep-lines bound too; checking it here first skips reading the reads file. */
   if (cfg.reReadElide && nLines != null && cfg.reReadKeepLines > 0 && cfg.reReadKeepLines < nLines) {
-    const prior = priorRead(input.session_id, path.resolve(fp));
-    if (prior && prior.size === st.size && prior.mtime === st.mtimeMs && prior.since < cfg.reReadRecency) {
+    if (reReadDecision(priorRead(input.session_id, path.resolve(fp)), st.size, st.mtimeMs, nLines, cfg)) {
       log({ ev: 'read-reread', session: input.session_id, tool: 'Read', what: fp, bytes: st.size, lines: nLines, limit: cfg.reReadKeepLines });
       emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...ti, limit: cfg.reReadKeepLines },
-        additionalContext: `${path.basename(fp)}: you already read this file whole earlier this session and it is unchanged, so tokenbrake is showing only the first ${cfg.reReadKeepLines} lines instead of re-adding all ${nLines}. Read with an explicit offset/limit if you need part of it again.` } });
+        additionalContext: reReadNote(path.basename(fp), cfg.reReadKeepLines, nLines) } });
       return;
     }
   }
@@ -1102,4 +1134,4 @@ function main() {
    guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
    copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
 if (require.main === module) main();
-else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED };
+else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };
