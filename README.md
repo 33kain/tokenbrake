@@ -85,7 +85,7 @@ To have it in every cloud session, install it from the environment's **Setup scr
 
 ```bash
 #!/bin/bash
-npm i -g tokenbrake@0.2.7 || true
+npm i -g tokenbrake@0.4.0 || true
 tokenbrake init || true
 tokenbrake status || true
 ```
