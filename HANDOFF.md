@@ -1169,3 +1169,25 @@ cost-only results marked "(recorded in cost only; not restated here -- tokens-on
 calls left for the user: pre-registered decision rules whose third condition was written in cost are marked,
 not rewritten; and AB-TASK still calls the content-heavy mcpTrim result "a real backfire", a verdict that rested
 on +46% cost -- its remaining token figure (+19% cache reads) sits inside the 42.6% noise band.
+
+### Item 5 — shadow mode, first cut (blobElide + gitView), 2026-09-18
+
+Code complete and reviewed, suite green at 705 checks. `shadow: true` ships ON (it changes nothing that enters
+context -- tested byte-identical with it on and off). Design after `/simplify`: ONE decision per feature
+(`isBlob`/`planGit`, `blobDescriptor`/`gitBody`, `fitPayload` split out of `emitFitted`, `outPathFor` out of
+`saveOut`) shared by the live branch and its shadow, so the shadow's `kept` equals the live one byte for byte
+(tested). The shadow's whole decision runs inside `shadow()`'s try/catch, so it can never stop the live trim.
+Every ledger row carries `sh: 1` when shadow is on, so tune can tell "shadow saw nothing" (status `idle`) from
+"shadow never ran" (falls back to the estimate) -- chosen PER SESSION. Withheld is priced against what ENTERED
+context (the transcript's size), so a result the always-on trim already cut is not double-counted; a result the
+feature would have GROWN (a gitView collapse can keep more than the trim let in) is counted apart as evidence
+against it. `planGit` pre-screens on the gitCollapse substrings so the default-on shadow costs nothing on an
+ordinary diff.
+
+Honest limit, unchanged from the card: it measures the withhold side exactly and says nothing about backfire --
+the model saw the output as delivered. At most a "try"; a flip still wants one live run.
+
+NOT done: `dedup`, `reReadElide`, `readAfterEdit`, `mcpTrim`. The three state-carrying ones need the card's
+question settled first (a shadow must WRITE the per-session state or the second firing never sees the first, and
+must never read it back into an emission). `mcpTrim` is stateless and is the next cheap one. On this machine every
+feature is switched ON in the user's config, so shadow collects nothing here until one is turned off.

@@ -272,11 +272,19 @@ Optional `~/.claude/tokenbrake.json` (or under `CLAUDE_CONFIG_DIR`):
   "readLimitLines": 300,
   "persistedLimitLines": 80,
   "logAllTools": true,
+  "shadow": true,
   "enabled": true
 }
 ```
 
 `enabled: false` turns the guard off without uninstalling. `logAllTools: false` records only trimmed and capped events.
+
+`shadow` (default `true`) is evidence, not behaviour: while `blobElide` or `gitView` is off, the guard still runs
+that feature's own test on each shell result and, when it would have fired, writes one ledger row with what it would
+have withheld. It emits nothing and saves nothing, so what enters context is byte-identical with it on or off.
+`tokenbrake tune` then reads those rows as an exact count of what the feature would have withheld in tokens on your
+own sessions, in place of an estimate. It still recommends at most "try": the model saw the whole output, so whether
+it would have come back for the withheld part is not something a shadow can measure. `shadow: false` turns it off.
 
 A `tools` map overrides any of these knobs per tool, keyed by tool name (`Bash`, `PowerShell`, `Read`). A
 tool's entry is merged over the base config for that tool only — knobs it omits keep their base value — so you

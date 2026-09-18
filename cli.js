@@ -1380,7 +1380,7 @@ function tuneReport() {
   else if (t.netCarried >= 0) console.log('  Net so far: ~ ' + fmt(t.netCarried) + ' token-reads saved across the features already on, after any pull-backs (backfire audit).');
   else console.log('  Net so far: ~ ' + fmt(-t.netCarried) + ' token-reads LOST across the features already on -- pull-backs cost more than was saved. See tokenbrake report --backfire.');
 
-  const mark = { 'turn-on': '[ON] ', 'keep': '[on] ', 'try': '[try]', 'review': '[!!] ', 'measure': '[ ? ]', 'leave-off': '[ - ]' };
+  const mark = { 'turn-on': '[ON] ', 'keep': '[on] ', 'try': '[try]', 'review': '[!!] ', 'measure': '[ ? ]', 'leave-off': '[ - ]', 'idle': '[ 0 ]' };
   const evidence = (f) => {
     const m = f.measured, isRead = m && m.savedCarried == null;
     if (m && m.fired > 0) {
@@ -1398,6 +1398,17 @@ function tuneReport() {
     if (f.on) return 'on, but has not fired in these sessions -- nothing here matched it yet';
     const o = f.opportunity;
     if (!o || !o.n) return 'not fired, and no off-state signal seen here -- turn it on for a session to measure (a feature\'s wins can be invisible until it runs)';
+    /* Shadow rows are the guard's own test on the real output, so the withhold side is exact. What they cannot
+       say is whether the model would have come back for it: it saw the output as delivered. */
+    if (f.bound === 'shadow' || f.bound === 'mixed') {
+      const grew = o.grew ? '; on ' + o.grew + ' more it would have ADDED tokens (its output larger than what entered), which counts against it' : '';
+      const sh = o.shadowN
+        ? 'its shadow saw it would have acted on ' + o.shadowN + ' result(s) in ' + o.shadowSessions + ' session(s), withholding ~ ' + fmt(o.withheld) + ' tokens (exact, from the guard\'s own test)'
+        : 'its shadow ran in ' + o.shadowSessions + ' session(s) and saw nothing it would act on';
+      const est = o.estimateN ? '; in the sessions it did not run in, estimated ' + (o.estimateBound === 'upper' ? 'up to ' : '~ ') + o.estimateN + ' more' : '';
+      return 'off; ' + sh + grew + est + (o.carried ? ' -- ~ ' + fmt(o.carried) + ' carried token-reads in all' : '')
+        + (o.n ? '. Whether the model would have come back for it is not measured' : '');
+    }
     const bound = f.bound === 'upper' ? 'up to ' : '~ ';   // upper-bound estimators say "up to"; the under-counting ones "~"
     const what = f.key === 'gitView' ? ' large git diff/show result(s) (gitView acts only on those touching a lockfile/minified path)'
       : f.key === 'blobElide' ? ' blob-like shell result(s)'
@@ -1407,6 +1418,7 @@ function tuneReport() {
     return 'not fired; would act on ' + bound + o.n + what + (o.carried ? ' (~ ' + fmt(o.carried) + ' carried token-reads)' : '');
   };
   console.log('\n  Off-by-default features:');
+  if (!t.shadowOn) console.log('    (shadow is off in your config, so blobElide and gitView are estimated from the off state rather than measured -- "shadow": true measures them for free)');
   for (const f of t.features) {
     /* `note` (from feat()) is the status-independent config classification: `scoped` (a `tools` entry pins the
        knob off) and `user-off` (top-level false) are the two ways it is off BY CONFIG, `running` is on via a
@@ -1424,6 +1436,7 @@ function tuneReport() {
           : '   ("' + f.knob + '": false in your config -- delete the line or set it true to take it back)')
       : (f.status === 'turn-on' || f.status === 'try') ? '   Set "' + f.knob + '": true'
       : f.status === 'measure' ? '   Set "' + f.knob + '": true to measure it'
+      : f.status === 'idle' ? '   (nothing on your work for it to do -- leave it off)'
       : f.status === 'review' ? '   ("' + f.knob + '": false to turn it back off)' : '';
     /* [off] only where the feature is off by config AND the status would otherwise offer to turn it on, so the
        mark and the set-line agree. `running` is on, and a config-off knob at review/leave-off keeps its verdict
@@ -1483,6 +1496,7 @@ function tuneReport() {
   if (s.tryThese.length) parts.push('Try: ' + s.tryThese.join(', '));
   if (s.review.length) parts.push('Reconsider: ' + s.review.join(', '));
   if (s.measure.length) parts.push('Measure (no off-state signal): ' + s.measure.join(', '));
+  if (s.idle.length) parts.push('Nothing to act on (its shadow saw none): ' + s.idle.join(', '));
   if (s.leaveOff.length) parts.push('Leave off (backfired): ' + s.leaveOff.join(', '));
   /* A feature with a clean measured record that --write will not set still belongs in the summary: before it
      had its own bucket it appeared under "Turn on:", which was wrong, and routing it out of there without a
