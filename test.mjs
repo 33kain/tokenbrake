@@ -668,7 +668,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: no transcript falls back to the ledger with a note', /showing the ledger alone/.test(r.stdout) && /Trimmed by tokenbrake/.test(r.stdout));
   rmSync(cfg, { recursive: true, force: true });
   r = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: join(tmpdir(), 'tokenbrake-none-' + Date.now()) } });
-  t('cli: nothing at all says what to do', /No transcript and no ledger yet/.test(r.stdout));
+  t('cli: nothing at all says what to do', /No Claude Code session transcripts found/.test(r.stdout) && /nothing needs installing/.test(r.stdout));
 
   // the guard now records the join keys
   const g = spawnSync(process.execPath, ['./guard.js', 'post'], { input: JSON.stringify({ session_id: 's', tool_use_id: 'toolu_1', transcript_path: '/t/s.jsonl', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: { stdout: 'a', stderr: '' } }), encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: CFG } });
@@ -1030,7 +1030,50 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('counts shell results at or under the threshold only', sm.shell === 3 && sm.n === 2, JSON.stringify(sm));
   t('with their tokens and carried cost', sm.tokens === 500 + 100 && sm.carried === 500 * 3 + 100 * 0, JSON.stringify(sm));
   const text = T.renderReport(parsed, []);
-  t('the report carries the line with the share of all carried', /Under the trim threshold: 2 of 3 shell results/.test(text) && /% of all carried\)/.test(text), text.split('\n').find(l => /Under the trim/.test(l)));
+  t('the report carries the line with the share of all carried', /Small shell output, at or under the threshold \(excerpts and failures included\): 2 of 3 shell results/.test(text) && /% of all carried\)/.test(text), text.split('\n').find(l => /Small shell output/.test(l)));
+
+  /* Item 1: `report` is the product, run before anything is installed. Two things it must get right there.
+     A single-file excerpt goes down the guard's read path, so it is never in the trim's window and never the
+     result the report says the guard "would have trimmed". And a session without the guard gets the question
+     that person is asking -- is there anything here for the brake? -- not "Acted on: 0". */
+  {
+    const mk = (results) => ({ sessionId: 'fresh', cwd: '/w', requests: Array.from({ length: 6 }, () => ({})), compactions: [], results });
+    const R = (id, name, chars, extra) => ({ id, name, what: 'cmd ' + id, chars, tokens: Math.round(chars / 4), carried: Math.round(chars / 4) * 5,
+      carriedTurns: 5, afterReq: 0, isError: false, marker: false, file: null, ...(extra || {}) });
+    const excerptOnly = mk([R('e1', 'Bash', 16000, { what: "sed -n '1,400p' big.js", file: 'big.js', excerpt: true }), R('o1', 'Agent', 400)]);
+    const rc = T.reach(excerptOnly, []);
+    t('a single-file excerpt is its own bucket, never in the trim window',
+      rc.excerpt.n === 1 && rc.window.n === 0 && !T.inTrimWindow(excerptOnly.results[0], 6000), JSON.stringify({ w: rc.window, e: rc.excerpt }));
+    const tx = T.renderReport(excerptOnly, []);
+    t('and the report never names an excerpt as a result the guard would have trimmed',
+      !/would have trimmed/.test(tx) && /single-file excerpts \(read like a Read: capped over readMaxBytes, never head\/tail-trimmed\)/.test(tx), tx.split('\n').find(l => /brakes on|excerpts/.test(l)));
+    /* guardRan finds the guard by a ledger row or a trim marker, and a session it ran in can leave neither -- so
+       the line reports what was seen, not a verdict on the install. */
+    t('a session with no sign of the guard, with little in reach, says so instead of "Acted on: 0"',
+      /No sign of tokenbrake in this session \(no ledger row, no trim marker\), and 0% of what it carried is in the brake's reach -- too little/.test(tx) && !/Acted on:/.test(tx),
+      tx.split('\n').find(l => /No sign|Acted on/.test(l)));
+    const dumps = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 400)]);
+    const td = T.renderReport(dumps, []);
+    t('a session with no sign of the guard, with plenty in reach, says what the brake could have acted on and how to install it',
+      /No sign of tokenbrake in this session \(no ledger row, no trim marker\)\. The brake could have acted on 1 result, \d+% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(td)
+      && !/Still within reach/.test(td), td.split('\n').find(l => /No sign/.test(l)));
+    t('and its advice line names the result in the window',
+      /One result to have brakes on: Bash "node tools\/dump\.js"/.test(td), td.split('\n').find(l => /brakes on/.test(l)));
+    t('the report takes the person\'s own maxChars, not the shipped default',
+      T.reach(dumps, [], { maxChars: 25000 }).window.n === 0 && /over 6k tokens/.test(T.renderReport(dumps, [], { maxChars: 25000 })));
+    /* The guard's toolConfig merges tools.<tool>.maxChars over the top level; a report that ignored it would
+       call a result under that value one the guard "would have trimmed". */
+    t('a per-tool maxChars is honoured the way the guard applies it',
+      T.reach(dumps, [], { maxChars: 6000, toolMaxChars: { Bash: 25000 } }).window.n === 0
+      && T.reach(dumps, [], { maxChars: 6000, toolMaxChars: { PowerShell: 25000 } }).window.n === 1
+      && !/brakes on/.test(T.renderReport(dumps, [], { maxChars: 6000, toolMaxChars: { Bash: 25000 } })));
+    /* An excerpt over readMaxBytes is capped by the guard and carries a marker -- the Read cap acting, not the
+       trim -- so even when it is in the trimmed set it stays an excerpt. */
+    t('an excerpt the guard capped stays an excerpt, not a trim the guard acted on',
+      (() => { const r = T.reach(excerptOnly, [excerptOnly.results[0]]); return r.excerpt.n === 1 && r.acted.n === 0 && r.window.n === 0; })());
+    t('reach counts shell results itself, excerpts included, so no caller has to sum buckets',
+      T.reach(excerptOnly, []).shell.n === 1 && T.reach(dumps, []).shell.n === 1);
+  }
 
   /* The Read cap's firings come from the ledger, not the transcript: a capped Read is an ordinary short
      result with no marker, invisible to the trim line. The two halves are separate features sharing one
@@ -3355,7 +3398,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       const R = (id, chars, extra) => ({ id, name: 'Bash', what: 'cmd ' + id, chars, tokens: Math.round(chars / 4), isError: false, marker: false, afterReq: 0, ...(extra || {}) });
       const p = { sessionId: 'sg', cwd: '/w', requests: [{}, {}, {}], compactions: [], results: [
         R('a', 3500), R('b', 2400, { marker: true }), R('c', 40000), R('d', 9000, { isError: true }),
-        R('f', 9000, { file: '/w/big.log' }), R('g', 9000, { what: 'npm run bench' }),
+        R('f', 9000, { file: '/w/big.log', excerpt: true }), R('g', 9000, { what: 'npm run bench' }),
         { id: 'e', name: 'Read', file: '/w/x', chars: 5000, tokens: 1250, afterReq: 0 }] };
       const led = [{ ev: 'post', session: 'sg', id: 'b', tool: 'Bash', what: 'cmd b', chars: 20000, kept: 2400 }];
       const th = T.autotune([p], led, { maxChars: 6000, readMaxBytes: 60000, noTrim: ['bench'] }).thresholds;

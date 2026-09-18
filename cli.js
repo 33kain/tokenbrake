@@ -197,13 +197,20 @@ const fmt = (n) => n.toLocaleString();
    the ranking; --where pools every session's ranged reads into the one distribution that can set
    readLimitLines. */
 function guardCfg() {
-  const cfg = { maxChars: 6000, readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
+  const cfg = { maxChars: transcript.TRIM_CHARS, readMaxBytes: 60000, readLimitLines: 300, persistedLimitLines: 80 };
   try {
     const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8'));
     if (c.maxChars) cfg.maxChars = c.maxChars;
     if (c.readMaxBytes) cfg.readMaxBytes = c.readMaxBytes;
     if (c.readLimitLines) cfg.readLimitLines = c.readLimitLines;
     if (c.persistedLimitLines) cfg.persistedLimitLines = c.persistedLimitLines;
+    /* Per-tool maxChars, which the guard's toolConfig merges over the top level: a report that ignored them would
+       count a Bash result under tools.Bash.maxChars as one the guard "would have trimmed". */
+    if (c.tools && typeof c.tools === 'object') {
+      const per = {};
+      for (const [tool, v] of Object.entries(c.tools)) if (v && typeof v === 'object' && v.maxChars) per[tool] = v.maxChars;
+      if (Object.keys(per).length) cfg.toolMaxChars = per;
+    }
   } catch {}
   return cfg;
 }
@@ -469,9 +476,9 @@ function reachReport() {
     pooled.push([id, p.results.length, cwd]);
   }
   const withGuard = sessions.filter((x) => x.ran);
-  const r = transcript.reachPooled(sessions, { readMaxBytes: cfg.readMaxBytes });
-  const rg = transcript.reachPooled(withGuard, { readMaxBytes: cfg.readMaxBytes });
-  const shellN = r.window.n + r.under.n + r.failed.n + r.persisted.n;
+  const r = transcript.reachPooled(sessions, { readMaxBytes: cfg.readMaxBytes, maxChars: cfg.maxChars, toolMaxChars: cfg.toolMaxChars });
+  const rg = transcript.reachPooled(withGuard, { readMaxBytes: cfg.readMaxBytes, maxChars: cfg.maxChars, toolMaxChars: cfg.toolMaxChars });
+  const shellN = r.shell.n;
   console.log('Where the trim can reach -- ' + pooled.length + ' session(s) pooled, ' + skipped.length + ' skipped'
     + (only ? '  (--cwd=' + only + ')' : ''));
   console.log('\n  ' + fmt(r.total.n) + ' tool results, ~ ' + fmt(r.total.carried) + ' carried tokens in total'
@@ -487,6 +494,7 @@ function reachReport() {
   row('  of those, it acted on', r.acted, r.carriedTotal);
   row('  of those, it did not', r.untouched, r.carriedTotal);
   row('under the threshold (too small)', r.under, r.carriedTotal);
+  row('single-file excerpt (read path)', r.excerpt, r.carriedTotal);
   row('past the host ceiling (persisted)', r.persisted, r.carriedTotal);
   row('failed (host ignores a rewrite)', r.failed, r.carriedTotal);
   row('not shell at all', r.nonShell, r.carriedTotal);
@@ -549,14 +557,14 @@ function reachReport() {
     console.log('    acted on: ' + rg.acted.n + '  left alone: ' + rg.untouched.n
       + (rg.window.carried ? '  -- the guard reached ' + Math.round(100 * rg.acted.carried / rg.window.carried) + '% of the carried tokens it could' : ''));
     console.log('    A result inside the reach and left alone, in a session the guard WAS running in, is the');
-    console.log('    product declining to act -- the excerpt exemption is the main reason it does that, and');
-    console.log('    0.2.6 traded acting less for acting wrongly less often. This is that trade\'s price.');
+    console.log('    product declining to act -- a noTrim entry, or output the trim could not shorten. Single-file');
+    console.log('    excerpts are not among them: the guard reads those like a Read, and they have their own row above.');
   }
 
   const W = rg.windowShareOfCarried;
   console.log('\n  W = ' + (Math.round(1000 * W) / 10) + '% of carried tokens sit where the trim can act,'
     + '\n  measured over the sessions the guard was actually running in.');
-  const shellG = rg.window.n + rg.under.n + rg.failed.n + rg.persisted.n;
+  const shellG = rg.shell.n;
   const THIN = withGuard.length < 10 || shellG < 200;
   console.log('  ' + (THIN
     ? 'Under 10 sessions or 200 shell results: NO VERDICT, and the number above is not one.'
@@ -909,16 +917,15 @@ function report() {
     }
   }
   if (!file) {
-    if (!ledger.length) { console.log('No transcript and no ledger yet. Run a Claude Code session with tokenbrake installed, then try again.'); return; }
+    if (!ledger.length) { console.log('No Claude Code session transcripts found under ' + path.join(CFG_DIR, 'projects') + '. Run a Claude Code session, then try again -- nothing needs installing for this.'); return; }
     console.log('No transcript found under ' + path.join(CFG_DIR, 'projects') + ' -- showing the ledger alone.\n');
     return ledgerReport();
   }
   let parsed;
   try { parsed = transcript.parseTranscript(file); } catch (e) { console.log('Could not read ' + file + ': ' + e.message); return; }
   /* The report's "Where you read" line compares against the cap the user actually runs, not the default. */
-  let readLimitLines = 300;
-  try { const c = JSON.parse(fs.readFileSync(path.join(CFG_DIR, 'tokenbrake.json'), 'utf8')); if (c.readLimitLines) readLimitLines = c.readLimitLines; } catch {}
-  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines }));
+  const { readLimitLines, maxChars, toolMaxChars } = guardCfg();
+  console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
 
@@ -1563,21 +1570,10 @@ function tuneReport() {
 }
 
 function help() {
-  console.log(`tokenbrake -- trims oversized tool output before it reaches Claude's context
+  console.log(`tokenbrake -- find out what ate your Claude Code context, then brake it if there is anything to brake
 
-  npx tokenbrake init [--project] [--node=<path>]
-                                      install hooks (user scope, or this project's .claude/);
-                                      --node pins the executable the hook spawns (default: this node,
-                                      or plain 'node' for --project so the file stays shareable)
-  npx tokenbrake uninstall [--project]
-  npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
-  npx tokenbrake doctor [--project] [--fix]
-                                      a health check as a prioritized problem list, each with a remedy;
-                                      exits non-zero when an ERROR remains. --fix re-copies a stale guard
-  npx tokenbrake preset <name>        apply a named config profile: off | minimal | balanced | aggressive
-                                      (merged into ~/.claude/tokenbrake.json); preset list shows them
-  npx tokenbrake outputs              list the full outputs the guard saved when it trimmed a result
-  npx tokenbrake show <id>            print one saved full output whole (id from 'outputs'; a prefix works)
+STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code already keeps.
+
   npx tokenbrake report               what ate your tokens last session: every tool result ranked by
                                       the context it was carried through (size x later requests), from
                                       the Claude Code transcript, with what tokenbrake trimmed
@@ -1608,6 +1604,22 @@ function help() {
                                       saved. The gate a narrowing passes before its default moves. Tokens only
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
+
+STEP TWO -- the brake, if your report says there is something in its reach.
+
+  npx tokenbrake init [--project] [--node=<path>]
+                                      install hooks (user scope, or this project's .claude/);
+                                      --node pins the executable the hook spawns (default: this node,
+                                      or plain 'node' for --project so the file stays shareable)
+  npx tokenbrake uninstall [--project]
+  npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
+  npx tokenbrake doctor [--project] [--fix]
+                                      a health check as a prioritized problem list, each with a remedy;
+                                      exits non-zero when an ERROR remains. --fix re-copies a stale guard
+  npx tokenbrake preset <name>        apply a named config profile: off | minimal | balanced | aggressive
+                                      (merged into ~/.claude/tokenbrake.json); preset list shows them
+  npx tokenbrake outputs              list the full outputs the guard saved when it trimmed a result
+  npx tokenbrake show <id>            print one saved full output whole (id from 'outputs'; a prefix works)
   npx tokenbrake tune                 read your recent sessions and recommend which off-by-default features to
       [--cwd=<text>]                  turn on: each feature's real record where it has fired (fired / pulled
       [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate

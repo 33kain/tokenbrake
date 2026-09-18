@@ -443,6 +443,10 @@ function parseTranscript(file) {
           what: describe(use.name, use.input),
           key: readKey(use.name, use.input),
           file: readFileOf(use.name, use.input),
+          /* The guard's own test for "this command is a read of one file" (guard.js EXCERPT), kept as its own fact
+             rather than inferred from `file`, which means "which file this reads" and may grow other shapes. */
+          excerpt: (use.name === 'Bash' || use.name === 'PowerShell') && !!use.input && typeof use.input.command === 'string'
+            && EXCERPT_CMD.test(use.input.command),
           readFrom: readStartLine(use.name, use.input),
           marker: /\[tokenbrake\]/.test(text),   // the guard's replacement is what the model saw
           chars: text.length,
@@ -545,16 +549,23 @@ function costOf(parsed) {
   return { usd, byModel, unpriced: [...unpriced] };
 }
 
-/* Shell results the guard leaves alone: Bash and PowerShell results at or under TRIM_CHARS characters, the
-   guard's default maxChars. Counted with their carried cost so the untouched share of a session is a
-   number, not a guess. */
 const TRIM_CHARS = 6000;
-function smallResults(parsed) {
+/* The share of a session's carried tokens inside the trim's window at which a report tells someone without the
+   guard that installing it is worth it. Below it the honest line is "too little here". A chosen floor, not a
+   measured one: on the machine this was written on, with excerpts correctly out of the window, the pooled window
+   was 11.6% of carried over 55 sessions (7.5% over the 24 the guard ran in) -- so 10% sits at about a typical
+   session, and a session under it has less than usual for the brake to do. */
+const BRAKE_WORTH_PCT = 10;
+/* Shell results the guard leaves alone: Bash and PowerShell results at or under maxChars (TRIM_CHARS, the
+   guard's default, when not given). Counted with their carried cost so the untouched share of a session is a
+   number, not a guess. */
+function smallResults(parsed, maxChars) {
+  const limit = limitOf(maxChars);
   const out = { shell: 0, n: 0, tokens: 0, carried: 0 };
   for (const r of parsed.results) {
     if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
     out.shell++;
-    if (r.chars > TRIM_CHARS) continue;
+    if (r.chars > (typeof limit === 'function' ? limit(r) : limit)) continue;
     out.n++; out.tokens += r.tokens; out.carried += r.carried || 0;
   }
   return out;
@@ -576,23 +587,51 @@ function smallResults(parsed) {
    HOST_CEILING is approximate and the class is confirmed rather than guessed where possible: a result the
    host persisted names its tool-results path, which is a fact in the transcript, not an estimate. */
 const HOST_CEILING = 30000;
-function reach(parsed, wasTrimmed) {
-  const B = () => ({ n: 0, tokens: 0, carried: 0 });
-  const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
-  const add = (b, r) => { b.n++; b.tokens += r.tokens; b.carried += r.carried || 0; };
+/* A single-file excerpt (`cat`, `sed -n`, `head`, `tail`, a simple `grep` -- `r.excerpt`, set at parse time
+   from EXCERPT_CMD) is read like a Read: untouched up to readMaxBytes and capped above it, never
+   trimmed to head and tail. It is the Read cap's business, not the trim's, so it is never in the trim's window
+   -- counting it there told a first-run report the guard "would have trimmed" a sed -n of a source file. */
+const isShell = (r) => r.name === 'Bash' || r.name === 'PowerShell';
+/* maxChars resolved once at each entry point so the helpers below take it as given: a number, or -- when the
+   config sets it per tool under `tools`, which the guard's toolConfig merges over the top level -- a function of
+   the result giving that tool's value. An already-resolved function passes through. */
+const limitOf = (maxChars, byTool) => {
+  if (typeof maxChars === 'function') return maxChars;
+  const base = maxChars == null || maxChars === '' ? TRIM_CHARS : Number(maxChars);
+  const per = byTool && typeof byTool === 'object' ? Object.entries(byTool).filter(([, v]) => Number.isFinite(Number(v)) && v !== null && v !== '') : [];
+  if (!per.length) return base;
+  const m = new Map(per.map(([k, v]) => [k, Number(v)]));
+  return (r) => (m.has(r.name) ? m.get(r.name) : base);
+};
+/* Which side of the trim's window a result falls on, by its delivered size -- the one test, so the buckets
+   and every "could the trim act on this" question agree by construction. Order matters and is the guard's:
+   not its business, then a failure, then past the host's ceiling, then a read, then too small. */
+function trimClass(r, maxChars) {
+  if (!isShell(r)) return 'nonShell';
+  if (r.isError) return 'failed';
+  if (r.chars >= HOST_CEILING) return 'persisted';
+  if (r.excerpt) return 'excerpt';
+  if (r.chars <= (typeof maxChars === 'function' ? maxChars(r) : maxChars)) return 'under';
+  return 'window';
+}
+const inTrimWindow = (r, maxChars) => trimClass(r, limitOf(maxChars)) === 'window';
+const REACH_BUCKETS = ['window', 'acted', 'untouched', 'under', 'failed', 'persisted', 'excerpt', 'nonShell', 'shell', 'total'];
+const emptyReach = () => Object.fromEntries(REACH_BUCKETS.map((k) => [k, { n: 0, tokens: 0, carried: 0 }]));
+const addTo = (b, r) => { b.n++; b.tokens += r.tokens; b.carried += r.carried || 0; };
+function reach(parsed, wasTrimmed, opts) {
+  const maxChars = limitOf(opts && opts.maxChars, opts && opts.toolMaxChars);
+  const out = emptyReach();
   const trimmed = new Set(wasTrimmed || []);
   for (const r of parsed.results) {
-    add(out.total, r);
+    addTo(out.total, r);
+    if (isShell(r)) addTo(out.shell, r);
     /* A result the guard rewrote is in the window by proof, whatever its delivered size says. Sizes here
        are what the model received, so a trimmed result now measures under the threshold -- classifying by
        size alone would put every success in the "untouched" bucket and leave the window empty. */
-    if (trimmed.has(r)) { add(out.window, r); add(out.acted, r); continue; }
-    const shell = r.name === 'Bash' || r.name === 'PowerShell';
-    if (!shell) { add(out.nonShell, r); continue; }
-    if (r.isError) { add(out.failed, r); continue; }
-    if (r.chars >= HOST_CEILING) { add(out.persisted, r); continue; }
-    if (r.chars <= TRIM_CHARS) { add(out.under, r); continue; }
-    add(out.window, r); add(out.untouched, r);
+    if (trimmed.has(r) && !r.excerpt) { addTo(out.window, r); addTo(out.acted, r); continue; }
+    const c = trimClass(r, maxChars);
+    addTo(out[c], r);
+    if (c === 'window') addTo(out.untouched, r);
   }
   return out;
 }
@@ -686,8 +725,9 @@ function reachPooled(sessions, opts) {
   const knob = (opts || {}).readMaxBytes;
   const trigger = knob == null || knob === '' ? NaN : Number(knob);
   const sized = Number.isFinite(trigger);
+  const maxChars = limitOf((opts || {}).maxChars, (opts || {}).toolMaxChars);
   const B = () => ({ n: 0, tokens: 0, carried: 0 });
-  const out = { window: B(), acted: B(), untouched: B(), under: B(), failed: B(), persisted: B(), nonShell: B(), total: B() };
+  const out = emptyReach();
   const byTool = new Map(), nonShellByTool = new Map();
   const read = { all: B(), ranged: B(), over: B(), under: B(), unsized: B() };
   const bump = (map, key, res) => {
@@ -695,9 +735,9 @@ function reachPooled(sessions, opts) {
     e.n++; e.tokens += res.tokens; e.carried += res.carried || 0;
     map.set(key, e);
   };
-  const add = (b, res) => { b.n++; b.tokens += res.tokens; b.carried += res.carried || 0; };
+  const add = addTo;
   for (const { parsed, trimmed, sizes } of sessions) {
-    const r = reach(parsed, trimmed);
+    const r = reach(parsed, trimmed, { maxChars });
     for (const k of Object.keys(out)) { out[k].n += r[k].n; out[k].tokens += r[k].tokens; out[k].carried += r[k].carried; }
     const inWindow = new Set([...(trimmed || [])]);
     for (const res of parsed.results) {
@@ -717,7 +757,7 @@ function reachPooled(sessions, opts) {
         add(bytes == null ? read.unsized : bytes > trigger ? read.over : read.under, res);
         continue;
       }
-      const isWindow = inWindow.has(res) || (!res.isError && res.chars > TRIM_CHARS && res.chars < HOST_CEILING);
+      const isWindow = inWindow.has(res) || trimClass(res, maxChars) === 'window';
       if (!isWindow) continue;
       bump(byTool, commandTool(res.what) || '(unknown)', res);
     }
@@ -1657,11 +1697,11 @@ function autotune(parsedSessions, ledger, cfg, opts) {
     const offered = offeredOf(p, led);
     for (const r of p.results) {
       carriedTotal += (r.tokens || 0) + (r.carried || 0);   // entry + carry, the basis every withheld figure uses
-      if ((r.name !== 'Bash' && r.name !== 'PowerShell') || r.isError) continue;
-      /* The trim never sees these whatever maxChars is: a single-file excerpt (`r.file` is set exactly when the
-         command matches EXCERPT_CMD) goes down the guard's read path, and a noTrim command is returned on first.
-         noTrim is matched against the whitespace-normalised command, so it is as close as the transcript allows. */
-      if (r.file || noTrim.some((x) => x && String(r.what || '').includes(String(x)))) continue;
+      if (!isShell(r) || r.isError) continue;
+      /* The trim never sees these whatever maxChars is: a single-file excerpt goes down the guard's read path,
+         and a noTrim command is returned on first. noTrim is matched against the whitespace-normalised
+         command, so it is as close as the transcript allows. */
+      if (r.excerpt || noTrim.some((x) => x && String(r.what || '').includes(String(x)))) continue;
       const l = r.marker ? offered(r) : null;
       const chars = l && Number(l.chars) ? Number(l.chars) : r.chars;
       if (chars < HOST_CEILING) shellRows.push({ chars, reuse: (r.carriedTurns || 0) + 1 });
@@ -1851,7 +1891,14 @@ const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.rou
 
 /* The report, as lines. Pure: takes parsed data, returns text, so the test can read it without a
    console. `top` is how many results to name. */
-function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
+function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars: maxCharsOpt, toolMaxChars } = {}) {
+  const maxChars = limitOf(maxCharsOpt, toolMaxChars);
+  const baseChars = limitOf(maxCharsOpt);   // the top-level value, for the one line that names a number
+  /* Whether the guard was here at all decides what every "the guard did / did not" line below means. With it,
+     "trimmed none" and "0 acted on" are facts about the guard; without it they read as its failure, when it was
+     never installed -- and for the person running `report` before installing anything, the question is the
+     other one: is there anything here for the brake to act on? */
+  const ran = guardRan(parsed, ledger, parsed.sessionId).ran;
   carry(parsed);
   const u = usageTotals(parsed);
   const lines = [];
@@ -1887,7 +1934,7 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
   if (trimmed.length) {
     lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried`
       + (sv.usd == null ? '' : ` -- ~ ${usd(sv.usd)} off this session at list price`));
-  } else if (ledger.length) {
+  } else if (ran) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
   if (ignored.length) {
@@ -1904,34 +1951,39 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
     if (caps.source) parts.push(`${caps.source} on a large source file`);
     if (caps.persisted) parts.push(`${caps.persisted} on a persisted output`);
     lines.push(`  Read caps fired: ${caps.n} (${parts.join(', ')}), on ~ ${kfmt(Math.round(caps.bytes / CHARS_PER_TOKEN))} tokens of file`);
-  } else if (ledger.length) {
+  } else if (ran) {
     lines.push(`  Read caps fired: none`);
   }
 
   /* What the trim does not touch: shell results under the threshold. Small excerpts carried through a long
      session were 79% of one real audit session's carried context (LANDSCAPE.md); this line says what they
      are here, so a week of real sessions can say whether shape filters for small output are worth building. */
-  const small = smallResults(parsed);
+  const small = smallResults(parsed, maxChars);
   if (small.shell) {
-    lines.push(`  Under the trim threshold: ${small.n} of ${small.shell} shell results (~ ${kfmt(small.tokens)} tokens entered, ~ ${kfmt(small.carried)} token-reads carried, ${carried ? Math.round(100 * small.carried / carried) : 0}% of all carried)`);
+    lines.push(`  Small shell output, at or under the threshold (excerpts and failures included): ${small.n} of ${small.shell} shell results (~ ${kfmt(small.tokens)} tokens entered, ~ ${kfmt(small.carried)} token-reads carried, ${carried ? Math.round(100 * small.carried / carried) : 0}% of all carried)`);
   }
   /* The denominator. Everything above says what the guard did; this says what it could ever have done,
      which on most sessions is the more useful number and is usually smaller than anyone expects. */
-  const rc = reach(parsed, trimmed);
+  const rc = reach(parsed, trimmed, { maxChars });
   const pct = (x) => (carried ? Math.round(100 * x / carried) : 0);
   if (rc.total.n) {
-    lines.push(`  Within the guard's reach: ${rc.window.n} of ${rc.total.n} tool results (~ ${kfmt(rc.window.tokens)} tokens entered, ~ ${kfmt(rc.window.carried)} carried, ${pct(rc.window.carried)}% of all carried) -- shell, exit 0, over ${kfmt(TRIM_CHARS / CHARS_PER_TOKEN)} tokens and under Claude Code's own ceiling`);
+    lines.push(`  Within the guard's reach: ${rc.window.n} of ${rc.total.n} tool results (~ ${kfmt(rc.window.tokens)} tokens entered, ~ ${kfmt(rc.window.carried)} carried, ${pct(rc.window.carried)}% of all carried) -- shell, exit 0, over ${kfmt(baseChars / CHARS_PER_TOKEN)} tokens${typeof maxChars === 'function' ? ' (or your per-tool maxChars)' : ''} and under Claude Code's own ceiling`);
     const oor = [];
     if (rc.under.n) oor.push(`${rc.under.n} under the threshold`);
+    if (rc.excerpt.n) oor.push(`${rc.excerpt.n} single-file excerpts (read like a Read: capped over readMaxBytes, never head/tail-trimmed)`);
     if (rc.nonShell.n) oor.push(`${rc.nonShell.n} not shell results`);
     if (rc.failed.n) oor.push(`${rc.failed.n} failed (the host ignores the replacement)`);
     if (rc.persisted.n) oor.push(`${rc.persisted.n} past the host's ceiling (persisted, replacement never applied)`);
     if (oor.length) lines.push(`  Out of reach: ${oor.join('; ')} -- ~ ${kfmt(rc.total.carried - rc.window.carried)} carried, ${pct(rc.total.carried - rc.window.carried)}% of all carried`);
-    lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` -- ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
+    if (!ran) {
+      lines.push(pct(rc.window.carried) >= BRAKE_WORTH_PCT
+        ? `  No sign of tokenbrake in this session (no ledger row, no trim marker). The brake could have acted on ${rc.window.n} result${rc.window.n === 1 ? '' : 's'}, ${pct(rc.window.carried)}% of what it carried -- if it is not installed, \`npx tokenbrake init\` installs it.`
+        : `  No sign of tokenbrake in this session (no ledger row, no trim marker), and ${pct(rc.window.carried)}% of what it carried is in the brake's reach -- too little to install it for work like this.`);
+    } else lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` -- ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
     /* What is left on the table, in money. The share of *carried* is the honest weight: ab10 found the
        count of trims does not predict the saving -- two trims beat seven -- because which result is cut,
        and how early, decides how many later requests re-read it. */
-    if (rc.untouched.n) {
+    if (ran && rc.untouched.n) {
       const left = usdOfTokens(rc.untouched.tokens, rc.untouched.carried, price);
       lines.push(`  Still within reach: ${rc.untouched.n} result${rc.untouched.n === 1 ? '' : 's'} the guard could have trimmed and did not (~ ${kfmt(rc.untouched.carried)} carried${left == null ? '' : `, ~ ${usd(left)}`})`);
     }
@@ -1989,7 +2041,9 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300 } = {}) {
 
   /* The advice line is derived, never generic: it names the single result whose trimming would have
      removed the most carried context, and only if it is something the guard could act on. */
-  const heaviestUntrimmed = ranked.find(r => !trimmedOf(r) && (r.name === 'Bash' || r.name === 'Read') && r.tokens >= 1500);
+  /* A shell result qualifies only if it is in the trim's window -- an excerpt, a failure or a result past the
+     host's ceiling is not something the guard would have trimmed, whatever its size. */
+  const heaviestUntrimmed = ranked.find(r => !trimmedOf(r) && (inTrimWindow(r, maxChars) || (r.name === 'Read' && r.tokens >= 1500)));
   if (heaviestUntrimmed) {
     lines.push('');
     lines.push(`One result to have brakes on: ${heaviestUntrimmed.name} "${heaviestUntrimmed.what.slice(0, 50)}" -- ~ ${kfmt(heaviestUntrimmed.tokens)} tokens carried ${heaviestUntrimmed.carriedTurns} times.`
@@ -2097,5 +2151,5 @@ module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
-  shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
+  inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, usdOfTokens, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, costOf, priceOf, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, editThenRead, gitOpportunity, reReadOpportunity, TUNE_DEFAULTS, GIT_CMD };

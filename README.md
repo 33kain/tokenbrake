@@ -1,11 +1,22 @@
 # tokenbrake
 
-Claude Code hooks that keep oversized tool output out of your context window.
+Find out what ate your Claude Code context, then brake it if your report says there is anything to brake.
 
-Tool results are the bulk of what a Claude Code session spends — and shell output is the worst offender.
-Claude Code's own ceiling for a valid Bash result is ~30,000 characters inline (roughly 7,500 tokens), and
-that gets re-sent with every turn until you `/compact`. tokenbrake lowers that ceiling to something sane,
-keeps the parts that matter, and tells you afterwards what ate your tokens.
+```
+npx tokenbrake report
+```
+
+No install, no hooks, no config, nothing written anywhere: it reads the session transcripts Claude Code already
+keeps under `~/.claude/projects/` and ranks every tool result by what it actually cost you. That isn't its size.
+It's **carried**: its size times the number of later requests that re-read it, because a tool result is re-sent as
+context on every request until the session compacts. A 4k-token file read at request 3 of 100 is about 400k
+token-reads, and the ranking puts results like that at the top where you can see them. Then it tells you how much of
+that the brake could act on at all, and, when tokenbrake was not running, whether installing it is worth it for
+work like yours. Often it is not, and the report says so.
+
+The brake is step two: two Claude Code hooks (`npx tokenbrake init`) that trim oversized shell output and cap
+unbounded reads of large files before they enter context. Its measured record is below, losses included, and it
+is thinner than the report's: install it when your own report says there is something in its reach.
 
 **Measured (2026-09-06 to 2026-09-10).** The same read-only audit task on the same repository, run as Cowork sessions
 without the hooks and with them, cost taken from the session records, identical answers on every run. Fable 5.1, three

@@ -1,7 +1,7 @@
 {
   "name": "tokenbrake",
   "version": "0.3.0",
-  "description": "Claude Code hooks that trim oversized tool output and cap unbounded file reads before they hit your context window, and a report of what ate a session's context. Zero dependencies, Windows-friendly.",
+  "description": "Find out what ate your Claude Code context: a zero-install report that ranks every tool result by the tokens it was carried through, and optional hooks that trim oversized tool output when the report says there is something to brake. Zero dependencies, Windows-friendly.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/33kain/tokenbrake.git"
@@ -27,10 +27,13 @@
   },
   "keywords": [
     "claude-code",
+    "context-window",
+    "token-usage",
+    "transcript",
+    "report",
     "hooks",
     "claude-usage",
-    "token",
-    "context-window"
+    "token"
   ],
   "license": "MIT",
   "publishConfig": {
