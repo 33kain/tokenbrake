@@ -3232,3 +3232,95 @@ lengthens the session and carried climbs past where it started -- which is exact
 there to catch. One thing the swap gives up: cost weighted output and cache writes more heavily than cache reads,
 and a single token total weights them equally. A round whose risk is in output or cache writes names that count
 as its own fourth condition rather than folding it into carried.
+
+## Calibration: what each kind of token weighs against the five-hour limit — pre-registered 2026-09-18, before any of it is run
+
+**Why this comes before the brake.** The goal set on 2026-09-18 is a brake worth 8-10, and the candidates are
+aimed at different kinds of token. The entry trim cuts tool results entering context. A *duration* brake
+(compact or clear before stale context gets re-read hundreds of times) cuts **cache reads**. A *cold-cache*
+brake (don't resend a large context after the cache has expired) cuts **cache writes**. Which one to build
+first depends on what each kind weighs against the limit people actually hit, and nobody has published that
+for subscriptions. The amendment above names the gap: a single token total weighs every kind equally.
+
+**What is known before the run.**
+- API token accounting (platform docs, prompt caching): a cache read weighs 0.1x base input (0.025x on Fable
+  5.1), a 5-minute cache write 1.25x, a 1-hour write 2x. Whether the subscription limit uses the same weights
+  is not documented.
+- Claude Code's cost docs: a long session "re-reads that history at the cached token rate, so a one-line
+  question in a session that has been open all day still draws usage for the whole conversation"; the cache
+  lives 1 hour on a subscription; the first message after a longer break "reprocesses your full context";
+  `/compact` "is itself a large request"; `/clear` costs nothing. On Pro and Max, resuming a large session
+  after a long break **offers to resume from a summary**, and Claude Code clears old tool results from context
+  by itself. Both are built-in versions of brakes we would build, so the brake has to beat them, not a bare
+  session.
+- Our own record: the 689k Start-fresh card (HANDOFF, twenty-second card) — five messages in a 689k session
+  drew 9% of the five-hour window, the same five after Start fresh drew 3%; the brake's A/B above cut cache
+  reads 41% and moved the window +9 → +8. Both confirm cache reads count at a discount; neither separates the
+  weights, because every arm moved reads, writes, output and requests together at 1% meter resolution.
+
+### Design — one variable per block
+
+Every block is a run of identical messages in one session: **"Reply with the single word ok. Use no tools."**
+Opus 5, effort low, for the whole calibration (the weights are per model; a Fable run repeats the calibration
+later and is not mixed with this one). Each block varies one thing — how much context is re-read, or whether
+the cache is warm — so each kind of token gets its weight from the difference between blocks, not from a
+regression over tangled arms.
+
+| block | session | messages | what it isolates |
+|---|---|---|---|
+| B0 | fresh | 20 | the floor: system prompt + tools + tiny output, per message |
+| B1 | ~250k context, warm | 20 | cache reads at 250k |
+| B2 | ~600k context, warm | 20 | cache reads at 600k; (B2 − B1) ÷ (R2 − R1) is the **cache-read weight** |
+| B3 | the B2 session, idle > 65 min | 1, three times on separate idles | one full rewrite of ~600k: the **cache-write weight** |
+| B4 | the B2 session: `/compact`, then 20 messages | 1 + 20 | what compaction costs, and what it saves per message afterwards |
+| B5 | fresh | 5, each "write about 2,000 words on any topic, no tools" | the **output weight** |
+
+Contexts are built before the block's first meter reading (reading files into the session is the cheapest
+way), so the building never counts toward the block. Build size is whatever the session reports; the design
+needs R2 at least twice R1, not the round numbers.
+
+### Procedure, per block
+
+1. Settings → Usage: five-hour %, weekly all models %, weekly Opus %, and the time. Note when the five-hour
+   window resets; a block whose readings straddle a reset is void.
+2. Send the block's messages, nothing else. Nothing else runs anywhere on the account in between: no other
+   session, no claude.ai chat, no scheduled task, loop, goal check-in or cross-session message.
+3. Read the usage page again and record the same numbers.
+4. Token counts come from the session transcript: `usage` summed over exactly the block's requests (input,
+   cache read, cache write split into 5-minute and 1-hour where the transcript has the split, output).
+5. B3 and B4 also record what Claude Code offered and did: whether it offered to resume from a summary (B3
+   declines, and notes that it was offered), and whether it cleared tool results or auto-compacted on its own
+   (either voids that block; rerun it).
+
+**Resolution rule.** A block counts only if it moves the five-hour window by **at least 5 points**, so 1%
+resolution means ±20% or better. A block that moves less is repeated with twice the messages, up to 80, in a
+fresh window. A block that cannot reach 5 points at 80 messages is recorded as "below resolution", and that is
+itself a result: that kind of token is too light to matter.
+
+### The rule, fixed before the numbers
+
+Let **a**, **w** and **o** be the measured points of the five-hour window per million cache-read, cache-write
+and output tokens. Apply them to every session in the owner's pooled sessions (the pool `--reach` uses): each
+session's draw splits into a cache-read share, a cache-write share (the part caused by misses and cold rebuilds
+counted apart) and an output share.
+
+- **Cache reads ≥ 50% of weighted draw** → the duration brake is built first. The carry is the draw.
+- **Cold rebuilds and misses ≥ 25% of weighted draw** → the cold-cache brake is built first, or alongside the
+  duration brake if both hold. It has to do better than Claude Code's own resume-from-summary offer, which B3
+  records.
+- **Output ≥ 50% of weighted draw** → neither brake is the headline, and the entry trim isn't either, because
+  none of them touch output. Recorded as written, and the 8-10 plan is reopened.
+- **Compaction payback** from B4: requests to recover = compaction's own draw ÷ (per-message draw at 600k −
+  per-message draw after compacting). **≤ 20 requests** → the duration brake is viable for any session with
+  that many requests left. **> 100** → the duration brake is dead as designed; the only duration lever left is
+  `/clear`, which is the user's call, not a brake.
+- **Does the subscription weigh tokens like the API?** Measured w ÷ a against the API's 20 (2x ÷ 0.1x, 1-hour
+  cache, Opus). Within a factor of 2 → the report may weight carried tokens with the API multipliers from then
+  on, citing this calibration. Outside it → the report uses the measured weights, per model, and says so.
+
+Void conditions, each voiding that block only: other usage in the window, a reset inside the block, a different
+model or effort, tool use in a block that says no tools, auto-compaction or tool-result clearing outside B4.
+
+**Cost of the run, stated in advance.** About 90 short messages, 5 long ones and three idle waits of over an
+hour, spread over as many five-hour windows as the resolution rule needs. It is paid out of the owner's own
+limit, which is the point: that is the meter being calibrated.
