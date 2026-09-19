@@ -3631,3 +3631,22 @@ correctness. Opus 5 only, headless. The owner's `tokenbrake.json` had `readAfter
 reading stage 1 passes, and stage 2 (the owner's real work at 300k with the preparation step on) is next. Under
 the letter reading stage 1 is incomplete: ON and PREP need more runs with a task sized so no compaction fires at
 message 2.
+
+**The owner's call, 2026-09-19: the letter governs.** ON 2, ON 3, PREP 2 and PREP 3 are void. They are void
+because of how the task was sized, not because the model did anything wrong: message 1 ended with the context
+above the compaction threshold, and Claude Code compacts when the next message arrives. With one counted run
+left for each of ON and PREP, stage 1 has **no verdict** from this set. The table above stands as recorded.
+
+### Amendment 3 — 2026-09-19, before any further run
+
+Resizing the reads cannot fix this. Claude Code compacts when a new message arrives while the context is over the
+threshold, and where message 1 ends relative to that threshold is not controllable. So a third message goes
+between the two: **"Reply with the single word: ok"**. A compaction that fires when a message arrives now fires on
+this filler, which falls after step 3 and before message 2 by the letter. The filler carries nothing: no fact, no
+question and no tool call. It is the original design with a fixed place for the compaction to land.
+
+**A clean set of nine**, three per arm, interleaved OFF, ON, PREP. The five valid runs above are not mixed into
+it: the owner chose one design over a cheaper mixed set. The runner's corrected grading (a choice stated in the
+model's own words, and "9 percentage points" accepted) applies from the first run. Every pass rule, the placement
+rule by its letter, and the 15 questions stand as pre-registered. A run in which the filler's reply is anything
+other than "ok", or in which a tool is called before message 2, is void.

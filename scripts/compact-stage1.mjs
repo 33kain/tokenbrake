@@ -101,11 +101,16 @@ function send(text, session) {
   return { session: result.session_id, text: result.result || '', meter, turns: result.num_turns, t: new Date().toISOString() };
 }
 
-let m1, m2;
+// Amendment 3: a filler message between the two, so a compaction fired by a message's arrival lands on it --
+// after step 3 and before message 2 -- and not on message 2.
+const FILLER = 'Reply with the single word: ok';
+let m1, mf, m2;
 try {
   if (ARM === 'PREP') setPrep(true);
   m1 = send(MSG1, null);
   console.log(`msg1 done: session ${m1.session.slice(0, 8)}, turns ${m1.turns}, meter ${m1.meter}`);
+  mf = send(FILLER, m1.session);
+  console.log(`filler done: turns ${mf.turns}, reply ${JSON.stringify(mf.text.slice(0, 40))}`);
   m2 = send(MSG2, m1.session);
   console.log(`msg2 done: turns ${m2.turns}, meter ${m2.meter}`);
 } finally {
@@ -130,7 +135,14 @@ const chose = choiceAt >= 0 ? textAt(entries[choiceAt]).match(CHOICE_RE)[1].toUp
 const editAt = entries.findIndex(e => e.type === 'assistant' && Array.isArray(e.message?.content) && e.message.content.some(b => b.type === 'tool_use' && /^(Edit|Write|MultiEdit|Bash|PowerShell)$/.test(b.name) && /config\.js/.test(JSON.stringify(b.input || {}))));
 const factsDone = Math.max(choiceAt, editAt);
 const where = bounds.map(b => ({ ...b, in: b.i < factsDone ? 'during the facts steps' : b.i < msg2At ? 'after step 3, in message 1' : 'in message 2' }));
-const placement = choiceAt < 0 || editAt < 0 ? 'VOID: step 2 or 3 not found'
+// The filler must carry nothing: its reply is "ok", and no tool is called between it and message 2.
+const fillerAt = entries.findIndex(e => e.type === 'user' && typeof e.message?.content === 'string' && e.message.content === FILLER);
+const fillerTools = fillerAt < 0 ? 0 : entries.slice(fillerAt, msg2At).filter(e => e.type === 'assistant'
+  && Array.isArray(e.message?.content) && e.message.content.some(b => b.type === 'tool_use')).length;
+const fillerOk = fillerAt >= 0 && mf.text.trim().toLowerCase().replace(/[^a-z]/g, '') === 'ok' && fillerTools === 0;
+const placement = !fillerOk ? 'VOID: the filler carried something (reply not "ok", or a tool call)'
+  : choiceAt < 0 || editAt < 0 ? 'VOID: step 2 or 3 not found'
+  : ARM === 'OFF' ? (bounds.length ? 'VOID: OFF compacted' : 'counts (OFF: no compaction, by design)')
   : !bounds.some(b => b.trigger === 'auto') ? 'VOID: no automatic compaction'
   : bounds.every(b => b.i > factsDone && b.i < msg2At) ? 'counts' : 'VOID: a compaction outside (after step 3, before message 2)';
 if (m1.text.trim().toLowerCase().replace(/[^a-z]/g, '') !== 'done') console.log('note: message 1 replied more than "done": ' + m1.text.slice(0, 120));
