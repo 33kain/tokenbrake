@@ -1354,7 +1354,23 @@ Session `c310b54d` (the session this was built in) started before the hook exist
 draw in points of the five-hour window (cache reads, writes, output), what the context now costs per request, and
 the trim's saving as one write plus its re-reads. `limitDraw` in transcript.js; other models are counted, not priced.
 
+**Dropped: `compactionView` using `compactMetadata.postTokens`.** Checked on all 51 compactions on this machine
+(2026-09-19): the first request after a compaction is 23k-97k larger than `postTokens`, a steady ~24k in the clean
+cases, which is the system prompt and tools `postTokens` leaves out and every later request still re-reads. The
+saving is what later requests stop re-reading, so `post` stays the API's figure for that request; swapping in
+`postTokens` would overstate every saving and move stage B's verdict mid-stage. `preTokens` is within ~3k of the
+request before the compaction in clean cases, so `pre` keeps preferring it. Seen in passing: the first automatic
+compaction in many headless sessions comes as a pair -- a boundary with `preTokens` ~206k after a ~96k request and
+before a ~209k one, then a second boundary one request later that does the real drop. The pair's total is right
+(the second row carries the drop), but the first row's own numbers are not; all 51 were benchmark or calibration
+sessions, which stage B excludes.
+
+**Dropped: the parse-time file key (deferred from #93).** Built and measured 2026-09-19: `parseTranscript` setting a
+normalized `fileKey` on each result, read through a `fileKeyOf` accessor at the 10 result call sites. Output was
+identical, and so was speed: `tune` 1.08 s both ways over three runs, `report --reads` and `--backfire` within noise
+(`normReadPath` is ~0.4 us a call, far under parsing). It bought nothing and added a second path to the same key,
+with an accessor that ignored its `cwd` once the stored value existed, so it was not merged. If a view ever profiles
+hot on it, memoize inside one accessor rather than adding a field.
+
 **Open, not started:**
 - A Fable calibration.
-- `compactionView` using `compactMetadata.postTokens`.
-- The parse-time `key` field (`normReadPath` at 11 call sites), deferred from the /simplify pass on #93.
