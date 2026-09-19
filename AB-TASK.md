@@ -3567,3 +3567,67 @@ move.
 - **Cost:** as pre-registered.
 
 A third pilot checks this task once in the ON arm, void by design.
+
+### Stage 1 results — run 2026-09-19 09:19 to 09:37 UTC, Opus 5, Claude Code 2.1.277
+
+The third pilot (ON, session `8525a898`) placed its three compactions correctly and scored 15 of 15. The detail
+probes worked as intended: the last compaction summary did not contain 967000, the 9%, or `reReadRecency`, and
+message 2 got them back with one `grep`/`sed` call. That lookup is what showed `report --compactions` counted only
+Reads as recovery, and the lookup rule was fixed (PR #93) before any counted run was priced. Then nine counted
+runs, interleaved OFF, ON, PREP three times over, driven by `scripts/compact-stage1.mjs`.
+
+**Two grading artifacts in the runner, found by reading every transcript, corrected here and in the script.**
+The rules are unchanged. The raw grades are kept beside the corrected ones.
+- **Q3, the option.** The runner looked only for the literal `CHOICE: LANTERN`. In three runs (PREP 1, ON 2,
+  PREP 2) the model stated the choice in its own words in its thinking, before the compaction ("I'm going with
+  LANTERN, since…", "I'm choosing LANTERN"). It then answered Q3 correctly, and the runner marked it wrong and
+  voided the run.
+- **Q9, the 9%.** PREP 2 answered "9 percentage points (36% → 45%)", which is correct. The runner accepted only "9%".
+
+| arm · run | session | compactions (pre → post) | raw / corrected score | draw (points) | recovery (points) |
+|---|---|---|---|---|---|
+| OFF 1 | `447c3785` | none | 15 / 15 | 2.98 | 0 |
+| ON 1 | `0d6be59a` | 117k→35k, 119k→22k, 113k→22k | 15 / 15 | 3.15 | 0.78 |
+| PREP 1 | `cf3931fa` | 148k→41k, 115k→31k, 129k→20k | 14 / 15 | 3.13 | 0.00 |
+| OFF 2 | `ad431d6e` | none | 15 / 15 | 2.66 | 0 |
+| ON 2 | `a6b1d57c` | 129k→22k, 122k→19k, 117k→10k † | 14 / 15 | 3.15 | 0.18 |
+| PREP 2 | `1ccd62b4` | 208k→115k, 213k→11k † | 13 / 15 | 2.93 | 0.01 |
+| OFF 3 | `b918c21f` | none | 15 / 15 | 2.60 | 0 |
+| ON 3 | `4293cf09` | 213k→106k, 197k→10k † | 15 / 15 | 2.91 | 0.01 |
+| PREP 3 | `1da74b0b` | 206k→115k, 213k→11k † | 15 / 15 | 2.95 | 0.00 |
+
+Draw is the transcript's own usage, priced with the calibrated weights. Compaction's own request is not in any
+transcript, so it is not in the draw. Recovery is priced by the merged `compactionView`.
+
+† **Placement.** This compaction fired the moment message 2 arrived, with **no model output before it** (checked
+in each transcript), so it falls between learning and needing. But it comes after message 2 was *sent*, and the
+amendment says "before message 2". Choosing a reading after seeing the data would be a post-hoc call, so both
+readings are recorded:
+- **By the letter:** ON 2, ON 3, PREP 2 and PREP 3 are void. That leaves one counted run each for ON and PREP,
+  which is too few for any stage 1 verdict.
+- **By the purpose** (no model output between the compaction and message 2, which holds in all four): all nine
+  count.
+
+**The rules, applied under the purpose reading, with the corrected grades:**
+- **Correct: PASS.** Every run scored 15 of 15. The ON and PREP medians (15) equal the OFF median, and the fresh
+  five were 5 of 5 everywhere.
+- **Remembers: PASS.** PREP answered all ten task-fact and detail probes correctly in all three runs. (With the
+  raw grades it would fail on PREP 1 and PREP 2, but only because of the two artifacts above.)
+- **Cost: no verdict, as the rule foresaw.** The PREP median draw (2.95) sits 0.29 above the OFF median (2.66),
+  inside the OFF runs' own spread of 0.38. ON's median (3.15) is 0.49 above. That is expected at this scale: the
+  task ends a few requests after the last compaction, so the re-reads a compaction saves have no time to add up,
+  while its rewrite is paid at once. This stage was built to measure harm, and stage 2 measures the saving.
+
+**What stage 1 does show, beyond the rules.** Compaction did not cost correctness on this task. It did lose
+details: the summaries dropped them, and the model looked them up again, cheaply. The preparation step moved the
+one number it exists for. Recovery after compaction was 0.78, 0.18 and 0.01 points without it (median 0.18), and
+0.00, 0.01 and 0.00 with it (median 0.004). That is three runs per arm, so it is a direction, not a result.
+
+**Limits.** A scaled-down task (a 150k window on a task growing to about 220k) that hits a ceiling on
+correctness. Opus 5 only, headless. The owner's `tokenbrake.json` had `readAfterEdit`, `reReadElide`, `mcpTrim`,
+`gitView`, `blobElide` and `dedup` on, the same in every arm.
+
+**Which placement reading stands is the owner's call, and it is recorded here when made.** Under the purpose
+reading stage 1 passes, and stage 2 (the owner's real work at 300k with the preparation step on) is next. Under
+the letter reading stage 1 is incomplete: ON and PREP need more runs with a task sized so no compaction fires at
+message 2.
