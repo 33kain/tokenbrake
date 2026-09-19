@@ -3696,3 +3696,68 @@ flaw in how I wrote stage 1's cost rule, and it was visible before the runs: the
 **What the stage does show.** Compaction cost no correctness. And the preparation step cut the one thing it exists
 to cut: recovery after compaction had a median of 0.745 points without it (0.800, 0.532, 0.745) and 0.213 with it
 (0.602, 0.213, 0.001), a reduction of about 70% over three runs per arm.
+
+## The compaction window, v2 — pre-registered 2026-09-19, after v1's stage 1 failed and before any stage 2 data
+
+**What this is, and what it cannot do.** v1's stage 1 failed on cost, and that failure stays on the record. It is
+not re-run with a looser rule. v2 is a new test with a different question: *once a session continues past its
+compactions the way real work does, does the earlier window pay for itself, with its preparation step, without
+costing correctness?* v1's stage 1 could not ask that, because its task ended right after the last compaction.
+Everything in v2 is fixed here, before any stage 2 data exists. v2 passing would not overturn v1's result; the
+two would be recorded as answering different questions.
+
+### Stage A — controlled, with the continuation v1 lacked
+
+**The task.** Message 1, the filler and the 15-question message 2 are exactly amendment 3's, so correctness and
+recall are measured as before. Then a **tail of 30 follow-on messages**, one question each, each answered in one
+line:
+- **15 about files message 1 read**: "What is the first word on line N of F?", with F in {transcript.js, cli.js,
+  guard.js, HANDOFF.md, README.md} and N fixed in advance.
+- **15 about files it never read**: the same question for FEATURES-PLAN.md, AB-RUNBOOK.md and CHANGELOG.md.
+
+The 30 (F, N) pairs are generated from a fixed seed and committed in the runner before any counted run. The
+answers are computed from the fixture. The tail is the continuation the saving needs: every tail request re-reads
+the whole context, about 220k in OFF against what compaction left in PREP.
+
+**Arms:** OFF (Claude Code's default window) and PREP (a 150k window plus `compactPrep`). ON is dropped, because
+the default under test is the window with its step, and v1 already measured ON. **Four runs per arm**, interleaved
+OFF, PREP.
+
+**Draw, including what a transcript leaves out.** The transcript's own usage is priced with the calibrated weights,
+**plus each compaction's own request, estimated**: a cached read of the pre-compaction context (pre × the
+read weight) plus the summary's output (the summary message's characters ÷ 4 × the output weight). The summary is
+the `isCompactSummary` entry in the transcript. v1 charged a flat 0.5 or 1.6 points; this estimate is made per
+compaction and checked against the meter:
+- The five-hour meter is read before the set and after it, and nothing else runs meanwhile.
+- If the meter's movement over the set and the summed estimated draw disagree by more than 25%, **the cost
+  verdict is void**, and the meter reading is reported instead.
+
+**Meter discipline**, the lesson of v1's clean set. The meter is read before every run. No run starts above 60%;
+the set waits for the window to reset.
+
+**The prediction, written now.** A tail request in OFF re-reads about 220k tokens (about 0.044 points). In PREP it
+re-reads what compaction left, 10k to 120k. Stage 1 put the up-front cost of compacting at about 0.6 points. So
+PREP should break even within roughly 15 to 25 tail requests and finish the 30 ahead. If it doesn't, the model of
+the lever is wrong, not just the size of the saving.
+
+**Stage A passes when:**
+- **Correct:** PREP's median on the 15 questions is at least OFF's minus 1, and PREP's median on the 30 tail
+  answers is at least OFF's minus 2.
+- **Remembers:** PREP answers all ten task-fact and detail probes correctly in all four runs.
+- **Cost:** PREP's median total draw, including the estimated compaction requests, is **below** OFF's median by
+  more than OFF's own spread (its highest run minus its lowest). A difference inside that spread is no verdict,
+  and no verdict is not a pass.
+
+### Stage B — the owner's real work
+
+Stage B is v1's stage 2, **unchanged**: the owner at `/autocompact 300k` with `compactPrep` on, until 8
+automatic compactions are recorded. It passes when the recovery cost plus compaction's own charge, at v1's 1.6-point
+bound, stays under half the predicted saving, with no more than one "felt worse" logged and none of them from a
+lost fact the step should have carried. It is kept as written because it is the stricter reading, not replaced
+by stage A's estimate.
+
+### The flip, v2
+
+The 300k window with the preparation step becomes the default **only if stage A and stage B both pass**. If stage
+A fails on cost even with the tail, the window lever is dead as a default, full stop, and stays an opt-in. The
+preparation step may still earn a default of its own, but only through a protocol of its own.
