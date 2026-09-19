@@ -3567,3 +3567,197 @@ move.
 - **Cost:** as pre-registered.
 
 A third pilot checks this task once in the ON arm, void by design.
+
+### Stage 1 results — run 2026-09-19 09:19 to 09:37 UTC, Opus 5, Claude Code 2.1.277
+
+The third pilot (ON, session `8525a898`) placed its three compactions correctly and scored 15 of 15. The detail
+probes worked as intended: the last compaction summary did not contain 967000, the 9%, or `reReadRecency`, and
+message 2 got them back with one `grep`/`sed` call. That lookup is what showed `report --compactions` counted only
+Reads as recovery, and the lookup rule was fixed (PR #93) before any counted run was priced. Then nine counted
+runs, interleaved OFF, ON, PREP three times over, driven by `scripts/compact-stage1.mjs`.
+
+**Two grading artifacts in the runner, found by reading every transcript, corrected here and in the script.**
+The rules are unchanged. The raw grades are kept beside the corrected ones.
+- **Q3, the option.** The runner looked only for the literal `CHOICE: LANTERN`. In three runs (PREP 1, ON 2,
+  PREP 2) the model stated the choice in its own words in its thinking, before the compaction ("I'm going with
+  LANTERN, since…", "I'm choosing LANTERN"). It then answered Q3 correctly, and the runner marked it wrong and
+  voided the run.
+- **Q9, the 9%.** PREP 2 answered "9 percentage points (36% → 45%)", which is correct. The runner accepted only "9%".
+
+| arm · run | session | compactions (pre → post) | raw / corrected score | draw (points) | recovery (points) |
+|---|---|---|---|---|---|
+| OFF 1 | `447c3785` | none | 15 / 15 | 2.98 | 0 |
+| ON 1 | `0d6be59a` | 117k→35k, 119k→22k, 113k→22k | 15 / 15 | 3.15 | 0.78 |
+| PREP 1 | `cf3931fa` | 148k→41k, 115k→31k, 129k→20k | 14 / 15 | 3.13 | 0.00 |
+| OFF 2 | `ad431d6e` | none | 15 / 15 | 2.66 | 0 |
+| ON 2 | `a6b1d57c` | 129k→22k, 122k→19k, 117k→10k † | 14 / 15 | 3.15 | 0.18 |
+| PREP 2 | `1ccd62b4` | 208k→115k, 213k→11k † | 13 / 15 | 2.93 | 0.01 |
+| OFF 3 | `b918c21f` | none | 15 / 15 | 2.60 | 0 |
+| ON 3 | `4293cf09` | 213k→106k, 197k→10k † | 15 / 15 | 2.91 | 0.01 |
+| PREP 3 | `1da74b0b` | 206k→115k, 213k→11k † | 15 / 15 | 2.95 | 0.00 |
+
+Draw is the transcript's own usage, priced with the calibrated weights. Compaction's own request is not in any
+transcript, so it is not in the draw. Recovery is priced by the merged `compactionView`.
+
+† **Placement.** This compaction fired the moment message 2 arrived, with **no model output before it** (checked
+in each transcript), so it falls between learning and needing. But it comes after message 2 was *sent*, and the
+amendment says "before message 2". Choosing a reading after seeing the data would be a post-hoc call, so both
+readings are recorded:
+- **By the letter:** ON 2, ON 3, PREP 2 and PREP 3 are void. That leaves one counted run each for ON and PREP,
+  which is too few for any stage 1 verdict.
+- **By the purpose** (no model output between the compaction and message 2, which holds in all four): all nine
+  count.
+
+**The rules, applied under the purpose reading, with the corrected grades:**
+- **Correct: PASS.** Every run scored 15 of 15. The ON and PREP medians (15) equal the OFF median, and the fresh
+  five were 5 of 5 everywhere.
+- **Remembers: PASS.** PREP answered all ten task-fact and detail probes correctly in all three runs. (With the
+  raw grades it would fail on PREP 1 and PREP 2, but only because of the two artifacts above.)
+- **Cost: no verdict, as the rule foresaw.** The PREP median draw (2.95) sits 0.29 above the OFF median (2.66),
+  inside the OFF runs' own spread of 0.38. ON's median (3.15) is 0.49 above. That is expected at this scale: the
+  task ends a few requests after the last compaction, so the re-reads a compaction saves have no time to add up,
+  while its rewrite is paid at once. This stage was built to measure harm, and stage 2 measures the saving.
+
+**What stage 1 does show, beyond the rules.** Compaction did not cost correctness on this task. It did lose
+details: the summaries dropped them, and the model looked them up again, cheaply. The preparation step moved the
+one number it exists for. Recovery after compaction was 0.78, 0.18 and 0.01 points without it (median 0.18), and
+0.00, 0.01 and 0.00 with it (median 0.004). That is three runs per arm, so it is a direction, not a result.
+
+**Limits.** A scaled-down task (a 150k window on a task growing to about 220k) that hits a ceiling on
+correctness. Opus 5 only, headless. The owner's `tokenbrake.json` had `readAfterEdit`, `reReadElide`, `mcpTrim`,
+`gitView`, `blobElide` and `dedup` on, the same in every arm.
+
+**Which placement reading stands is the owner's call, and it is recorded here when made.** Under the purpose
+reading stage 1 passes, and stage 2 (the owner's real work at 300k with the preparation step on) is next. Under
+the letter reading stage 1 is incomplete: ON and PREP need more runs with a task sized so no compaction fires at
+message 2.
+
+**The owner's call, 2026-09-19: the letter governs.** ON 2, ON 3, PREP 2 and PREP 3 are void. They are void
+because of how the task was sized, not because the model did anything wrong: message 1 ended with the context
+above the compaction threshold, and Claude Code compacts when the next message arrives. With one counted run
+left for each of ON and PREP, stage 1 has **no verdict** from this set. The table above stands as recorded.
+
+### Amendment 3 — 2026-09-19, before any further run
+
+Resizing the reads cannot fix this. Claude Code compacts when a new message arrives while the context is over the
+threshold, and where message 1 ends relative to that threshold is not controllable. So a third message goes
+between the two: **"Reply with the single word: ok"**. A compaction that fires when a message arrives now fires on
+this filler, which falls after step 3 and before message 2 by the letter. The filler carries nothing: no fact, no
+question and no tool call. It is the original design with a fixed place for the compaction to land.
+
+**A clean set of nine**, three per arm, interleaved OFF, ON, PREP. The five valid runs above are not mixed into
+it: the owner chose one design over a cheaper mixed set. The runner's corrected grading (a choice stated in the
+model's own words, and "9 percentage points" accepted) applies from the first run. Every pass rule, the placement
+rule by its letter, and the 15 questions stand as pre-registered. A run in which the filler's reply is anything
+other than "ok", or in which a tool is called before message 2, is void.
+
+### Stage 1 results, the clean set — run 2026-09-19 09:45 to 12:50 UTC, Opus 5, Claude Code 2.1.277
+
+Nine runs under amendment 3, interleaved OFF, ON, PREP three times over.
+- **PREP 3 hit the owner's five-hour session limit.** The meter stood at 68% when the set started, and I did not
+  check it first. The filler got the host's limit message, so that run is void and could not be completed. It was
+  re-run once the window reset (`c3b`, meter at 3%), with nothing else changed.
+- **One more runner artifact of the same kind as before.** PREP 1 stated its choice as "I'll go with LANTERN",
+  the runner's pattern knew only "going with", and the model answered Q3 correctly. The pattern now includes
+  "go with". PREP 1 re-grades to 15/15, with every compaction after step 3 and before message 2.
+
+| arm · run | session | compactions (pre → post) | score | draw (points) | recovery (points) |
+|---|---|---|---|---|---|
+| OFF 1 | `e1f5c752` | none | 15 | 2.73 | 0 |
+| ON 1 | `d1d3f6b9` | 113k→32k, 147k→30k, 113k→46k | 15 | 3.14 | 0.800 |
+| PREP 1 | `21732530` | 129k→52k, 141k→38k, 126k→46k | 15 (raw 14) | 3.78 | 0.602 |
+| OFF 2 | `a2b70589` | none | 15 | 2.69 | 0 |
+| ON 2 | `a61a6618` | 138k→60k, 158k→46k, 122k→29k | 15 | 3.54 | 0.532 |
+| PREP 2 | `f15715f1` | 126k→19k, 122k→19k, 118k→10k | 15 | 3.34 | 0.213 |
+| OFF 3 | `306370c5` | none | 15 | 2.71 | 0 |
+| ON 3 | `d6c73665` | 135k→22k, 123k→21k, 118k→10k | 15 | 3.34 | 0.745 |
+| PREP 3 (`c3b`) | `4dd5bfd1` | 206k→119k, 220k→9k | 15 | 3.11 | 0.001 |
+
+Every filler reply was "ok" with no tool call. Every compaction fell after step 3 and before message 2, and all
+nine runs count by the letter.
+
+**The rules, applied as written:**
+- **Correct: PASS.** All nine runs scored 15 of 15.
+- **Remembers: PASS.** PREP answered all ten task-fact and detail probes correctly in all three runs.
+- **Cost: FAIL.** The OFF runs' own spread is 0.04 (2.69 to 2.73), and the PREP median draw (3.34) sits 0.63
+  above the OFF median (2.71). The difference is far larger than the spread, so by the rule it is decisive, and
+  PREP drew more than OFF. The ON median (3.34) is the same.
+
+**Stage 1 fails.** Under "The flip" above, the 300k window with the preparation step cannot become the default on
+this protocol. By its own rule this stage is not re-run with a looser one.
+
+**What the failure is, stated plainly.** The cost rule compared whole-session draw on a task built to end a few
+requests after the last compaction. Each compaction rewrites the compacted context, 10k to 119k tokens at the
+write weight, and that is paid at once. The re-reads it saves are paid only over the requests that follow, and
+this task had almost none. So the rule measured a compaction's fixed cost with no room for its saving. That is a
+flaw in how I wrote stage 1's cost rule, and it was visible before the runs: the first results already said
+"stage 2 measures the saving". It is recorded as a flaw of the design, and it does not change the verdict.
+
+**What the stage does show.** Compaction cost no correctness. And the preparation step cut the one thing it exists
+to cut: recovery after compaction had a median of 0.745 points without it (0.800, 0.532, 0.745) and 0.213 with it
+(0.602, 0.213, 0.001), a reduction of about 70% over three runs per arm.
+
+## The compaction window, v2 — pre-registered 2026-09-19, after v1's stage 1 failed and before any stage 2 data
+
+**What this is, and what it cannot do.** v1's stage 1 failed on cost, and that failure stays on the record. It is
+not re-run with a looser rule. v2 is a new test with a different question: *once a session continues past its
+compactions the way real work does, does the earlier window pay for itself, with its preparation step, without
+costing correctness?* v1's stage 1 could not ask that, because its task ended right after the last compaction.
+Everything in v2 is fixed here, before any stage 2 data exists. v2 passing would not overturn v1's result; the
+two would be recorded as answering different questions.
+
+### Stage A — controlled, with the continuation v1 lacked
+
+**The task.** Message 1, the filler and the 15-question message 2 are exactly amendment 3's, so correctness and
+recall are measured as before. Then a **tail of 30 follow-on messages**, one question each, each answered in one
+line:
+- **15 about files message 1 read**: "What is the first word on line N of F?", with F in {transcript.js, cli.js,
+  guard.js, HANDOFF.md, README.md} and N fixed in advance.
+- **15 about files it never read**: the same question for FEATURES-PLAN.md, AB-RUNBOOK.md and CHANGELOG.md.
+
+The 30 (F, N) pairs are generated from a fixed seed and committed in the runner before any counted run. The
+answers are computed from the fixture. The tail is the continuation the saving needs: every tail request re-reads
+the whole context, about 220k in OFF against what compaction left in PREP.
+
+**Arms:** OFF (Claude Code's default window) and PREP (a 150k window plus `compactPrep`). ON is dropped, because
+the default under test is the window with its step, and v1 already measured ON. **Four runs per arm**, interleaved
+OFF, PREP.
+
+**Draw, including what a transcript leaves out.** The transcript's own usage is priced with the calibrated weights,
+**plus each compaction's own request, estimated**: a cached read of the pre-compaction context (pre × the
+read weight) plus the summary's output (the summary message's characters ÷ 4 × the output weight). The summary is
+the `isCompactSummary` entry in the transcript. v1 charged a flat 0.5 or 1.6 points; this estimate is made per
+compaction and checked against the meter:
+- The five-hour meter is read before the set and after it, and nothing else runs meanwhile.
+- If the meter's movement over the set and the summed estimated draw disagree by more than 25%, **the cost
+  verdict is void**, and the meter reading is reported instead.
+
+**Meter discipline**, the lesson of v1's clean set. The meter is read before every run. No run starts above 60%;
+the set waits for the window to reset.
+
+**The prediction, written now.** A tail request in OFF re-reads about 220k tokens (about 0.044 points). In PREP it
+re-reads what compaction left, 10k to 120k. Stage 1 put the up-front cost of compacting at about 0.6 points. So
+PREP should break even within roughly 15 to 25 tail requests and finish the 30 ahead. If it doesn't, the model of
+the lever is wrong, not just the size of the saving.
+
+**Stage A passes when:**
+- **Correct:** PREP's median on the 15 questions is at least OFF's minus 1, and PREP's median on the 30 tail
+  answers is at least OFF's minus 2.
+- **Remembers:** PREP answers all ten task-fact and detail probes correctly in all four runs.
+- **Cost:** PREP's median total draw, including the estimated compaction requests, is **below** OFF's median by
+  more than OFF's own spread (its highest run minus its lowest). A difference inside that spread is no verdict,
+  and no verdict is not a pass.
+
+### Stage B — the owner's real work
+
+Stage B is v1's stage 2, **unchanged**: the owner at `/autocompact 300k` with `compactPrep` on, until 8
+automatic compactions are recorded. It passes when the recovery cost plus compaction's own charge, at v1's 1.6-point
+bound, stays under half the predicted saving, with no more than one "felt worse" logged and none of them from a
+lost fact the step should have carried. It is kept as written because it is the stricter reading, not replaced
+by stage A's estimate.
+
+### The flip, v2
+
+The 300k window with the preparation step becomes the default **only if stage A and stage B both pass**. If stage
+A fails on cost even with the tail, the window lever is dead as a default, full stop, and stays an opt-in. The
+preparation step may still earn a default of its own, but only through a protocol of its own.
