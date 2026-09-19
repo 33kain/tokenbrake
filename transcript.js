@@ -531,7 +531,7 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
     const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => r.file));
-    const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < k + recoveryWindow && before.has(r.file));
+    const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < Math.min(end, k + recoveryWindow) && before.has(r.file));
     rows.push({
       at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
       saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,

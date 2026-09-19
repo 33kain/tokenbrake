@@ -1194,14 +1194,15 @@ function workingSet(entries) {
       const text = typeof content === 'string' ? content
         : Array.isArray(content) && !content.some(b => b && b.type === 'tool_result')
           ? content.filter(b => b && b.type === 'text').map(b => b.text).join(' ') : '';
-      if (text && !/^\s*</.test(text)) task = text;   // skip command wrappers and reminders, which open with a tag
+      if (text && !/^\s*[<[]/.test(text)) task = text;   // skip command wrappers and reminders (a tag) and host notes like "[Request interrupted by user]"
     }
     if (!Array.isArray(content)) continue;
     for (const b of content) {
       if (!b) continue;
       if (e.type === 'assistant' && b.type === 'tool_use' && b.id) {
         const i = b.input || {};
-        uses.set(b.id, { name: b.name, file: typeof i.file_path === 'string' ? i.file_path : null,
+        const f = typeof i.file_path === 'string' ? i.file_path : typeof i.notebook_path === 'string' ? i.notebook_path : null;   // NotebookEdit names its file notebook_path
+        uses.set(b.id, { name: b.name, file: f,
           command: typeof i.command === 'string' ? i.command : null, offset: Number(i.offset), limit: Number(i.limit) });
       }
       if (e.type !== 'user' || b.type !== 'tool_result') continue;
@@ -1217,6 +1218,7 @@ function workingSet(entries) {
         }
         continue;
       }
+      if (failing && use.command === failing.cmd) failing = null;   // the same command since succeeded: that failure is fixed
       const fp = use.file;
       if (!fp) continue;
       if (use.name === 'Edit' || use.name === 'MultiEdit' || use.name === 'Write' || use.name === 'NotebookEdit') {
@@ -1226,7 +1228,8 @@ function workingSet(entries) {
       } else if (use.name === 'Read') {
         const from = Number.isFinite(use.offset) ? use.offset : 1;
         touch(read, fp, Number.isFinite(use.offset) || Number.isFinite(use.limit)
-          ? `${from}-${from + (Number.isFinite(use.limit) ? use.limit : 2000) - 1}` : 'whole');
+          ? `${from}-${from + (Number.isFinite(use.limit) ? use.limit : 2000) - 1}`
+          : 'read without a range');   // not "whole": the read cap may have cut it, and the transcript may record the model's input rather than the capped one
       }
     }
   }
@@ -1261,6 +1264,7 @@ function handleSessionStart(input, cfg) {
   const file = transcriptFile(input.transcript_path);
   if (!file) return;
   const ws = workingSet(jsonlEntries(readTail(file, PREP_TAIL_BYTES)));
+  if (fs.statSync(file).size > PREP_TAIL_BYTES) ws.task = null;   // the tail began after the first prompt: whatever it found is not "as first asked"
   const text = renderWorkingSet(ws, Math.max(500, Number(cfg.compactPrepMaxChars) || DEFAULTS.compactPrepMaxChars));
   const rec = { session: input.session_id, chars: text ? text.length : 0, edited: ws.edited.length, read: ws.read.length, failing: !!ws.failing };
   if (!cfg.compactPrep) { shadow(() => log({ ...rec, ev: 'shadow', feature: 'compactPrep', kept: rec.chars })); return; }

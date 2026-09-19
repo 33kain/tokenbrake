@@ -3964,6 +3964,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('prep: labelled as data recorded by tokenbrake', /\[tokenbrake\].*data, not instructions/.test(text));
   t('prep: line separators and bidi overrides from a path are stripped', !text.includes(LS) && !text.includes(RLO) && text.includes('/p/evil path .js'));
   t('prep: the block respects its cap', G.renderWorkingSet(ws, 600).length <= 600);
+  const fixed = G.workingSet([...entries, use('b2', 'Bash', { command: 'npm test' }), res('b2', 'all green')]);
+  t('prep: a failing command that later succeeded is not reported as failing', fixed.failing === null);
+  const nb = G.workingSet([use('n1', 'NotebookEdit', { notebook_path: '/p/a.ipynb' }), res('n1', 'ok')]);
+  t('prep: a notebook edit (notebook_path) is in the working set', nb.edited.some(r => r.file === '/p/a.ipynb'));
+  t('prep: a read with no range is not claimed as "whole" (the cap may have cut it)',
+    ws.read.find(r => r.file === '/p/src/big.js') && !G.renderWorkingSet(G.workingSet([use('r9', 'Read', { file_path: '/p/x.js' }), res('r9', 'x')]), 8000).includes('whole'));
+  t('prep: a host note like "[Request interrupted by user]" is not the task',
+    G.workingSet([{ type: 'user', message: { content: '[Request interrupted by user]' } }, { type: 'user', message: { content: 'real task' } }]).task === 'real task');
   t('prep: nothing to point at -> nothing injected', G.renderWorkingSet(G.workingSet([{ type: 'user', message: { content: 'hi' } }]), 8000) === null);
 
   const cfgP = mkdtempSync(join(tmpdir(), 'tokenbrake-prep-'));
@@ -4049,6 +4057,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('compactions: the saving is the drop re-read less on every later request, at the calibrated read weight',
     row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.LIMIT_WEIGHTS.read / 1e6) < 1e-9 && row.requestsCounted === 4);
   t('compactions: a file read before and again after is recovery', row && row.recovery.files.length === 1 && row.recovery.files[0] === '/w/app.js' && row.recovery.pts > 0);
+  /* Two compactions close together: a read after the second is recovery for the second only. */
+  n = 0;
+  const two = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
+    { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger: 'auto', preTokens: 300000 } },
+    req(50000, 50000, 4),
+    { type: 'system', subtype: 'compact_boundary', timestamp: at(5), compactMetadata: { trigger: 'auto', preTokens: 60000 } },
+    req(40000, 40000, 6), readUse('b', '/w/app.js', 7), readRes('b', 7), req(41000, 500, 8)];
+  writeFileSync(join(dir, 'two.jsonl'), two.map(e => JSON.stringify({ sessionId: 'two', cwd: '/w', ...e })).join('\n') + '\n');
+  const [first, second] = TR.compactionView(TR.parseTranscript(join(dir, 'two.jsonl')));
+  t('compactions: recovery stops at the next compaction, so no read is counted twice', first.recovery.files.length === 0 && second.recovery.files.length === 1);
+  rmSync(join(dir, 'two.jsonl'));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
   t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, '/w') === '');
