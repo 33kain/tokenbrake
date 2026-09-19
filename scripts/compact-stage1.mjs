@@ -136,7 +136,7 @@ const editAt = entries.findIndex(e => e.type === 'assistant' && Array.isArray(e.
 const factsDone = Math.max(choiceAt, editAt);
 const where = bounds.map(b => ({ ...b, in: b.i < factsDone ? 'during the facts steps' : b.i < msg2At ? 'after step 3, in message 1' : 'in message 2' }));
 // The filler must carry nothing: its reply is "ok", and no tool is called between it and message 2.
-const fillerAt = entries.findIndex(e => e.type === 'user' && typeof e.message?.content === 'string' && e.message.content === FILLER);
+const fillerAt = entries.findIndex(e => e.type === 'user' && typeof e.message?.content === 'string' && e.message.content.trim().startsWith(FILLER));
 const fillerTools = fillerAt < 0 ? 0 : entries.slice(fillerAt, msg2At).filter(e => e.type === 'assistant'
   && Array.isArray(e.message?.content) && e.message.content.some(b => b.type === 'tool_use')).length;
 const fillerOk = fillerAt >= 0 && mf.text.trim().toLowerCase().replace(/[^a-z]/g, '') === 'ok' && fillerTools === 0;
