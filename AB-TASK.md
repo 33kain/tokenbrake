@@ -3324,3 +3324,92 @@ model or effort, tool use in a block that says no tools, auto-compaction or tool
 **Cost of the run, stated in advance.** About 90 short messages, 5 long ones and three idle waits of over an
 hour, spread over as many five-hour windows as the resolution rule needs. It is paid out of the owner's own
 limit, which is the point: that is the meter being calibrated.
+
+### Calibration results — run 2026-09-18 21:07 to 2026-09-19 01:44 UTC, Opus 5, effort low, Claude Code 2.1.277
+
+**How it was run, and where it departed from the protocol.** Every block was driven headless by
+`scripts/calibrate.mjs`: one `claude -p` per message, one row per message in `calib.jsonl`. The meter is the
+`rate_limit_event` a headless run emits, `unifiedWindows.five_hour.utilization`. It has the same whole-point
+resolution as the usage page, but it gives a reading after every message. Deviations, all decided before the
+numbers they affect were read:
+
+- **The meter lags.** A message's own reading doesn't include that message yet: each B3 cold message read the
+  same as the probe just before it, and its cost appeared at the next probe. Every figure below compares
+  readings across a span, never one message.
+- **B1 landed at 430k, not 250k.** `--build` targets chars/4 and the repo text is denser (411k tokens). R2 ≥ 2R1
+  would then need ~900k, too close to the window, so **B2 was skipped**. Its only job was to give the read
+  weight as a slope, and the long block at 430k measures it directly: the per-message floor (B0) is under 10%
+  of a 430k message.
+- **B1 was below resolution** (2 points), so per the rule it was repeated with 40 messages on the same warm
+  session. The read weight comes from that repeat alone: its span starts after the build's two writes, which
+  the meter lag makes ambiguous at B1's own start.
+- **B5 ran 40 replies of about 4,000 words** instead of 5 of 2,000, because 5 × 2,000 words would have moved the
+  meter under a point. They ran in one session, so its reads and writes are subtracted with the weights below.
+- **B3 had a probe before each cold message**: one tiny message in a throwaway fresh session, so the cold session
+  stayed cold.
+- **Headless `/compact` reports no usage for the compaction request** (neither the result nor the transcript
+  carries it), so its draw comes from the meter as a bound, not a count.
+- **Contamination, from the transcripts of every session on this machine:** no other project or chat made a
+  request during any block. This session did, a few seconds' overlap at the edges of B0, B1 and B5 (under 0.1
+  point each), and **one that matters**: at 01:41:05 it came back from 4.5 hours idle and rewrote its own expired
+  cache, 164,583 tokens (≈1.5 points), inside B3's third span. That span is corrected for it below.
+
+| block | messages | cache read | cache write | output | five-hour | what it gives |
+|---|---|---|---|---|---|---|
+| B0 fresh | 21 | 0.76M | 50k | 84 | 20 → 21 | floor; below resolution (1 point) |
+| B1 build, 2 writes | 2 | 34k | 0.82M | 8 | 21 → 28 | the first message after the build missed the cache and rewrote all of it |
+| B1 after the build, at 430k | 19 | 8.2M | 11k | 76 | 28 → 30 | consistent; below resolution alone |
+| B1 repeat at 430k | 41 | 18.2M | 38k | 164 | 30 → 34 | **cache read** |
+| B5 long replies | 41 | 8.7M | 376k | 342k | 34 → 51 | **output**, after subtracting its reads and writes |
+| B3 cold ×3 | 3 + 3 probes | 98k | 1.35M | 24 | 0 → 13 | **cache write (1 hour)**; the third span minus this session's 1.5 |
+| B4 compact + 20 | 1 + 21 | 1.23M | 50k | 84 | 13 → 14 | compaction bound |
+
+**Weights, in points of the five-hour window per million tokens (Opus 5):**
+
+| | weight | range from the 1-point quantisation | per base-input token, relative to a cache read |
+|---|---|---|---|
+| cache read | **0.20** | 0.15 – 0.26 | 1 |
+| cache write, 1-hour | **8.9** | 7.8 – 10.0 | **45** (the API says 20) |
+| output | **34** | 30 – 38 | **170** (the API says 50) |
+
+**Compaction.** At 455k, `/compact` took the session to about 40k (the headless floor plus the summary).
+Compaction plus the 20 messages after it moved the meter 1 point, so under 2. The 20 messages account for
+about 0.4 of that, which bounds compaction's own draw at 1.6 points (estimate ≈0.5: a cached read of 455k, a
+summary's output, a ~20k write). Each message at 455k draws ≈0.1 point, and one at 40k ≈0.01, so compaction
+pays for itself in **≈6 requests, 18 at the bound**. Caveat: these are "ok" messages. On real work a compacted
+session re-reads what it needs, which the calibration does not capture.
+
+**The owner's pool with those weights** (`scripts/calibrate-pool.mjs`: 123 transcripts including subagents, 3,161
+requests; benchmark and calibration sessions excluded; a cold rebuild is a write of 20k or more after an idle
+of over 60 minutes, a miss/rebuild is a write of 20k or more that exceeds that request's cache read):
+
+| share of weighted draw | point estimate | across the weight ranges |
+|---|---|---|
+| cache reads (the carry) | **38.2%** | 30.0 – 46.7% |
+| cache writes, normal (content entering) | **32.7%** | — |
+| cache writes, cold rebuilds + misses | **8.1%** (5 cold, 6 misses) | 6.7 – 9.6% |
+| all cache writes | **40.8%** | 33.6 – 48.1% |
+| output | **20.9%** | 18.9 – 22.8% |
+
+### The rules, applied as written
+
+- **Cache reads ≥ 50%?** No: 38.2%, and 46.7% at the most favourable end. *The duration brake is not built
+  first.*
+- **Cold rebuilds and misses ≥ 25%?** No: 8.1%. *The cold-cache brake is not built first.*
+- **Output ≥ 50%?** No: 20.9%. *The plan isn't reopened on output grounds.*
+- **Compaction payback ≤ 20 requests?** Yes: ≈6, 18 at the bound. *The duration brake is viable.*
+- **Subscription weights like the API's?** w ÷ a = 45 (30–67) against the API's 20: outside a factor of 2 at
+  the point estimate. *The report uses the measured weights, per model, and says so.* Output is heavier still
+  (170 cache reads against the API's 50).
+
+**What the rules did not anticipate, and so decide nothing about.** No kind of token is a majority. The draw splits
+about **40 / 40 / 20** between re-reading context, writing content into it, and output. The largest category the
+rules were not written for is ordinary cache writes, 33%: content entering context. That is exactly what the entry
+trim acts on, and the carried metric undercounts it. A token entering context costs about 45 re-reads of itself
+before the carry catches up. A result carried fewer than ~45 requests draws more from its write than from its
+reads. Choosing the brake from here is a new decision, taken in discussion with these numbers, not read off a rule
+that didn't foresee them.
+
+**Limits of this calibration.** One model (Opus 5) at effort low, driven headless. The pool mixes models, and
+Fable weighs differently, so the shares are Opus-weighted. The miss classification is a heuristic, not Claude
+Code's own miss count. Compaction's own draw is a bound, not a count.

@@ -1286,3 +1286,22 @@ checkout, all three spawn tests ok, 4,132 ledger records). The day's session rep
 **Next.** The priority set is done, so nothing is left that jumps the queue. The board it paused starts at
 "Then — the distribution table and the post" and "Launch vehicle" above. The site and README now tell the
 same report-first story, which those two sections need.
+
+## Priority since 2026-09-18 evening — the brake to 8-10; step one, the limit calibration, is done
+
+The owner set a new number-one goal the same evening, ahead of everything above: take the **brake** from 3/10 to
+8-10. The report stays as the brake's gauge, not the pitch. Discussion before building. The first question was
+what each kind of token weighs against the five-hour limit, and it is answered: `AB-TASK.md`, "Calibration results"
+(Opus 5; runner `scripts/calibrate.mjs`, pool `scripts/calibrate-pool.mjs`).
+
+- **Weights, in points of the five-hour window per million tokens:** cache read 0.20, cache write (1-hour) 8.9,
+  output 34. A write weighs ~45 reads (the API says 20), and output ~170 (the API says 50).
+- **The owner's draw splits about 38 / 41 / 21:** re-reading context / writing content into it (8% of that is
+  cold rebuilds and misses) / output. No pre-registered rule fired. Compaction pays back in ≈6 requests, so a
+  duration brake is viable, but the carry isn't the majority it was assumed to be.
+- **The carried metric undercounts entry.** A token entering context costs ~45 re-reads of itself, and that
+  entry is what the trim acts on.
+
+**Next:** questions 2-5 of the discussion (how much the brake acts on its own, whether it may depend on the
+user, how it is measured, and what "the task didn't get worse" means), now with these weights. Also: a Fable
+calibration if Fable work matters, and the report weighting its numbers with the measured weights.
