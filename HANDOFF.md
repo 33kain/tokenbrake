@@ -1305,3 +1305,53 @@ what each kind of token weighs against the five-hour limit, and it is answered: 
 **Next:** questions 2-5 of the discussion (how much the brake acts on its own, whether it may depend on the
 user, how it is measured, and what "the task didn't get worse" means), now with these weights. Also: a Fable
 calibration if Fable work matters, and the report weighting its numbers with the measured weights.
+
+## Where it stands — 2026-09-19: the brake's new lever passed its controlled test; stage B is running
+
+**Decided in discussion (questions 2-5).** The brake acts on its own at three levels: *configure* (Claude Code's
+`autoCompactWindow`, whose default on Opus 5 1M is about 967k), *trim at entry* (today's guard), and *prepare*
+(put the working set back after a compaction). Steering the model waits for measurement. Asking the user is
+report material, not the brake. The replay (`scripts/compact-replay.mjs`) put a **300k window at 16% of the owner's
+weighted draw, net**, concentrated in the few long sessions.
+
+**Built and merged:**
+- `compactPrep` (a `SessionStart` hook on `compact`: pointers only, built from the transcript, off by default,
+  shadow when off; #92).
+- `report --compactions` (every compaction priced, the stage 2 verdict; #92, with the recovery lookup fixed in
+  #93).
+- `scripts/compact-stage1.mjs` (the controlled runner; `--tail=30` for v2).
+
+Every code change went through `/simplify`, `/code-review` and `/security-review`.
+
+**The measurement, in `AB-TASK.md`:**
+- **v1 stage 1 FAILED on cost**, and it stays failed. Correctness and recall passed, 15/15 everywhere. The owner
+  ruled the placement rule by its letter, and the clean set ran with a filler message. PREP drew 0.63 points more
+  than OFF, on a task that ended right after compaction: my design flaw, recorded as one. The preparation step
+  cut recovery after compaction by about 70%.
+- **v2 was pre-registered as a separate test** (#94): stage A is the same task plus a 30-question tail, and stage
+  B is v1's stage 2, unchanged.
+- **v2 stage A PASSED** (#96). PREP was 24% cheaper (median 4.18 against 5.49 points, OFF spread 0.16), scored
+  15/15 with tail medians of 28 and 28, and the meter check held (46 measured against 39.6 estimated, a 14% gap).
+
+**Now running, stage B, on the owner's real work.** The owner's machine has `autoCompactWindow: 300000` in
+`~/.claude/settings.json` and `"compactPrep": true` in `~/.claude/tokenbrake.json`, next to the six features
+already on. It runs until 8 automatic Opus 5 compactions are recorded. Track it with
+`node cli.js report --compactions --since=2026-09-19`, which prints the verdict at 8. It passes if recovery plus
+compaction's charge, at the 1.6-point bound, stays under half the predicted saving, with no more than one "felt
+worse" logged. **The owner writes a one-line note the same day** when a compaction makes the work feel worse.
+Session `c310b54d` (the session this was built in) started before the hook existed, so it is outside stage B.
+
+**The flip:** if stage B passes, `init` writes `autoCompactWindow` 300k and `compactPrep` becomes on by default,
+`uninstall` removes both, and `status` shows them.
+
+**Lessons that cost something:**
+- Read the five-hour meter before any paid run, and don't start one above 60%. One unchecked set exhausted the
+  owner's limit.
+- Check a runner's grader against the transcripts before believing a failure. Four "misses" in stage 1 were my
+  regexes (a choice stated as "going with", "go with" or "chosen"; "9 percentage points").
+
+**Open, not started:**
+- A Fable calibration.
+- The report pricing its numbers with the calibrated weights.
+- `compactionView` using `compactMetadata.postTokens`.
+- The parse-time `key` field (`normReadPath` at 11 call sites), deferred from the /simplify pass on #93.
