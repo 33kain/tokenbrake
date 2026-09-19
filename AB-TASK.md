@@ -3761,3 +3761,51 @@ by stage A's estimate.
 The 300k window with the preparation step becomes the default **only if stage A and stage B both pass**. If stage
 A fails on cost even with the tail, the window lever is dead as a default, full stop, and stays an opt-in. The
 preparation step may still earn a default of its own, but only through a protocol of its own.
+
+### v2 stage A results — run 2026-09-19 18:15 to 19:00 UTC, Opus 5, Claude Code 2.1.277, commit `be4c5d8`
+
+Eight runs, interleaved OFF, PREP, driven by `scripts/compact-stage1.mjs --tail=30` under a small orchestrator:
+- A meter probe ran before the set, before every run, and after the set.
+- No run was allowed to start above 60%, and none needed to wait: the set started at 3% and ended at 49%, all in
+  one window.
+- Nothing else ran meanwhile, and the session that launched the set stayed idle.
+
+| arm · run | session | compactions (pre → post) | 15 questions | tail (read + unread) | draw | compaction charge | total |
+|---|---|---|---|---|---|---|---|
+| OFF 1 | `48adc213` | none | 15 | 13 + 15 | 5.51 | 0 | **5.51** |
+| PREP 1 | `f637a2c7` | 116k→82k, 225k→77k, 155k→10k | 15 | 13 + 15 | 4.09 | 0.20 | **4.29** |
+| OFF 2 | `615039a7` | none | 15 | 14 + 15 | 5.46 | 0 | **5.46** |
+| PREP 2 | `4cc9627d` | 206k→116k, 214k→11k | 15 | 13 + 15 | 3.93 | 0.17 | **4.09** |
+| OFF 3 | `a96fe552` | none | 15 | 13 + 12 | 5.56 | 0 | **5.56** |
+| PREP 3 | `a9ecaabe` | 206k→115k, 213k→9k | 15 (raw 14) | 13 + 15 | 3.94 | 0.13 | **4.07** |
+| OFF 4 | `467e54b7` | none | 15 | 13 + 15 | 5.40 | 0 | **5.40** |
+| PREP 4 | `0640c12f` | 137k→48k, 172k→76k, 147k→11k | 15 | 13 + 15 | 4.04 | 0.22 | **4.26** |
+
+All compactions in PREP fell after step 3 and before message 2. None fired in the tail, and OFF never compacted.
+
+**Runner artifact, the same kind as before.** PREP 3 wrote "I've chosen LANTERN" in its thinking before both
+compactions, and the pattern knew "chose" but not "chosen". It re-grades to 15 and counts. The pattern now takes
+"chosen".
+
+Two tail questions grade oddly, and they do so in both arms alike:
+- transcript.js line 2037, whose first whitespace-delimited "word" is `feat('mcpTrim',`: all eight runs answered
+  "feat".
+- README.md line 420, "none": the PREP runs answered "None".
+
+Neither moves a rule.
+
+**The rules, applied as written:**
+- **Correct: PASS.** Every run scored 15 of 15. The tail medians are 28 (OFF: 28, 29, 25, 28) and 28 (PREP: 28 in
+  all four), and the rule was PREP ≥ OFF − 2.
+- **Remembers: PASS.** PREP answered all ten task-fact and detail probes correctly in all four runs.
+- **Cost: PASS.** The OFF median total is 5.49, with a spread of 0.16 (5.40 to 5.56). The PREP median total is
+  4.18, which is **1.31 points (24%) below**, about eight times OFF's own spread.
+- **Meter check: holds.** The meter moved 46 points (3% → 49%, ±1). The estimate summed to 39.6 points: 38.64
+  across the runs, plus 0.97 for the probes. That is a gap of 14%, inside the pre-registered 25%, so the cost
+  verdict stands. The estimate runs low: it prices each compaction from its summary alone, and the gap covers
+  OFF runs too, so part of it is the weights' own uncertainty.
+- **The prediction, written before any run:** PREP breaks even within the tail and finishes ahead. **It held.**
+
+**Stage A passes.** Under "The flip, v2", the default now waits on stage B alone: v1's stage 2, unchanged, on the
+owner's real work at `/autocompact 300k` with `compactPrep` on, until 8 automatic compactions are recorded. v1's
+stage 1 fail stays on the record as the answer to its own question.
