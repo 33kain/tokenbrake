@@ -153,7 +153,7 @@ const textAt = (e) => (Array.isArray(e.message?.content) ? e.message.content : [
 // The model states its choice in its own words as often as in the CHOICE: form it was asked for ("I'm going with
 // LANTERN"), so the first decision-shaped mention before message 2 counts. Corrected after the counted runs; see
 // AB-TASK.md, "Stage 1 results".
-const CHOICE_RE = /(?:CHOICE:\s*|go(?:ing)? with |choos\w* |chose |keep |pick\w* |select\w* |opt\w* for )\W*(LANTERN|HARBOR)/i;
+const CHOICE_RE = /(?:CHOICE:\s*|go(?:ing)? with |choos\w* |chos(?:e|en) |keep|pick\w* |select\w* |opt\w* for )\W*(LANTERN|HARBOR)/i;
 const choiceAt = entries.findIndex((e, i) => i < msg2At && e.type === 'assistant' && CHOICE_RE.test(textAt(e)));
 const chose = choiceAt >= 0 ? textAt(entries[choiceAt]).match(CHOICE_RE)[1].toUpperCase() : null;
 // The edit, however it was made: any Edit/Write/MultiEdit/Bash call whose input names config.js.
