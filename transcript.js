@@ -501,6 +501,9 @@ function parseTranscript(file) {
 const LIMIT_WEIGHTS = { model: 'claude-opus-5', read: 0.20, write: 8.9, output: 34 };
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
+const calibrated = (model, weights = LIMIT_WEIGHTS) => String(model || '').startsWith(weights.model);
+/* A result's price: written once, then re-read on each request that carries it. */
+const resultPts = (tokens, carriedTurns, weights = LIMIT_WEIGHTS) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
 
 function usageCtx(u) {
   return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
@@ -584,7 +587,7 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       const hit = keys[i] && before.has(keys[i]) ? keys[i] : lookupOf(r, byName);
       if (!hit) continue;
       files.add(hit);
-      pts += r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read) / 1e6;
+      pts += resultPts(r.tokens, r.carriedTurns, weights);
     }
     rows.push({
       at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
@@ -603,7 +606,7 @@ const STAGE2 = { n: 8, share: 0.5 };
 function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
   if (/tokenbrake-bench|calibration/i.test(cwd || '')) return 'benchmark/calibration';
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
-  if (!String(row.model || '').startsWith(weights.model)) return 'model ' + (row.model || '?');
+  if (!calibrated(row.model, weights)) return 'model ' + (row.model || '?');
   return '';
 }
 function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
@@ -790,14 +793,16 @@ function trimSavings(parsed, ledgerRecs) {
   const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
   const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
   const trimmed = parsed.results.filter((r) => r.marker && offeredOf(r));
-  let saved = 0, savedCarried = 0;
+  let saved = 0, savedCarried = 0, pts = 0, unpriced = 0;
   for (const r of trimmed) {
     const l = offeredOf(r);
     const tok = Math.round((l.chars - l.kept) / CHARS_PER_TOKEN);
     saved += tok;
     savedCarried += tok * (r.carriedTurns + 1);
+    const q = parsed.requests[r.afterReq];
+    if (calibrated(q && q.model)) pts += resultPts(tok, r.carriedTurns); else unpriced++;
   }
-  return { count: trimmed.length, saved, savedCarried };
+  return { count: trimmed.length, saved, savedCarried, pts, unpriced };
 }
 
 /* The second half is the OTHER side of the same table, and it lives in this one loop for the reason the
@@ -1090,15 +1095,35 @@ function readReReads(ledgerRecs, parsed) {
    of that was served at the cached rate. Missing counters read as 0 here because this is a sum -- the
    per-call null-vs-0 distinction the extension keeps does not survive addition. */
 function usageTotals(parsed) {
-  let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0;
+  let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0, lastModel = null;
   for (const q of parsed.requests) {
-    const u = q.usage; if (!u) continue;
+    const u = q.usage;
+    if (!u || !(usageCtx(u) + (u.output_tokens || 0))) continue;   // Claude Code's synthetic replies: all-zero, no API request
     requestsWithUsage++;
     const inp = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
-    last = usageCtx(u);
+    last = usageCtx(u); lastModel = q.model;
     processed += last; cacheRead += cr; cacheWrite += cw; input += inp; out += u.output_tokens || 0;
   }
-  return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last };
+  return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last, lastModel };
+}
+
+/* The session's draw on the five-hour limit, in points of the window, priced with LIMIT_WEIGHTS: cache reads,
+   writes (cache writes plus uncached input, as the calibration and the replay count them) and output. Only
+   requests on the calibrated model are priced; the rest are counted and never guessed at. A request whose
+   usage is all zero (Claude Code's own synthetic replies) is neither. Pure. */
+function limitDraw(parsed) {
+  let read = 0, write = 0, output = 0, priced = 0, unpriced = 0;
+  for (const q of parsed.requests) {
+    const u = q.usage;
+    if (!u || !(usageCtx(u) + (u.output_tokens || 0))) continue;
+    if (!calibrated(q.model)) { unpriced++; continue; }
+    priced++;
+    read += u.cache_read_input_tokens || 0;
+    write += (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0);
+    output += u.output_tokens || 0;
+  }
+  const W = LIMIT_WEIGHTS;
+  return { read: read * W.read / 1e6, write: write * W.write / 1e6, output: output * W.output / 1e6, priced, unpriced };
 }
 
 /* Which results the guard trimmed, from the ledger: keyed by tool_use_id where the ledger has one (0.1.0
@@ -2134,6 +2159,7 @@ function findTranscripts(cfgDir) {
 }
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
+const pfmt = (n) => n >= 10 ? String(Math.round(n)) : n >= 1 ? n.toFixed(1) : n >= 0.005 ? n.toFixed(2) : '< 0.01';
 const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(Math.round(n));
 
 /* The report, as lines. Pure: takes parsed data, returns text, so the test can read it without a
@@ -2148,6 +2174,7 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   const ran = guardRan(parsed, ledger, parsed.sessionId).ran;
   carry(parsed);
   const u = usageTotals(parsed);
+  const draw = limitDraw(parsed);
   const lines = [];
   const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl'));
   lines.push(`Session ${sid.slice(0, 8)}...  ${parsed.cwd || ''}`);
@@ -2156,7 +2183,14 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   if (u.requestsWithUsage) {
     const pct = u.processed ? Math.round(100 * u.cacheRead / u.processed) : 0;
     lines.push(`  Context processed: ${kfmt(u.processed)} tokens across ${fmt(u.requestsWithUsage)} requests (${pct}% read from cache); output ${kfmt(u.out)}`);
-    lines.push(`  Context now: ~ ${kfmt(u.contextNow)} tokens -- what the next request re-reads`);
+    lines.push(`  Context now: ~ ${kfmt(u.contextNow)} tokens -- what the next request re-reads`
+      + (calibrated(u.lastModel) ? `, ~ ${pfmt(u.contextNow * LIMIT_WEIGHTS.read / 1e6)} points of the five-hour window each time` : ''));
+    /* The same usage in the unit the limit is spent in (AB-TASK.md, "Calibration results"): a cache write weighs
+       ~45 cache reads, and output ~170, so the token count above hides where the window actually went. */
+    if (draw.priced) {
+      lines.push(`  Five-hour window: ~ ${pfmt(draw.read + draw.write + draw.output)} points drawn -- cache reads ${pfmt(draw.read)}, writes ${pfmt(draw.write)}, output ${pfmt(draw.output)}`
+        + ` (weights calibrated on Opus 5${draw.unpriced ? `; ${fmt(draw.unpriced)} requests on other models not priced` : ''})`);
+    }
   }
   const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
@@ -2174,7 +2208,9 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
   const sv = trimSavings(parsed, ledger);
   if (trimmed.length) {
-    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried`);
+    const svPts = sv.count > sv.unpriced
+      ? `, ~ ${pfmt(sv.pts)} points of the five-hour window${sv.unpriced ? ` (${sv.unpriced} on other models not priced)` : ''}` : '';
+    lines.push(`  tokenbrake trimmed ${trimmed.length} of them: ~ ${kfmt(sv.saved)} tokens kept out, ~ ${kfmt(sv.savedCarried)} token-reads not carried${svPts}`);
   } else if (ran) {
     lines.push(`  tokenbrake trimmed none of them (ledger has ${ledger.length} rows for other sessions or small results)`);
   }
@@ -2403,7 +2439,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,

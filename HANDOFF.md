@@ -1350,8 +1350,11 @@ Session `c310b54d` (the session this was built in) started before the hook exist
 - Check a runner's grader against the transcripts before believing a failure. Four "misses" in stage 1 were my
   regexes (a choice stated as "going with", "go with" or "chosen"; "9 percentage points").
 
+**Done since:** the report prices its numbers with the calibrated weights (Opus 5 sessions only): the session's
+draw in points of the five-hour window (cache reads, writes, output), what the context now costs per request, and
+the trim's saving as one write plus its re-reads. `limitDraw` in transcript.js; other models are counted, not priced.
+
 **Open, not started:**
 - A Fable calibration.
-- The report pricing its numbers with the calibrated weights.
 - `compactionView` using `compactMetadata.postTokens`.
 - The parse-time `key` field (`normReadPath` at 11 call sites), deferred from the /simplify pass on #93.

@@ -392,6 +392,24 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a trimmed result is marked from the ledger, joined by tool_use_id', /npm test.*\[trimmed from 1k\]/.test(rank[0]), rank[0]);
   t('the other session\'s ledger row is not counted', /tokenbrake trimmed 1 of them/.test(out));
   t('the savings line carries the trim through the turns it would have been re-read', /~ 700 tokens kept out, ~ 2k token-reads not carried/.test(out), out.split('\n').find(l => /kept out/.test(l)));
+  t('a session on an uncalibrated model is not priced in points', !/points/.test(out) && T.limitDraw(p).unpriced === 4 && !T.limitDraw(p).priced);
+  {
+    /* The same session on the calibrated model: every figure priced with LIMIT_WEIGHTS, uncached input as a write. */
+    const fileO = join(mkdtempSync(join(tmpdir(), 'tokenbrake-b4o-')), 'sess-opus.jsonl');   // its own dir: the fixture dir's session count is tested below
+    writeFileSync(fileO, lines.join('\n').replace(/"model":"m"/g, '"model":"claude-opus-5"') + '\n');
+    const po = T.carry(T.parseTranscript(fileO)), W = T.LIMIT_WEIGHTS, d = T.limitDraw(po);
+    t('the draw prices reads, writes (cache writes plus uncached input) and output with the calibrated weights',
+      d.priced === 4 && !d.unpriced && d.read === 10000 * W.read / 1e6 && d.write === 1100 * W.write / 1e6
+        && d.output === 200 * W.output / 1e6, JSON.stringify(d));
+    const outO = T.renderReport(po, ledger, { top: 5 });
+    t('the report prints the draw in points of the five-hour window', /Five-hour window: ~ 0\.02 points drawn -- cache reads < 0\.01, writes 0\.01, output 0\.01 \(weights calibrated on Opus 5\)/.test(outO), outO.split('\n').find(l => /Five-hour/.test(l)));
+    t('the trim saving is priced as one write plus its re-reads', /token-reads not carried, ~ 0\.01 points of the five-hour window/.test(outO), outO.split('\n').find(l => /kept out/.test(l)));
+    t('context now is priced per request', /what the next request re-reads, ~ < 0\.01 points/.test(outO));
+    const syn = line({ type: 'assistant', requestId: 'req5', uuid: 'req5-a', sessionId: 'sess-abc', cwd: '/w', message: { model: '<synthetic>', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, content: [{ type: 'text', text: 'No response requested.' }] } });
+    writeFileSync(fileO, lines.join('\n').replace(/"model":"m"/g, '"model":"claude-opus-5"') + '\n' + syn + '\n');
+    const us = T.usageTotals(T.parseTranscript(fileO));
+    t('a trailing synthetic reply is not the context now, nor a request', us.contextNow === 1110 * 4 && us.lastModel === 'claude-opus-5' && us.requestsWithUsage === 4, JSON.stringify(us));
+  }
   t('the advice names the heaviest untrimmed result the guard could act on', /One result to have brakes on: Read "\/w\/big.txt"/.test(out) && /offset\/limit/.test(out));
   t('by-tool shares sum from carried', /Bash\s+1 calls\s+1k entered\s+2k carried\s+56%/.test(out), out.split('\n').find(l => /^  Bash/.test(l)));
 
