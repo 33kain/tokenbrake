@@ -3539,3 +3539,31 @@ it found two things wrong with the task as written. Neither is a result about co
 
 The fresh five, the arms, the three runs per arm, and every pass rule stand as pre-registered. A second pilot runs
 the amended task once in the ON arm to confirm the placement, and it is void by design as well.
+
+### Amendment 2 — 2026-09-19, after the second pilot, before any counted run
+
+The second pilot (ON, session `5d88fc2a`) placed both compactions correctly (after step 3 and before message 2:
+192,361 → 88,656, then 183,008 → 24,458), and scored 10 of 10 again without the preparation step. Message 2 made
+one tool call, and the recall answers came from Claude Code's compaction summary, which reliably keeps what the
+task pointed at. As written, the test could not fail. That would make "correct" and "remembers" pass trivially,
+and say nothing about the actual risk: a compaction losing a **detail** the task never flagged as important.
+
+**Five detail probes are added**, each deep in a file message 1 reads and never mentioned by the task:
+- the tail limit guard.js puts on the transcript it reads after a compaction (16 MB, about line 1135 of 1293);
+- the default compaction window constant in transcript.js (967000, line 497 of 2358);
+- the example date cli.js gives in its error for a bad `--since` (2026-09-19, about line 890 of 1707);
+- the share of the five-hour limit HANDOFF.md says five messages in a 689k session used (9%, line 343);
+- the default `reReadRecency` README.md states (8, line 391 of 552).
+
+Message 2 now asks 15 questions: **task facts** (the five from the first amendment), **details** (these five) and
+**fresh** (the original five). Tools stay allowed, so a detail can be looked up again. Looking it up shows as
+recovery cost, while getting it wrong from memory shows as a miss. Both are what the preparation step is meant to
+move.
+
+**The pass rules, restated for 15 questions:**
+- **Correct:** each ON arm's median, out of 15, is at least the OFF median minus 1, and the fresh five never score
+  lower than in OFF.
+- **Remembers:** ON+PREP answers all ten task-fact and detail probes correctly in all three runs.
+- **Cost:** as pre-registered.
+
+A third pilot checks this task once in the ON arm, void by design.
