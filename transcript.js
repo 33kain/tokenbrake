@@ -398,6 +398,7 @@ function parseTranscript(file) {
   const toolUses = new Map();        // tool_use_id -> { name, input, req, at }
   const results = [];                // { id, name, what, chars, tokens, afterReq, askedAt, at, isError }
   const compactions = [];            // request indices at which context was reset
+  const boundaries = [];             // { atReq, trigger, preTokens, at } from each compact_boundary: what compacted it, from what size
   let cwd = null, sessionId = null, version = null;
 
   for (const e of entries) {
@@ -405,6 +406,13 @@ function parseTranscript(file) {
     if (!cwd && e.cwd) cwd = e.cwd;
     if (!sessionId && e.sessionId) sessionId = e.sessionId;
     if (!version && e.version) version = e.version;
+
+    if (e.type === 'system' && e.subtype === 'compact_boundary') {
+      const m = e.compactMetadata || {};
+      boundaries.push({ atReq: requests.length, trigger: m.trigger || null,
+        preTokens: Number.isFinite(Number(m.preTokens)) ? Number(m.preTokens) : null, at: Date.parse(e.timestamp) || null });
+      continue;
+    }
 
     if (e.type === 'assistant' && e.message) {
       const rid = e.requestId || e.uuid;
@@ -485,7 +493,58 @@ function parseTranscript(file) {
     for (const r of results) if (r.compactedAt == null) r.compactedAt = atReq;
   }
 
-  return { file, cwd, sessionId, version, requests, results, compactions };
+  return { file, cwd, sessionId, version, requests, results, compactions, boundaries };
+}
+
+/* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, as
+   calibrated on Opus 5 (AB-TASK.md, "Calibration results", 2026-09-18). Other models are not calibrated. */
+const LIMIT_WEIGHTS = { model: 'claude-opus-5', read: 0.20, write: 8.9, output: 34 };
+const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
+const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
+
+function usageCtx(u) {
+  return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
+}
+
+/* Every compaction in a session, priced (AB-TASK.md, "An earlier compaction window", stage 2). For each one:
+   - the saving: the context dropped from `pre` to the next request's size, so every later request re-reads that
+     much less, and a cold rebuild (a write of 20k+ after over an hour idle) rewrites that much less. It accrues
+     until the next compaction, and stops where the uncompacted context would have passed Claude Code's own
+     default window, because there the session would have compacted anyway.
+   - the recovery: files read in the `recoveryWindow` requests after the compaction that were already read before
+     it, each priced as a fresh write plus its re-reads until the next compaction -- the model finding its place.
+   Compaction's own draw is not in the transcript and is added by the caller at COMPACT_CHARGE. Pure. */
+function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
+  carry(parsed);
+  const reqs = parsed.requests;
+  const rows = [];
+  parsed.boundaries.forEach((b, bi) => {
+    const k = b.atReq;
+    if (k >= reqs.length) return;   // no request after it yet
+    const end = bi + 1 < parsed.boundaries.length ? parsed.boundaries[bi + 1].atReq : reqs.length;
+    const post = usageCtx(reqs[k].usage);
+    const pre = b.preTokens != null ? b.preTokens : (k ? usageCtx(reqs[k - 1].usage) : 0);
+    const drop = Math.max(0, pre - post);
+    let readsAvoided = 0, writesAvoided = 0, requestsCounted = 0;
+    for (let i = k; i < end; i++) {
+      const u = reqs[i].usage;
+      if (usageCtx(u) + drop > defaultWindow) break;
+      readsAvoided += drop; requestsCounted++;
+      const gap = i ? (Date.parse(reqs[i].at) || 0) - (Date.parse(reqs[i - 1].at) || 0) : 0;
+      if (gap > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) writesAvoided += drop;
+    }
+    const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => r.file));
+    const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < k + recoveryWindow && before.has(r.file));
+    const recTokens = recov.reduce((s, r) => s + r.tokens, 0);
+    const recPts = recov.reduce((s, r) => s + (r.tokens * weights.write + r.tokens * (r.carriedTurns || 0) * weights.read), 0) / 1e6;
+    rows.push({
+      session: parsed.sessionId, at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop,
+      later: end - k, requestsCounted,
+      saving: (readsAvoided * weights.read + writesAvoided * weights.write) / 1e6,
+      recovery: { n: recov.length, files: [...new Set(recov.map(r => r.file))], tokens: recTokens, pts: recPts }
+    });
+  });
+  return rows;
 }
 
 /* The carried cost of each result: size x the number of later requests that re-read it, stopping at
@@ -2275,7 +2334,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, carry, compactionView, LIMIT_WEIGHTS, COMPACT_CHARGE, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,

@@ -50,6 +50,7 @@ function writeJson(p, obj) {
   try { fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(tmp, p); }
   catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
 }
+const HOOK_EVENTS = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart'];
 function isOurs(group) {
   return Array.isArray(group.hooks) && group.hooks.some(h =>
     String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
@@ -79,6 +80,11 @@ function init() {
   settings.hooks.PreToolUse = (settings.hooks.PreToolUse || []).filter(g => !isOurs(g));
   settings.hooks.PreToolUse.push({ matcher: 'Read', hooks: [hook('read-pre')] });
 
+  /* After a compaction: compactPrep re-injects the working set when it is on, and shadow records what it would
+     have injected when it is off. Registered either way, like every other feature's hook. */
+  settings.hooks.SessionStart = (settings.hooks.SessionStart || []).filter(g => !isOurs(g));
+  settings.hooks.SessionStart.push({ matcher: 'compact', hooks: [hook('session-start')] });
+
   writeJson(settingsPath, settings);
   fs.mkdirSync(TB_DIR, { recursive: true });
 
@@ -94,7 +100,7 @@ function init() {
 function uninstall() {
   const settings = readJson(settingsPath, null);
   if (settings && settings.hooks) {
-    for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) {
+    for (const ev of HOOK_EVENTS) {
       if (Array.isArray(settings.hooks[ev])) {
         settings.hooks[ev] = settings.hooks[ev].filter(g => !isOurs(g));
         if (!settings.hooks[ev].length) delete settings.hooks[ev];
@@ -116,13 +122,28 @@ function selfTest(h) {
   const hookArgs = (h.args || []).map(a => a.replace('${CLAUDE_PROJECT_DIR}', process.cwd()));
   const mode = hookArgs[1];
   const stdout = Array.from({ length: 200 }, (_, i) => (i === 100 ? 'ERROR: tokenbrake self-test marker' : `line ${i + 1} tokenbrake self-test filler`)).join('\n');
-  const payload = mode === 'read-pre'
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenbrake-status-'));
+  let payload = mode === 'read-pre'
     ? { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: __filename, limit: 1 } }
     : { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'tokenbrake status' },
         tool_response: { stdout, stderr: '', interrupted: false, isImage: false } };
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenbrake-status-'));
+  /* SessionStart: a one-edit transcript inside the throwaway config dir, with compactPrep on there, so the spawn
+     proves the whole path -- the transcript is found, parsed, and the edited file comes back as a pointer. */
+  const SELF_FILE = '/tokenbrake-self-test/edited.js';
   let r;
   try {
+    if (mode === 'session-start') {
+      const dir = path.join(tmp, 'projects', 'self-test');
+      fs.mkdirSync(dir, { recursive: true });
+      const tp = path.join(dir, 'self-test.jsonl');
+      fs.writeFileSync(tp, [
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: SELF_FILE } }] } },
+        { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+          toolUseResult: { structuredPatch: [{ newStart: 10, newLines: 3 }] } }
+      ].map(e => JSON.stringify(e)).join('\n') + '\n');
+      fs.writeFileSync(path.join(tmp, 'tokenbrake.json'), JSON.stringify({ compactPrep: true }));
+      payload = { hook_event_name: 'SessionStart', source: 'compact', session_id: 'self-test', transcript_path: tp };
+    }
     r = spawnSync(h.command, hookArgs, { input: JSON.stringify(payload), encoding: 'utf8', shell: false, timeout: 15000,
       env: { ...process.env, CLAUDE_CONFIG_DIR: tmp } });
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
@@ -130,6 +151,11 @@ function selfTest(h) {
   if (r.status !== 0) return `FAILED: exit ${r.status}${r.stderr ? ' -- ' + r.stderr.trim().split('\n')[0] : ''}`;
   if (mode === 'read-pre') return r.stdout.trim() === '' ? 'ok (spawns; bounded read left untouched)' : `unexpected output: ${r.stdout.slice(0, 80)}`;
   let out; try { out = JSON.parse(r.stdout); } catch { return `FAILED: stdout is not JSON: ${r.stdout.slice(0, 80)}`; }
+  if (mode === 'session-start') {
+    const ctx = out && out.hookSpecificOutput && out.hookSpecificOutput.additionalContext;
+    return typeof ctx === 'string' && ctx.includes(SELF_FILE) && ctx.includes('lines 10-12')
+      ? `ok (spawns; a compaction's working set comes back as pointers, ${ctx.length} chars)` : 'FAILED: no working set in additionalContext';
+  }
   const u = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedToolOutput;
   if (!u || typeof u !== 'object') return 'FAILED: no object-shaped updatedToolOutput (Claude Code would reject a string and keep the full output)';
   if (!String(u.stdout).includes('[tokenbrake]') || !String(u.stdout).includes('self-test marker')) return 'FAILED: trimmed output missing marker or flagged error line';
@@ -144,6 +170,7 @@ function status() {
   console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
   console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
+  console.log(`  SessionStart compaction prep: ${has('SessionStart') ? 'installed' : 'missing (re-run init)'}`);
   /* Is the INSTALLED guard the one this checkout ships? `init` copies guard.js; nothing afterwards keeps the
      copy in step. `test.mjs` pins the project-scope copy, and the user-scope copy had nothing watching it at
      all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its
@@ -159,7 +186,7 @@ function status() {
       + srcSha.slice(0, 12) + '). Re-run `' + (PROJECT ? 'node cli.js init --project' : 'node cli.js init')
       + '`: until you do, the ledger records an older guard while the report reads it as this one.'
     : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
-  for (const ev of ['PostToolUse', 'PostToolUseFailure', 'PreToolUse']) for (const g of ours(ev)) for (const h of g.hooks) {
+  for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
     if (!isOurs({ hooks: [h] })) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
   }
@@ -171,8 +198,8 @@ function status() {
      for a second install that was not there. */
   const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
   const other = readJson(otherPath, null);
-  const otherHas = !!(other && other.hooks && ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'].some(ev => (other.hooks[ev] || []).some(isOurs)));
-  const thisHas = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'].some(has);
+  const otherHas = !!(other && other.hooks && HOOK_EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
+  const thisHas = HOOK_EVENTS.some(has);
   const otherScope = PROJECT ? 'user' : 'project';
   if (otherHas && thisHas) console.log(`  also installed at ${otherScope} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
   else if (otherHas) console.log(`  installed at ${otherScope} scope instead (${otherPath}): the guard runs once, from there`);
@@ -835,6 +862,54 @@ function readsReport() {
   console.log('  withholds, which is behavioural and has taken real sessions to find out before (AB-TASK.md).');
 }
 
+/* `--compactions`: every compaction on this machine, priced with the calibrated weights -- the measurement for
+   stage 2 of "An earlier compaction window" (AB-TASK.md). Per compaction: the saving the drop in context buys
+   until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
+   stage counts automatic compactions on Opus 5 only, outside benchmark and calibration sessions, from --since. */
+function compactionsReport() {
+  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+  const since = opt('--since') ? Date.parse(opt('--since')) : null;
+  if (opt('--since') && !Number.isFinite(since)) { console.log('--since takes a date, like --since=2026-09-19'); process.exitCode = 1; return; }
+  const W = transcript.LIMIT_WEIGHTS;
+  const [chargeLow, chargeHigh] = transcript.COMPACT_CHARGE;
+  const rows = [];
+  for (const f of transcript.findTranscripts(CFG_DIR)) {
+    let p;
+    try { p = transcript.parseTranscript(f.file); } catch { continue; }
+    if (!p.boundaries.length) continue;
+    const excluded = /tokenbrake-bench|calibration/i.test(p.cwd || '');
+    for (const r of transcript.compactionView(p)) {
+      if (since && (r.at || 0) < since) continue;
+      r.eligible = !excluded && r.trigger === 'auto' && String(r.model || '').startsWith(W.model);
+      r.why = excluded ? 'benchmark/calibration' : r.trigger !== 'auto' ? (r.trigger || '?') + ' trigger' : !r.eligible ? 'model ' + (r.model || '?') : '';
+      rows.push(r);
+    }
+  }
+  const k = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : Math.round(n / 1000) + 'k';
+  console.log('Compactions -- ' + rows.length + ' found' + (since ? ' since ' + opt('--since') : '')
+    + '. Points of the five-hour window, calibrated on Opus 5 (AB-TASK.md, "Calibration results").');
+  if (!rows.length) { console.log('\n  None yet. A compaction is recorded in the transcript when Claude Code compacts a session.'); return; }
+  console.log('\n  when              trigger  context       later  saving  recovery (files re-read)   counts');
+  for (const r of rows.sort((a, b) => (a.at || 0) - (b.at || 0))) {
+    const when = r.at ? new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') : '?';
+    console.log('  ' + when.padEnd(17) + ' ' + String(r.trigger || '?').padEnd(8) + ' ' + (k(r.pre) + ' -> ' + k(r.post)).padEnd(13)
+      + ' ' + String(r.later).padStart(5) + '  ' + r.saving.toFixed(2).padStart(6) + '  '
+      + (r.recovery.pts.toFixed(2) + ' (' + r.recovery.files.length + ')').padEnd(25) + '  ' + (r.eligible ? 'yes' : 'no -- ' + r.why));
+  }
+  const el = rows.filter(r => r.eligible);
+  const saving = el.reduce((s, r) => s + r.saving, 0);
+  const recovery = el.reduce((s, r) => s + r.recovery.pts, 0);
+  const share = (c) => saving > 0 ? Math.round(100 * c / saving) + '%' : 'n/a';
+  const costLow = recovery + chargeLow * el.length, costHigh = recovery + chargeHigh * el.length;
+  console.log('\n  Counted: ' + el.length + ' of the 8 automatic compactions stage 2 needs.'
+    + '  Saving ' + saving.toFixed(1) + ' points; recovery ' + recovery.toFixed(1)
+    + '; compaction charged at ' + chargeLow + ' and ' + chargeHigh + ' points each.');
+  console.log('  Cost as a share of the saving: ' + share(costLow) + ' at the estimate, ' + share(costHigh) + ' at the bound.'
+    + ' Stage 2 passes under 50% at the bound, with 8 counted.');
+  if (el.length >= 8) console.log('  Verdict: ' + (saving > 0 && costHigh < saving / 2 ? 'PASS' : costLow < saving / 2 ? 'NOT YET -- passes at the estimate, not at the bound; the default stays off' : 'FAIL') + ' (and only with no more than one "felt worse" logged).');
+  console.log('\n  Recovery is inferred: a file read again after a compaction may be one the next step needed anyway.');
+}
+
 function report() {
   if (flag('--ledger')) return ledgerReport();
   if (flag('--where')) return whereReport();
@@ -845,6 +920,7 @@ function report() {
      never money. Say so and exit non-zero, so a script that relied on it does not read the plain report as it. */
   if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
+  if (flag('--compactions')) return compactionsReport();
   const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
@@ -1087,7 +1163,7 @@ function doctor() {
   const settings = readJson(settingsPath, {});
   const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
   const has = (ev) => ours(ev).length > 0;
-  const EVENTS = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse'];
+  const EVENTS = HOOK_EVENTS;
 
   console.log(`tokenbrake doctor (${PROJECT ? 'project' : 'user'} scope)`);
   console.log(`  settings: ${settingsPath}`);
@@ -1574,6 +1650,9 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
       --backfire                      the Backfire Auditor: what the guard withheld, how much the model then
                                       pulled back (its saved out/ file, or 'show'), and the NET token-reads
                                       saved. The gate a narrowing passes before its default moves. Tokens only
+      --compactions [--since=<date>]  every compaction, priced: what the drop in context saves until the next
+                                      one, and what re-reading files afterwards cost. The measurement for an
+                                      earlier autoCompactWindow (AB-TASK.md, stage 2)
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
 

@@ -3936,6 +3936,127 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(cfg5, { recursive: true, force: true });
 }
 
+/* ---- compactPrep: the working set re-injected after a compaction ----------- */
+{
+  console.log('\n-- compactPrep: SessionStart after a compaction');
+  const G = createRequire(import.meta.url)('./guard.js');
+  const LS = String.fromCharCode(0x2028), RLO = String.fromCharCode(0x202e);
+  const use = (id, name, input) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name, input }] } });
+  const res = (id, content, extra = {}) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content, ...extra.block }] }, ...extra.entry });
+  const entries = [
+    { type: 'user', message: { content: '<command-name>/clear</command-name>' } },
+    { type: 'user', message: { content: 'Fix the total in the cart and keep the tests green.' } },
+    use('r1', 'Read', { file_path: '/p/src/cart.js' }), res('r1', 'SECRET FILE BODY that must not come back'),
+    use('r2', 'Read', { file_path: '/p/src/big.js', offset: 400, limit: 80 }), res('r2', 'x'),
+    use('e1', 'Edit', { file_path: '/p/src/cart.js' }), res('e1', 'ok', { entry: { toolUseResult: { structuredPatch: [{ newStart: 42, newLines: 3 }] } } }),
+    use('b1', 'Bash', { command: 'npm test' }), res('b1', 'Exit code 1\n> jest\nSyntaxError: Unexpected token in cart.test.js', { block: { is_error: true } }),
+    use('w1', 'Write', { file_path: '/p/evil' + LS + 'path' + RLO + '.js' }), res('w1', 'ok'),
+    { type: 'assistant', isSidechain: true, message: { content: [{ type: 'tool_use', id: 's1', name: 'Edit', input: { file_path: '/p/sidechain.js' } }] } }
+  ];
+  const ws = G.workingSet(entries);
+  t('prep: the task is the first real prompt, not a command wrapper', ws.task === 'Fix the total in the cart and keep the tests green.');
+  t('prep: an edited file carries the patched range, and is not listed again under Read', ws.edited.some(r => r.file === '/p/src/cart.js' && r.ranges.includes('42-44')) && !ws.read.some(r => r.file === '/p/src/cart.js'));
+  t('prep: a ranged read keeps its range', ws.read.some(r => r.file === '/p/src/big.js' && r.ranges.includes('400-479')));
+  t('prep: the failing command names the error line, not the host\'s "Exit code"', ws.failing && ws.failing.line.startsWith('SyntaxError'));
+  t('prep: a sidechain edit is not the main session\'s working set', !ws.edited.some(r => r.file === '/p/sidechain.js'));
+  const text = G.renderWorkingSet(ws, 8000);
+  t('prep: pointers only -- no file body comes back', !text.includes('SECRET FILE BODY'));
+  t('prep: labelled as data recorded by tokenbrake', /\[tokenbrake\].*data, not instructions/.test(text));
+  t('prep: line separators and bidi overrides from a path are stripped', !text.includes(LS) && !text.includes(RLO) && text.includes('/p/evil path .js'));
+  t('prep: the block respects its cap', G.renderWorkingSet(ws, 600).length <= 600);
+  t('prep: nothing to point at -> nothing injected', G.renderWorkingSet(G.workingSet([{ type: 'user', message: { content: 'hi' } }]), 8000) === null);
+
+  const cfgP = mkdtempSync(join(tmpdir(), 'tokenbrake-prep-'));
+  const envP = { ...process.env, CLAUDE_CONFIG_DIR: cfgP };
+  mkdirSync(join(cfgP, 'projects', 'p'), { recursive: true });
+  const tp = join(cfgP, 'projects', 'p', 's.jsonl');
+  writeFileSync(tp, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const outside = join(cfgP, 'elsewhere.jsonl');
+  writeFileSync(outside, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const start = (input) => spawnSync(process.execPath, ['./guard.js', 'session-start'], { input: JSON.stringify(input), encoding: 'utf8', env: envP });
+  const ledger = () => existsSync(join(cfgP, 'tokenbrake', 'ledger.jsonl'))
+    ? readFileSync(join(cfgP, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse) : [];
+  const ev = { hook_event_name: 'SessionStart', source: 'compact', session_id: 'sp', transcript_path: tp };
+
+  let r = start(ev);
+  t('prep off (the default): exit 0, nothing injected', r.status === 0 && r.stdout === '');
+  const sh = ledger().find(l => l.ev === 'shadow' && l.feature === 'compactPrep');
+  t('prep off: a shadow row records what it would have injected', !!sh && sh.kept > 0 && sh.edited >= 1 && sh.failing === true);
+
+  writeFileSync(join(cfgP, 'tokenbrake.json'), JSON.stringify({ compactPrep: true }));
+  r = start(ev);
+  const ctx = parse(r.stdout)?.hookSpecificOutput;
+  t('prep on: SessionStart additionalContext carries the working set', r.status === 0 && ctx && ctx.hookEventName === 'SessionStart' && ctx.additionalContext.includes('/p/src/cart.js (lines 42-44)'));
+  t('prep on: the ledger records the injection', ledger().some(l => l.ev === 'compact-prep' && l.session === 'sp'));
+  r = start({ ...ev, source: 'startup' });
+  t('prep on: a startup (not a compaction) injects nothing', r.status === 0 && r.stdout === '');
+  r = start({ ...ev, transcript_path: outside });
+  t('prep on: a transcript path outside projects/ is not opened', r.status === 0 && r.stdout === '');
+  r = start({ ...ev, transcript_path: join(cfgP, 'projects', 'p', '..', '..', 'elsewhere.jsonl') });
+  t('prep on: a path that climbs out of projects/ is not opened', r.status === 0 && r.stdout === '');
+  r = spawnSync(process.execPath, ['./guard.js', 'session-start'], { input: 'not json', encoding: 'utf8', env: envP });
+  t('prep on: garbage stdin fails open', r.status === 0 && r.stdout === '');
+
+  const cliP = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: envP, cwd: PROJ });
+  cliP(['init']);
+  const sP = JSON.parse(readFileSync(join(cfgP, 'settings.json'), 'utf8'));
+  const ss = (sP.hooks.SessionStart || []).filter(g => g.hooks.some(h => (h.args || []).some(a => a.includes('tokenbrake'))));
+  t('init: one SessionStart group, matcher compact, mode session-start', ss.length === 1 && ss[0].matcher === 'compact' && ss[0].hooks[0].args[1] === 'session-start');
+  r = cliP(['status']);
+  t('status: the SessionStart hook spawns and returns a working set', /SessionStart spawn test .*: ok/.test(r.stdout), (r.stdout.split('\n').find(l => /SessionStart spawn/.test(l)) || '').trim());
+  cliP(['uninstall']);
+  const sU = JSON.parse(readFileSync(join(cfgP, 'settings.json'), 'utf8'));
+  t('uninstall: the SessionStart group is gone', !(sU.hooks && sU.hooks.SessionStart));
+  const plug = JSON.parse(readFileSync('./hooks/hooks.json', 'utf8')).hooks.SessionStart;
+  t('plugin: SessionStart on compact, the guard from the plugin root', plug && plug[0].matcher === 'compact' && plug[0].hooks[0].args[0] === '${CLAUDE_PLUGIN_ROOT}/guard.js' && plug[0].hooks[0].args[1] === 'session-start');
+  rmSync(cfgP, { recursive: true, force: true });
+}
+
+/* ---- report --compactions: each compaction priced ----------------------------- */
+{
+  console.log('\n-- report --compactions');
+  const TR = createRequire(import.meta.url)('./transcript.js');
+  const cfgC = mkdtempSync(join(tmpdir(), 'tokenbrake-compact-'));
+  const dir = join(cfgC, 'projects', 'work');
+  mkdirSync(dir, { recursive: true });
+  const t0 = Date.parse('2026-09-20T10:00:00Z');
+  let n = 0;
+  const req = (ctx, write = 500, minutes = n) => ({ type: 'assistant', requestId: 'q' + (++n), timestamp: new Date(t0 + minutes * 60000).toISOString(),
+    message: { model: 'claude-opus-5', content: [], usage: { cache_read_input_tokens: ctx - write, cache_creation_input_tokens: write, input_tokens: 0, output_tokens: 10 } } });
+  const readUse = (id, file, minutes) => ({ type: 'assistant', requestId: 'q' + (++n), timestamp: new Date(t0 + minutes * 60000).toISOString(),
+    message: { model: 'claude-opus-5', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: file } }], usage: { cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, input_tokens: 0, output_tokens: 5 } } });
+  const readRes = (id, minutes) => ({ type: 'user', timestamp: new Date(t0 + minutes * 60000).toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'x'.repeat(4000) }] } });
+  const session = (sid, trigger, cwd) => {
+    n = 0;
+    const lines = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
+      { type: 'system', subtype: 'compact_boundary', timestamp: new Date(t0 + 3 * 60000).toISOString(), compactMetadata: { trigger, preTokens: 300000 } },
+      { type: 'user', isCompactSummary: true, message: { content: 'summary' } },
+      req(50000, 50000, 4), readUse('b', '/w/app.js', 5), readRes('b', 5), req(52000, 500, 6), req(53000, 500, 7)];
+    writeFileSync(join(dir, sid + '.jsonl'), lines.map(e => JSON.stringify({ sessionId: sid, cwd, ...e })).join('\n') + '\n');
+    return TR.parseTranscript(join(dir, sid + '.jsonl'));
+  };
+  const p = session('auto1', 'auto', '/w');
+  t('parse: the compact_boundary is kept with its trigger and size', p.boundaries.length === 1 && p.boundaries[0].trigger === 'auto' && p.boundaries[0].preTokens === 300000);
+  const [row] = TR.compactionView(p);
+  t('compactions: the drop is pre minus the next request\'s context', row && row.pre === 300000 && row.post === 50000 && row.drop === 250000);
+  t('compactions: the saving is the drop re-read less on every later request, at the calibrated read weight',
+    row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.LIMIT_WEIGHTS.read / 1e6) < 1e-9 && row.requestsCounted === 4);
+  t('compactions: a file read before and again after is recovery', row && row.recovery.n === 1 && row.recovery.files[0] === '/w/app.js');
+  const big = TR.compactionView(p, { defaultWindow: 290000 });
+  t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
+
+  session('man1', 'manual', '/w');
+  session('bench1', 'auto', '/x/tokenbrake-bench/run');
+  const r = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
+  t('report --compactions: exit 0, three found', r.status === 0 && /Compactions -- 3 found/.test(r.stdout), r.stderr);
+  t('report --compactions: only the automatic Opus 5 one outside the bench counts', /Counted: 1 of the 8/.test(r.stdout) && /no -- manual trigger/.test(r.stdout) && /no -- benchmark\/calibration/.test(r.stdout));
+  const r2 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions', '--since=2026-09-21'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
+  t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2026-09-21/.test(r2.stdout));
+  const r3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions', '--since=someday'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
+  t('report --compactions --since: a non-date is refused, exit 1', r3.status === 1);
+  rmSync(cfgC, { recursive: true, force: true });
+}
+
 rmSync(CFG, { recursive: true, force: true });
 console.log(fails.length ? '\nFAILED: ' + fails.join(', ') : '\nall tokenbrake checks passed');
 process.exit(fails.length ? 1 : 0);
