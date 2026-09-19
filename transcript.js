@@ -447,6 +447,11 @@ function parseTranscript(file) {
           hash: (use.name === 'Bash' || use.name === 'PowerShell' || /^mcp__/.test(use.name)) && text ? GUARD.hashOf(text) : null,
           /* The raw command, for matching noTrim exactly as the guard does (`what` is cleaned up for display). */
           cmd: (use.name === 'Bash' || use.name === 'PowerShell') && use.input && typeof use.input.command === 'string' ? use.input.command : undefined,
+          /* Where a Grep or Glob looked: Grep's path and glob, Glob's path and pattern. With `cmd` for the shell, it
+             lets a compaction's recovery tell a lookup of a file already read (compactionView) from new work. */
+          lookIn: use.input && (use.name === 'Grep' || use.name === 'Glob')
+            ? [use.input.path, use.name === 'Grep' ? use.input.glob : use.input.pattern].filter(x => typeof x === 'string').join(' ') || undefined
+            : undefined,
           patch: (use.name === 'Edit' || use.name === 'MultiEdit') ? safeRanges(e.toolUseResult) : undefined,
           /* The guard's own test for "this command is a read of one file" (guard.js EXCERPT), kept as its own fact
              rather than inferred from `file`, which means "which file this reads" and may grow other shapes. */
@@ -506,15 +511,48 @@ function usageCtx(u) {
      much less, and a cold rebuild (a write of 20k+ after over an hour idle) rewrites that much less. It accrues
      until the next compaction, and stops where the uncompacted context would have passed Claude Code's own
      default window, because there the session would have compacted anyway.
-   - the recovery: files read in the `recoveryWindow` requests after the compaction that were already read before
-     it, each priced as a fresh write plus its re-reads until the next compaction -- the model finding its place.
+   - the recovery: in the `recoveryWindow` requests after the compaction, every result that went back to a file
+     already read before it -- a Read of it, or a shell/Grep/Glob lookup whose command or path names it (the stage 1
+     pilot recovered three lost details with one grep, which a Read-only count scored as zero). Each is priced as a
+     fresh write plus its re-reads until the next compaction. A lookup that also does new work in the same command
+     is counted whole, so recovery errs high, which is the safe side for a gate.
    Compaction's own draw is not in the transcript and is added by the caller at COMPACT_CHARGE. Pure.
    Recovery here differs from recoveryReads on purpose: that one looks within a compaction window, and this one
    looks across the boundary, which is the only place a compaction's own recovery can show. */
+/* Which already-read file a result went back to by looking it up, or null. A Grep or Glob is always a lookup; a
+   shell command counts only in a segment (split at ; && || |) whose program reads or searches text -- running
+   `node test.mjs` or `git diff app.js` names a file without looking anything up. The name must stand as its own
+   path component (`app.js` does not match `myapp.js`), and case is ignored because normReadPath lowercases
+   drive-letter paths while the command keeps its own case. */
+const LOOKUP_PROGRAM = /^(grep|egrep|fgrep|rg|ag|ack|sed|awk|cat|head|tail|less|more|wc|od|xxd|nl|cut|sort|uniq|diff|type|findstr|select-string|sls|get-content|gc)$/;
+function lookupOf(r, byName) {
+  if (!byName.size) return null;
+  const segs = r.lookIn ? [r.lookIn] : r.cmd ? String(r.cmd).split(/&&|\|\||;|\|/).filter(s => {
+    const prog = (s.trim().split(/\s+/)[0] || '').split(/[\\/]/).pop().replace(/\.exe$/i, '').toLowerCase();
+    return LOOKUP_PROGRAM.test(prog);
+  }) : [];
+  for (const seg of segs) {
+    const hay = seg.toLowerCase();
+    for (const [name, key] of byName) {
+      if (!name) continue;
+      for (let at = hay.indexOf(name); at >= 0; at = hay.indexOf(name, at + 1)) {
+        const pre = at ? hay[at - 1] : ' ', post = hay[at + name.length] || ' ';
+        if (/[\s\/\\'"=:*]/.test(pre) && /[\s'"),;:*]/.test(post)) return key;
+      }
+    }
+  }
+  return null;
+}
+
 function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
   carry(parsed);
   const reqs = parsed.requests;
   const times = reqs.map(q => Date.parse(q.at) || 0);
+  // Each result's file, normalized once (a Read's absolute path and a grep's relative one are the same file), and
+  // the files read so far, grown across the boundaries in order rather than rebuilt at each one.
+  const keys = parsed.results.map(r => r.file ? normReadPath(r.file, parsed.cwd) : null);
+  const before = new Set(), byName = new Map();   // normalized path; lowercased basename -> that path
+  let seen = 0;
   const rows = [];
   parsed.boundaries.forEach((b, bi) => {
     const k = b.atReq;
@@ -530,13 +568,28 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       requestsCounted++;
       if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
-    const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => r.file));
-    const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < Math.min(end, k + recoveryWindow) && before.has(r.file));
+    for (; seen < parsed.results.length && parsed.results[seen].afterReq < k; seen++) {
+      if (keys[seen]) {
+        before.add(keys[seen]);
+        const name = path.basename(keys[seen]).toLowerCase();
+        if (name) byName.set(name, keys[seen]);   // a drive root ("C:") has no basename, and an empty name would match everywhere forever
+      }
+    }
+    const files = new Set();
+    let pts = 0;
+    const stop = Math.min(end, k + recoveryWindow);
+    for (let i = seen; i < parsed.results.length && parsed.results[i].afterReq < stop; i++) {
+      const r = parsed.results[i];
+      if (r.isError) continue;
+      const hit = keys[i] && before.has(keys[i]) ? keys[i] : lookupOf(r, byName);
+      if (!hit) continue;
+      files.add(hit);
+      pts += r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read) / 1e6;
+    }
     rows.push({
       at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
       saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,
-      recovery: { files: [...new Set(recov.map(r => r.file))],
-        pts: recov.reduce((s, r) => s + r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read), 0) / 1e6 }
+      recovery: { files: [...files], pts }
     });
   });
   return rows;
@@ -2350,7 +2403,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, compactionView, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, carry, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,

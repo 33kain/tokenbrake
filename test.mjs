@@ -4068,6 +4068,35 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const [first, second] = TR.compactionView(TR.parseTranscript(join(dir, 'two.jsonl')));
   t('compactions: recovery stops at the next compaction, so no read is counted twice', first.recovery.files.length === 0 && second.recovery.files.length === 1);
   rmSync(join(dir, 'two.jsonl'));
+  /* A lost detail looked up with a shell grep of a file read before the compaction is recovery too; a lookup of a
+     file never read before is new work. */
+  n = 0;
+  const shellUse = (id, command, minutes) => asst(minutes, [{ type: 'tool_use', id, name: 'Bash', input: { command } }], 1000, 0);
+  const grepped = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
+    { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger: 'auto', preTokens: 300000 } },
+    req(50000, 50000, 4), shellUse('g', 'grep -n LIMIT app.js other.txt | head -5', 5), readRes('g', 5),
+    shellUse('h', 'cat other.js', 6), readRes('h', 6),
+    asst(7, [{ type: 'tool_use', id: 'G', name: 'Grep', input: { pattern: 'LIMIT', path: '/w/app.js' } }], 1000, 0), readRes('G', 7),
+    req(51000, 500, 8)];
+  writeFileSync(join(dir, 'grep.jsonl'), grepped.map(e => JSON.stringify({ sessionId: 'grep', cwd: '/w', ...e })).join('\n') + '\n');
+  const pg = TR.parseTranscript(join(dir, 'grep.jsonl'));
+  t('compactions (fixture): the piped multi-file grep is not a single-file read, so only the lookup path can catch it',
+    pg.results.find(r => r.id === 'g').file == null && pg.results.find(r => r.id === 'G').lookIn === '/w/app.js');
+  const [g] = TR.compactionView(pg);
+  const one = 4000 * (TR.LIMIT_WEIGHTS.write) / 4 / 1e6;   // one 4,000-char result's write, before its re-reads
+  t('compactions: a shell grep and a Grep naming a file read before are recovery; a file never read is not',
+    g.recovery.files.length === 1 && g.recovery.files[0] === '/w/app.js' && g.recovery.pts > 2 * one && g.recovery.pts < 3 * one + 0.01);
+  /* lookupOf, the matcher itself: case (Windows drive paths are lowercased), programs that are not lookups, name
+     boundaries, and Glob's pattern. */
+  const byName = new Map([['claude.md', 'c:/w/claude.md'], ['app.js', '/w/app.js']]);
+  const lk = (r) => TR.lookupOf(r, byName);
+  t('lookup: the command\'s own case matches a lowercased Windows path', lk({ cmd: 'grep -n LIMIT CLAUDE.md' }) === 'c:/w/claude.md');
+  t('lookup: running or diffing a file is not looking it up', lk({ cmd: 'node app.js' }) === null && lk({ cmd: 'git diff app.js' }) === null);
+  t('lookup: a lookup segment of a compound command counts', lk({ cmd: 'cd /w; npm test && grep -n x app.js | head' }) === '/w/app.js');
+  t('lookup: a name inside a longer name is not a match', lk({ cmd: 'grep x src/myapp.js' }) === null && lk({ cmd: 'cat app.jsx' }) === null);
+  t('lookup: a later occurrence can match when the first does not', lk({ cmd: 'grep myapp.js app.js' }) === '/w/app.js');
+  t('lookup: a Glob looking for the file by pattern counts', lk({ lookIn: '**/app.js' }) === '/w/app.js');
+  rmSync(join(dir, 'grep.jsonl'));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
   t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, '/w') === '');
