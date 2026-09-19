@@ -447,10 +447,10 @@ function parseTranscript(file) {
           hash: (use.name === 'Bash' || use.name === 'PowerShell' || /^mcp__/.test(use.name)) && text ? GUARD.hashOf(text) : null,
           /* The raw command, for matching noTrim exactly as the guard does (`what` is cleaned up for display). */
           cmd: (use.name === 'Bash' || use.name === 'PowerShell') && use.input && typeof use.input.command === 'string' ? use.input.command : undefined,
-          /* What a lookup searched -- a shell command, or Grep/Glob's path and glob -- so a compaction's recovery can
+          /* Where a Grep or Glob looked (its path and glob). With `cmd` for the shell, it lets a compaction's recovery
              tell a lookup of a file already read (compactionView) from new work. */
-          lookIn: use.input && /^(Bash|PowerShell|Grep|Glob)$/.test(use.name)
-            ? [use.input.command, use.input.path, use.input.glob].filter(x => typeof x === 'string').join(' ') || undefined : undefined,
+          lookIn: use.input && (use.name === 'Grep' || use.name === 'Glob')
+            ? [use.input.path, use.input.glob].filter(x => typeof x === 'string').join(' ') || undefined : undefined,
           patch: (use.name === 'Edit' || use.name === 'MultiEdit') ? safeRanges(e.toolUseResult) : undefined,
           /* The guard's own test for "this command is a read of one file" (guard.js EXCERPT), kept as its own fact
              rather than inferred from `file`, which means "which file this reads" and may grow other shapes. */
@@ -522,6 +522,11 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
   carry(parsed);
   const reqs = parsed.requests;
   const times = reqs.map(q => Date.parse(q.at) || 0);
+  // Each result's file, normalized once (a Read's absolute path and a grep's relative one are the same file), and
+  // the files read so far, grown across the boundaries in order rather than rebuilt at each one.
+  const keys = parsed.results.map(r => r.file ? normReadPath(r.file, parsed.cwd) : null);
+  const before = new Set(), names = new Set();
+  let seen = 0;
   const rows = [];
   parsed.boundaries.forEach((b, bi) => {
     const k = b.atReq;
@@ -537,17 +542,25 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       requestsCounted++;
       if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
-    const norm = (f) => normReadPath(f, parsed.cwd);   // a Read's absolute path and a grep's relative one are the same file
-    const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => norm(r.file)));
-    const names = [...before].map(f => path.basename(f)).filter(Boolean);
-    const lookedUp = (r) => r.lookIn ? names.find(n => r.lookIn.includes(n)) : null;
-    const recov = parsed.results.filter(r => !r.isError && r.afterReq >= k && r.afterReq < Math.min(end, k + recoveryWindow)
-      && ((r.file && before.has(norm(r.file))) || !!lookedUp(r)));
+    for (; seen < parsed.results.length && parsed.results[seen].afterReq < k; seen++) {
+      if (keys[seen]) { before.add(keys[seen]); names.add(path.basename(keys[seen])); }
+    }
+    const files = new Set();
+    let pts = 0;
+    const stop = Math.min(end, k + recoveryWindow);
+    for (let i = seen; i < parsed.results.length && parsed.results[i].afterReq < stop; i++) {
+      const r = parsed.results[i];
+      if (r.isError) continue;
+      const hay = r.cmd || r.lookIn;
+      const hit = keys[i] && before.has(keys[i]) ? path.basename(keys[i]) : hay ? [...names].find(n => hay.includes(n)) : null;
+      if (!hit) continue;
+      files.add(hit);
+      pts += r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read) / 1e6;
+    }
     rows.push({
       at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
       saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,
-      recovery: { files: [...new Set(recov.map(r => r.file || lookedUp(r)))],
-        pts: recov.reduce((s, r) => s + r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read), 0) / 1e6 }
+      recovery: { files: [...files], pts }
     });
   });
   return rows;

@@ -4056,7 +4056,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('compactions: the drop is pre minus the next request\'s context', row && row.pre === 300000 && row.post === 50000 && row.drop === 250000);
   t('compactions: the saving is the drop re-read less on every later request, at the calibrated read weight',
     row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.LIMIT_WEIGHTS.read / 1e6) < 1e-9 && row.requestsCounted === 4);
-  t('compactions: a file read before and again after is recovery', row && row.recovery.files.length === 1 && row.recovery.files[0] === '/w/app.js' && row.recovery.pts > 0);
+  t('compactions: a file read before and again after is recovery', row && row.recovery.files.length === 1 && row.recovery.files[0] === 'app.js' && row.recovery.pts > 0);
   /* Two compactions close together: a read after the second is recovery for the second only. */
   n = 0;
   const two = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
@@ -4074,10 +4074,18 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const shellUse = (id, command, minutes) => asst(minutes, [{ type: 'tool_use', id, name: 'Bash', input: { command } }], 1000, 0);
   const grepped = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
     { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger: 'auto', preTokens: 300000 } },
-    req(50000, 50000, 4), shellUse('g', 'grep -n LIMIT app.js', 5), readRes('g', 5), shellUse('h', 'cat other.js', 6), readRes('h', 6), req(51000, 500, 7)];
+    req(50000, 50000, 4), shellUse('g', 'grep -n LIMIT app.js other.txt | head -5', 5), readRes('g', 5),
+    shellUse('h', 'cat other.js', 6), readRes('h', 6),
+    asst(7, [{ type: 'tool_use', id: 'G', name: 'Grep', input: { pattern: 'LIMIT', path: '/w/app.js' } }], 1000, 0), readRes('G', 7),
+    req(51000, 500, 8)];
   writeFileSync(join(dir, 'grep.jsonl'), grepped.map(e => JSON.stringify({ sessionId: 'grep', cwd: '/w', ...e })).join('\n') + '\n');
-  const [g] = TR.compactionView(TR.parseTranscript(join(dir, 'grep.jsonl')));
-  t('compactions: a grep naming a file read before is recovery; a file never read is not', g.recovery.files.length === 1 && g.recovery.files[0] === 'app.js' && g.recovery.pts > 0);
+  const pg = TR.parseTranscript(join(dir, 'grep.jsonl'));
+  t('compactions (fixture): the piped multi-file grep is not a single-file read, so only the lookup path can catch it',
+    pg.results.find(r => r.id === 'g').file == null && pg.results.find(r => r.id === 'G').lookIn === '/w/app.js');
+  const [g] = TR.compactionView(pg);
+  const one = 4000 * (TR.LIMIT_WEIGHTS.write) / 4 / 1e6;   // one 4,000-char result's write, before its re-reads
+  t('compactions: a shell grep and a Grep naming a file read before are recovery; a file never read is not',
+    g.recovery.files.length === 1 && g.recovery.files[0] === 'app.js' && g.recovery.pts > 2 * one && g.recovery.pts < 3 * one + 0.01);
   rmSync(join(dir, 'grep.jsonl'));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
