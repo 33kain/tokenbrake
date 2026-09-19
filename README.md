@@ -141,8 +141,12 @@ session transcript (every tool result exactly as the model saw it, and the API's
 ranks results by **size × the requests they were carried through** — which is the number that says which
 single `cat`, `Read` or test run to have trimmed, capped or never run. It also shows what the session
 processed in total, how much of that came from cache, what the context holds right now, and which of the
-results tokenbrake trimmed and what that kept out. Sizes are chars/4 estimates; the usage line is what the
-API reported. `--ledger` shows the guard's own record alone, which is also the fallback when no transcript
+results tokenbrake trimmed and what that kept out. On Opus 5 the same usage is also given in **points of the
+five-hour window**, split into cache reads, writes and output, and so is the trim's saving. It uses the
+weights calibrated on the author's machine (per million tokens: cache read 0.20, write 8.9, output 34; see
+AB-TASK.md, "Calibration results"). Token counts alone hide where the window went, because a cache write weighs
+about 45 cache reads. Other models are not calibrated, so they are not priced. Sizes are chars/4 estimates; the
+usage line is what the API reported. `--ledger` shows the guard's own record alone, which is also the fallback when no transcript
 can be found.
 
 Two views exist to set the Read cap's own knobs from a person's own sessions rather than from a default
