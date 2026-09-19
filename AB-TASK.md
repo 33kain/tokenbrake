@@ -3650,3 +3650,49 @@ it: the owner chose one design over a cheaper mixed set. The runner's corrected 
 model's own words, and "9 percentage points" accepted) applies from the first run. Every pass rule, the placement
 rule by its letter, and the 15 questions stand as pre-registered. A run in which the filler's reply is anything
 other than "ok", or in which a tool is called before message 2, is void.
+
+### Stage 1 results, the clean set — run 2026-09-19 09:45 to 12:50 UTC, Opus 5, Claude Code 2.1.277
+
+Nine runs under amendment 3, interleaved OFF, ON, PREP three times over.
+- **PREP 3 hit the owner's five-hour session limit.** The meter stood at 68% when the set started, and I did not
+  check it first. The filler got the host's limit message, so that run is void and could not be completed. It was
+  re-run once the window reset (`c3b`, meter at 3%), with nothing else changed.
+- **One more runner artifact of the same kind as before.** PREP 1 stated its choice as "I'll go with LANTERN",
+  the runner's pattern knew only "going with", and the model answered Q3 correctly. The pattern now includes
+  "go with". PREP 1 re-grades to 15/15, with every compaction after step 3 and before message 2.
+
+| arm · run | session | compactions (pre → post) | score | draw (points) | recovery (points) |
+|---|---|---|---|---|---|
+| OFF 1 | `e1f5c752` | none | 15 | 2.73 | 0 |
+| ON 1 | `d1d3f6b9` | 113k→32k, 147k→30k, 113k→46k | 15 | 3.14 | 0.800 |
+| PREP 1 | `21732530` | 129k→52k, 141k→38k, 126k→46k | 15 (raw 14) | 3.78 | 0.602 |
+| OFF 2 | `a2b70589` | none | 15 | 2.69 | 0 |
+| ON 2 | `a61a6618` | 138k→60k, 158k→46k, 122k→29k | 15 | 3.54 | 0.532 |
+| PREP 2 | `f15715f1` | 126k→19k, 122k→19k, 118k→10k | 15 | 3.34 | 0.213 |
+| OFF 3 | `306370c5` | none | 15 | 2.71 | 0 |
+| ON 3 | `d6c73665` | 135k→22k, 123k→21k, 118k→10k | 15 | 3.34 | 0.745 |
+| PREP 3 (`c3b`) | `4dd5bfd1` | 206k→119k, 220k→9k | 15 | 3.11 | 0.001 |
+
+Every filler reply was "ok" with no tool call. Every compaction fell after step 3 and before message 2, and all
+nine runs count by the letter.
+
+**The rules, applied as written:**
+- **Correct: PASS.** All nine runs scored 15 of 15.
+- **Remembers: PASS.** PREP answered all ten task-fact and detail probes correctly in all three runs.
+- **Cost: FAIL.** The OFF runs' own spread is 0.04 (2.69 to 2.73), and the PREP median draw (3.34) sits 0.63
+  above the OFF median (2.71). The difference is far larger than the spread, so by the rule it is decisive, and
+  PREP drew more than OFF. The ON median (3.34) is the same.
+
+**Stage 1 fails.** Under "The flip" above, the 300k window with the preparation step cannot become the default on
+this protocol. By its own rule this stage is not re-run with a looser one.
+
+**What the failure is, stated plainly.** The cost rule compared whole-session draw on a task built to end a few
+requests after the last compaction. Each compaction rewrites the compacted context, 10k to 119k tokens at the
+write weight, and that is paid at once. The re-reads it saves are paid only over the requests that follow, and
+this task had almost none. So the rule measured a compaction's fixed cost with no room for its saving. That is a
+flaw in how I wrote stage 1's cost rule, and it was visible before the runs: the first results already said
+"stage 2 measures the saving". It is recorded as a flaw of the design, and it does not change the verdict.
+
+**What the stage does show.** Compaction cost no correctness. And the preparation step cut the one thing it exists
+to cut: recovery after compaction had a median of 0.745 points without it (0.800, 0.532, 0.745) and 0.213 with it
+(0.602, 0.213, 0.001), a reduction of about 70% over three runs per arm.
