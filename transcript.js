@@ -447,6 +447,10 @@ function parseTranscript(file) {
           hash: (use.name === 'Bash' || use.name === 'PowerShell' || /^mcp__/.test(use.name)) && text ? GUARD.hashOf(text) : null,
           /* The raw command, for matching noTrim exactly as the guard does (`what` is cleaned up for display). */
           cmd: (use.name === 'Bash' || use.name === 'PowerShell') && use.input && typeof use.input.command === 'string' ? use.input.command : undefined,
+          /* What a lookup searched -- a shell command, or Grep/Glob's path and glob -- so a compaction's recovery can
+             tell a lookup of a file already read (compactionView) from new work. */
+          lookIn: use.input && /^(Bash|PowerShell|Grep|Glob)$/.test(use.name)
+            ? [use.input.command, use.input.path, use.input.glob].filter(x => typeof x === 'string').join(' ') || undefined : undefined,
           patch: (use.name === 'Edit' || use.name === 'MultiEdit') ? safeRanges(e.toolUseResult) : undefined,
           /* The guard's own test for "this command is a read of one file" (guard.js EXCERPT), kept as its own fact
              rather than inferred from `file`, which means "which file this reads" and may grow other shapes. */
@@ -506,8 +510,11 @@ function usageCtx(u) {
      much less, and a cold rebuild (a write of 20k+ after over an hour idle) rewrites that much less. It accrues
      until the next compaction, and stops where the uncompacted context would have passed Claude Code's own
      default window, because there the session would have compacted anyway.
-   - the recovery: files read in the `recoveryWindow` requests after the compaction that were already read before
-     it, each priced as a fresh write plus its re-reads until the next compaction -- the model finding its place.
+   - the recovery: in the `recoveryWindow` requests after the compaction, every result that went back to a file
+     already read before it -- a Read of it, or a shell/Grep/Glob lookup whose command or path names it (the stage 1
+     pilot recovered three lost details with one grep, which a Read-only count scored as zero). Each is priced as a
+     fresh write plus its re-reads until the next compaction. A lookup that also does new work in the same command
+     is counted whole, so recovery errs high, which is the safe side for a gate.
    Compaction's own draw is not in the transcript and is added by the caller at COMPACT_CHARGE. Pure.
    Recovery here differs from recoveryReads on purpose: that one looks within a compaction window, and this one
    looks across the boundary, which is the only place a compaction's own recovery can show. */
@@ -530,12 +537,16 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       requestsCounted++;
       if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
-    const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => r.file));
-    const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < Math.min(end, k + recoveryWindow) && before.has(r.file));
+    const norm = (f) => normReadPath(f, parsed.cwd);   // a Read's absolute path and a grep's relative one are the same file
+    const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => norm(r.file)));
+    const names = [...before].map(f => path.basename(f)).filter(Boolean);
+    const lookedUp = (r) => r.lookIn ? names.find(n => r.lookIn.includes(n)) : null;
+    const recov = parsed.results.filter(r => !r.isError && r.afterReq >= k && r.afterReq < Math.min(end, k + recoveryWindow)
+      && ((r.file && before.has(norm(r.file))) || !!lookedUp(r)));
     rows.push({
       at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
       saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,
-      recovery: { files: [...new Set(recov.map(r => r.file))],
+      recovery: { files: [...new Set(recov.map(r => r.file || lookedUp(r)))],
         pts: recov.reduce((s, r) => s + r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read), 0) / 1e6 }
     });
   });

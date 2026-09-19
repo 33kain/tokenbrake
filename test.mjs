@@ -4068,6 +4068,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const [first, second] = TR.compactionView(TR.parseTranscript(join(dir, 'two.jsonl')));
   t('compactions: recovery stops at the next compaction, so no read is counted twice', first.recovery.files.length === 0 && second.recovery.files.length === 1);
   rmSync(join(dir, 'two.jsonl'));
+  /* A lost detail looked up with a shell grep of a file read before the compaction is recovery too; a lookup of a
+     file never read before is new work. */
+  n = 0;
+  const shellUse = (id, command, minutes) => asst(minutes, [{ type: 'tool_use', id, name: 'Bash', input: { command } }], 1000, 0);
+  const grepped = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
+    { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger: 'auto', preTokens: 300000 } },
+    req(50000, 50000, 4), shellUse('g', 'grep -n LIMIT app.js', 5), readRes('g', 5), shellUse('h', 'cat other.js', 6), readRes('h', 6), req(51000, 500, 7)];
+  writeFileSync(join(dir, 'grep.jsonl'), grepped.map(e => JSON.stringify({ sessionId: 'grep', cwd: '/w', ...e })).join('\n') + '\n');
+  const [g] = TR.compactionView(TR.parseTranscript(join(dir, 'grep.jsonl')));
+  t('compactions: a grep naming a file read before is recovery; a file never read is not', g.recovery.files.length === 1 && g.recovery.files[0] === 'app.js' && g.recovery.pts > 0);
+  rmSync(join(dir, 'grep.jsonl'));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
   t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, '/w') === '');
