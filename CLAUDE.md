@@ -20,7 +20,9 @@ Every change that touches `guard.js`, `cli.js`, or `transcript.js` runs the same
 (cut what the change doesn't need), then `/code-review` (bugs — the guard sees untrusted tool output and must fail
 open), then `/security-review` (path and injection safety on that same untrusted input). Verify every finding against
 the actual code before changing anything; ship anything that alters what enters context default-OFF and let `AB-TASK.md`
-gate the default flip. Savings are measured and reasoned about in tokens (and cache), never money.
+gate the default flip. While a stage is running, do not change what it measures — `compactionView`'s saving and
+recovery, the weights, the counting rules — unless `AB-TASK.md` records an amendment before the numbers it affects are
+read. Savings are measured and reasoned about in tokens (and cache), never money.
 
 `HANDOFF.md` is the state of the work and the plan it belongs to; `AB-TASK.md` is the measurement protocol and every
 number measured so far. Publishing is the `Publish` workflow (Actions → Run workflow), which refuses to republish a
