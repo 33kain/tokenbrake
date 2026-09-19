@@ -3970,9 +3970,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const envP = { ...process.env, CLAUDE_CONFIG_DIR: cfgP };
   mkdirSync(join(cfgP, 'projects', 'p'), { recursive: true });
   const tp = join(cfgP, 'projects', 'p', 's.jsonl');
-  writeFileSync(tp, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
   const outside = join(cfgP, 'elsewhere.jsonl');
-  writeFileSync(outside, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  const jsonl = entries.map(e => JSON.stringify(e)).join('\n') + '\n';
+  writeFileSync(tp, jsonl);
+  writeFileSync(outside, jsonl);
   const start = (input) => spawnSync(process.execPath, ['./guard.js', 'session-start'], { input: JSON.stringify(input), encoding: 'utf8', env: envP });
   const ledger = () => existsSync(join(cfgP, 'tokenbrake', 'ledger.jsonl'))
     ? readFileSync(join(cfgP, 'tokenbrake', 'ledger.jsonl'), 'utf8').trim().split('\n').map(parse) : [];
@@ -4002,6 +4003,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const sP = JSON.parse(readFileSync(join(cfgP, 'settings.json'), 'utf8'));
   const ss = (sP.hooks.SessionStart || []).filter(g => g.hooks.some(h => (h.args || []).some(a => a.includes('tokenbrake'))));
   t('init: one SessionStart group, matcher compact, mode session-start', ss.length === 1 && ss[0].matcher === 'compact' && ss[0].hooks[0].args[1] === 'session-start');
+  /* The plugin's hooks.json mirrors cli.js's HOOKS table: the same events, matchers and modes init installs. */
+  const shape = (hooks) => Object.entries(hooks).flatMap(([ev, gs]) => gs.filter(g => g.hooks.some(h => (h.args || []).some(a => /tokenbrake|CLAUDE_PLUGIN_ROOT/.test(a))))
+    .map(g => ev + '|' + g.matcher + '|' + g.hooks[0].args[1])).sort().join(',');
+  t('plugin hooks.json installs exactly what init installs', shape(JSON.parse(readFileSync('./hooks/hooks.json', 'utf8')).hooks) === shape(sP.hooks),
+    shape(JSON.parse(readFileSync('./hooks/hooks.json', 'utf8')).hooks));
   r = cliP(['status']);
   t('status: the SessionStart hook spawns and returns a working set', /SessionStart spawn test .*: ok/.test(r.stdout), (r.stdout.split('\n').find(l => /SessionStart spawn/.test(l)) || '').trim());
   cliP(['uninstall']);
@@ -4020,16 +4026,17 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const dir = join(cfgC, 'projects', 'work');
   mkdirSync(dir, { recursive: true });
   const t0 = Date.parse('2026-09-20T10:00:00Z');
+  const at = (minutes) => new Date(t0 + minutes * 60000).toISOString();
   let n = 0;
-  const req = (ctx, write = 500, minutes = n) => ({ type: 'assistant', requestId: 'q' + (++n), timestamp: new Date(t0 + minutes * 60000).toISOString(),
-    message: { model: 'claude-opus-5', content: [], usage: { cache_read_input_tokens: ctx - write, cache_creation_input_tokens: write, input_tokens: 0, output_tokens: 10 } } });
-  const readUse = (id, file, minutes) => ({ type: 'assistant', requestId: 'q' + (++n), timestamp: new Date(t0 + minutes * 60000).toISOString(),
-    message: { model: 'claude-opus-5', content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: file } }], usage: { cache_read_input_tokens: 1000, cache_creation_input_tokens: 0, input_tokens: 0, output_tokens: 5 } } });
-  const readRes = (id, minutes) => ({ type: 'user', timestamp: new Date(t0 + minutes * 60000).toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'x'.repeat(4000) }] } });
+  const asst = (minutes, content, ctx, write) => ({ type: 'assistant', requestId: 'q' + (++n), timestamp: at(minutes),
+    message: { model: 'claude-opus-5', content, usage: { cache_read_input_tokens: ctx - write, cache_creation_input_tokens: write, input_tokens: 0, output_tokens: 10 } } });
+  const req = (ctx, write, minutes) => asst(minutes, [], ctx, write);
+  const readUse = (id, file, minutes) => asst(minutes, [{ type: 'tool_use', id, name: 'Read', input: { file_path: file } }], 1000, 0);
+  const readRes = (id, minutes) => ({ type: 'user', timestamp: at(minutes), message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'x'.repeat(4000) }] } });
   const session = (sid, trigger, cwd) => {
     n = 0;
     const lines = [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2),
-      { type: 'system', subtype: 'compact_boundary', timestamp: new Date(t0 + 3 * 60000).toISOString(), compactMetadata: { trigger, preTokens: 300000 } },
+      { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger, preTokens: 300000 } },
       { type: 'user', isCompactSummary: true, message: { content: 'summary' } },
       req(50000, 50000, 4), readUse('b', '/w/app.js', 5), readRes('b', 5), req(52000, 500, 6), req(53000, 500, 7)];
     writeFileSync(join(dir, sid + '.jsonl'), lines.map(e => JSON.stringify({ sessionId: sid, cwd, ...e })).join('\n') + '\n');
@@ -4041,19 +4048,27 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('compactions: the drop is pre minus the next request\'s context', row && row.pre === 300000 && row.post === 50000 && row.drop === 250000);
   t('compactions: the saving is the drop re-read less on every later request, at the calibrated read weight',
     row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.LIMIT_WEIGHTS.read / 1e6) < 1e-9 && row.requestsCounted === 4);
-  t('compactions: a file read before and again after is recovery', row && row.recovery.n === 1 && row.recovery.files[0] === '/w/app.js');
+  t('compactions: a file read before and again after is recovery', row && row.recovery.files.length === 1 && row.recovery.files[0] === '/w/app.js' && row.recovery.pts > 0);
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
+  t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, '/w') === '');
+  t('stage 2: manual, other models and bench or calibration sessions do not',
+    TR.compactionWhy({ ...row, trigger: 'manual' }, '/w') === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, '/w'))
+    && TR.compactionWhy(row, '/x/tokenbrake-bench') === 'benchmark/calibration' && TR.compactionWhy(row, '/tmp/calibration') === 'benchmark/calibration');
+  const rowsOf = (saving, rec) => Array.from({ length: TR.STAGE2.n }, () => ({ saving, recovery: { pts: rec } }));
+  t('stage 2: no verdict before 8 are counted', TR.compactionVerdict(rowsOf(10, 0).slice(1)).verdict === null);
+  t('stage 2: PASS when recovery plus the 1.6 charge stays under half the saving', TR.compactionVerdict(rowsOf(10, 1)).verdict === 'PASS');
+  t('stage 2: NOT YET when only the 0.5 estimate passes', TR.compactionVerdict(rowsOf(3, 0.5)).verdict === 'NOT YET');
+  t('stage 2: FAIL when even the estimate does not', TR.compactionVerdict(rowsOf(1, 1)).verdict === 'FAIL');
 
   session('man1', 'manual', '/w');
   session('bench1', 'auto', '/x/tokenbrake-bench/run');
-  const r = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
+  const rep = (...a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions', ...a], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
+  const r = rep();
   t('report --compactions: exit 0, three found', r.status === 0 && /Compactions -- 3 found/.test(r.stdout), r.stderr);
   t('report --compactions: only the automatic Opus 5 one outside the bench counts', /Counted: 1 of the 8/.test(r.stdout) && /no -- manual trigger/.test(r.stdout) && /no -- benchmark\/calibration/.test(r.stdout));
-  const r2 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions', '--since=2026-09-21'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
-  t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2026-09-21/.test(r2.stdout));
-  const r3 = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--compactions', '--since=someday'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgC } });
-  t('report --compactions --since: a non-date is refused, exit 1', r3.status === 1);
+  t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2099-01-01/.test(rep('--since=2099-01-01').stdout));
+  t('report --compactions --since: a non-date is refused, exit 1', rep('--since=someday').status === 1);
   rmSync(cfgC, { recursive: true, force: true });
 }
 

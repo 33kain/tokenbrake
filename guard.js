@@ -1153,22 +1153,39 @@ function readTail(file, bytes) {
   try {
     const size = fs.fstatSync(fd).size;
     const from = Math.max(0, size - bytes);
-    const buf = Buffer.alloc(size - from);
-    fs.readSync(fd, buf, 0, buf.length, from);
-    const text = buf.toString('utf8');
-    return from ? text.slice(text.indexOf('\n') + 1) : text;   // a tail starts mid-line; drop the fragment
+    const buf = Buffer.allocUnsafe(size - from);
+    const got = fs.readSync(fd, buf, 0, buf.length, from);
+    const start = from ? buf.indexOf(10) + 1 : 0;   // a tail starts mid-line; drop the fragment
+    return start > 0 || !from ? buf.toString('utf8', start, got) : '';
   } finally { fs.closeSync(fd); }
 }
 
-/* Pure: transcript entries in, working set out. Exported so the test and the report can ask the same question. */
+/* One parsed entry at a time, so a 16 MB tail is never held as a whole array of object graphs. */
+function* jsonlEntries(text) {
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    try { yield JSON.parse(line); } catch { /* a torn or foreign line is skipped */ }
+  }
+}
+
+/* The text a tool_result put in front of the model: a string, or the text blocks of an array. transcript.js
+   uses this same definition. */
+function resultText(block) {
+  const c = block && block.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.map(b => (b && b.type === 'text' && typeof b.text === 'string') ? b.text : '').join('\n');
+  return '';
+}
+
+/* Pure: transcript entries (any iterable) in, working set out. Exported for the test. */
 function workingSet(entries) {
-  const uses = new Map();
-  const edited = new Map(), read = new Map();   // path -> ranges, in order of last touch
+  const uses = new Map();   // tool_use id -> only the fields the working set reads, not the whole input
+  const edited = new Map(), read = new Map();   // path -> its last 3 ranges, in order of last touch
   let task = null, failing = null;
   const touch = (m, file, range) => {
     const prev = m.get(file) || [];
     m.delete(file);
-    m.set(file, range ? prev.filter(r => r !== range).concat(range) : prev);
+    m.set(file, range ? prev.filter(r => r !== range).concat(range).slice(-3) : prev);
   };
   for (const e of entries) {
     if (!e || typeof e !== 'object' || e.isSidechain || !e.message) continue;
@@ -1182,37 +1199,38 @@ function workingSet(entries) {
     if (!Array.isArray(content)) continue;
     for (const b of content) {
       if (!b) continue;
-      if (e.type === 'assistant' && b.type === 'tool_use' && b.id) uses.set(b.id, { name: b.name, input: b.input || {} });
+      if (e.type === 'assistant' && b.type === 'tool_use' && b.id) {
+        const i = b.input || {};
+        uses.set(b.id, { name: b.name, file: typeof i.file_path === 'string' ? i.file_path : null,
+          command: typeof i.command === 'string' ? i.command : null, offset: Number(i.offset), limit: Number(i.limit) });
+      }
       if (e.type !== 'user' || b.type !== 'tool_result') continue;
       const use = uses.get(b.tool_use_id);
       if (!use) continue;
-      const fp = typeof use.input.file_path === 'string' ? use.input.file_path : null;
       if (b.is_error) {
-        if ((use.name === 'Bash' || use.name === 'PowerShell') && typeof use.input.command === 'string') {
-          const text = typeof b.content === 'string' ? b.content
-            : Array.isArray(b.content) ? b.content.map(c => c && c.text || '').join('\n') : '';
+        if ((use.name === 'Bash' || use.name === 'PowerShell') && use.command) {
           /* The host prefixes a failed Bash result with "Exit code N", which says nothing; the error is the first
              line that names one -- ERR's word boundaries miss "SyntaxError", so a bare substring test follows. */
-          const lines = text.split('\n').filter(l => l.trim() && !/^\s*Exit code \d+\s*$/.test(l));
-          failing = { cmd: use.input.command,
+          const lines = resultText(b).split('\n').filter(l => l.trim() && !/^\s*Exit code \d+\s*$/.test(l));
+          failing = { cmd: use.command,
             line: lines.find(l => ERR.test(l)) || lines.find(l => /error|exception|fatal|panic|traceback/i.test(l)) || lines[0] || '' };
         }
         continue;
       }
+      const fp = use.file;
       if (!fp) continue;
       if (use.name === 'Edit' || use.name === 'MultiEdit' || use.name === 'Write' || use.name === 'NotebookEdit') {
         const ranges = patchRanges(e.toolUseResult);
         if (ranges.length) for (const [a, z] of ranges) touch(edited, fp, `${a}-${z}`);
         else touch(edited, fp, use.name === 'Write' ? 'written' : null);
       } else if (use.name === 'Read') {
-        const off = Number(use.input.offset), lim = Number(use.input.limit);
-        const range = Number.isFinite(off) || Number.isFinite(lim)
-          ? `${Number.isFinite(off) ? off : 1}-${(Number.isFinite(off) ? off : 1) + (Number.isFinite(lim) ? lim : 2000) - 1}` : 'whole';
-        touch(read, fp, range);
+        const from = Number.isFinite(use.offset) ? use.offset : 1;
+        touch(read, fp, Number.isFinite(use.offset) || Number.isFinite(use.limit)
+          ? `${from}-${from + (Number.isFinite(use.limit) ? use.limit : 2000) - 1}` : 'whole');
       }
     }
   }
-  const newestFirst = (m) => [...m.entries()].reverse().map(([file, ranges]) => ({ file, ranges: ranges.slice(-3) }));
+  const newestFirst = (m) => [...m.entries()].reverse().map(([file, ranges]) => ({ file, ranges }));
   return { task, edited: newestFirst(edited), read: newestFirst(read).filter(r => !edited.has(r.file)), failing };
 }
 
@@ -1242,12 +1260,7 @@ function handleSessionStart(input, cfg) {
   if (!cfg.compactPrep && !cfg.shadow) return;
   const file = transcriptFile(input.transcript_path);
   if (!file) return;
-  const entries = [];
-  for (const line of readTail(file, PREP_TAIL_BYTES).split('\n')) {
-    if (!line) continue;
-    try { entries.push(JSON.parse(line)); } catch { /* a torn or foreign line is skipped */ }
-  }
-  const ws = workingSet(entries);
+  const ws = workingSet(jsonlEntries(readTail(file, PREP_TAIL_BYTES)));
   const text = renderWorkingSet(ws, Math.max(500, Number(cfg.compactPrepMaxChars) || DEFAULTS.compactPrepMaxChars));
   const rec = { session: input.session_id, chars: text ? text.length : 0, edited: ws.edited.length, read: ws.read.length, failing: !!ws.failing };
   if (!cfg.compactPrep) { shadow(() => log({ ...rec, ev: 'shadow', feature: 'compactPrep', kept: rec.chars })); return; }
@@ -1273,4 +1286,4 @@ function main() {
    guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
    copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
 if (require.main === module) main();
-else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, workingSet, renderWorkingSet, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };
+else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, workingSet, renderWorkingSet, resultText, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };

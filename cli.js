@@ -50,7 +50,22 @@ function writeJson(p, obj) {
   try { fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(tmp, p); }
   catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
 }
-const HOOK_EVENTS = ['PostToolUse', 'PostToolUseFailure', 'PreToolUse', 'SessionStart'];
+/* Every hook tokenbrake installs, in one table: init installs exactly these, and uninstall, status and doctor
+   look for exactly these events. hooks/hooks.json (the plugin) mirrors it, and test.mjs checks that it does.
+   - PostToolUse on every tool: the trim, and the ledger row for every result.
+   - PostToolUseFailure on the shells: a command that exits non-zero fires this, not PostToolUse. Without it the
+     guard never sees a failing test run, which is the output it exists for.
+   - PreToolUse on Read: the large-read cap.
+   - SessionStart on compact: compactPrep re-injects the working set when on; shadow records it when off.
+     Registered either way, like every other feature's hook. */
+const HOOKS = [
+  { event: 'PostToolUse', matcher: '*', mode: 'post' },
+  { event: 'PostToolUseFailure', matcher: 'Bash|PowerShell', mode: 'post' },
+  { event: 'PreToolUse', matcher: 'Read', mode: 'read-pre' },
+  { event: 'SessionStart', matcher: 'compact', mode: 'session-start' }
+];
+const HOOK_EVENTS = HOOKS.map(h => h.event);
+const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
 function isOurs(group) {
   return Array.isArray(group.hooks) && group.hooks.some(h =>
     String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
@@ -69,21 +84,10 @@ function init() {
   settings.hooks = settings.hooks || {};
   const hook = (mode) => ({ type: 'command', command: nodeCmd, args: [guardRef, mode], timeout: 15, statusMessage: 'tokenbrake' });
 
-  settings.hooks.PostToolUse = (settings.hooks.PostToolUse || []).filter(g => !isOurs(g));
-  settings.hooks.PostToolUse.push({ matcher: '*', hooks: [hook('post')] });
-
-  /* A shell command that exits non-zero fires PostToolUseFailure, not PostToolUse. Without this group the
-     guard never sees a failing test run, which is the output it exists for. */
-  settings.hooks.PostToolUseFailure = (settings.hooks.PostToolUseFailure || []).filter(g => !isOurs(g));
-  settings.hooks.PostToolUseFailure.push({ matcher: 'Bash|PowerShell', hooks: [hook('post')] });
-
-  settings.hooks.PreToolUse = (settings.hooks.PreToolUse || []).filter(g => !isOurs(g));
-  settings.hooks.PreToolUse.push({ matcher: 'Read', hooks: [hook('read-pre')] });
-
-  /* After a compaction: compactPrep re-injects the working set when it is on, and shadow records what it would
-     have injected when it is off. Registered either way, like every other feature's hook. */
-  settings.hooks.SessionStart = (settings.hooks.SessionStart || []).filter(g => !isOurs(g));
-  settings.hooks.SessionStart.push({ matcher: 'compact', hooks: [hook('session-start')] });
+  for (const { event, matcher, mode } of HOOKS) {
+    settings.hooks[event] = (settings.hooks[event] || []).filter(g => !isOurs(g));
+    settings.hooks[event].push({ matcher, hooks: [hook(mode)] });
+  }
 
   writeJson(settingsPath, settings);
   fs.mkdirSync(TB_DIR, { recursive: true });
@@ -118,48 +122,64 @@ function uninstall() {
 // a synthetic event on stdin. Runs against a throwaway CLAUDE_CONFIG_DIR so the ledger is not touched.
 // Returns a one-line verdict. This is the check the exec-form node-resolution risk needed: a hook that can't
 // start is indistinguishable from a hook that chose not to rewrite, unless something spawns it on purpose.
-function selfTest(h) {
-  const hookArgs = (h.args || []).map(a => a.replace('${CLAUDE_PROJECT_DIR}', process.cwd()));
-  const mode = hookArgs[1];
-  const stdout = Array.from({ length: 200 }, (_, i) => (i === 100 ? 'ERROR: tokenbrake self-test marker' : `line ${i + 1} tokenbrake self-test filler`)).join('\n');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenbrake-status-'));
-  let payload = mode === 'read-pre'
-    ? { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: __filename, limit: 1 } }
-    : { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'tokenbrake status' },
-        tool_response: { stdout, stderr: '', interrupted: false, isImage: false } };
-  /* SessionStart: a one-edit transcript inside the throwaway config dir, with compactPrep on there, so the spawn
-     proves the whole path -- the transcript is found, parsed, and the edited file comes back as a pointer. */
-  const SELF_FILE = '/tokenbrake-self-test/edited.js';
-  let r;
-  try {
-    if (mode === 'session-start') {
+/* Per hook mode: the event to send (setup may write fixtures into the throwaway config dir) and what the hook's
+   stdout must look like for the spawn to count as working. */
+const SELF_TEST_STDOUT = Array.from({ length: 200 }, (_, i) => (i === 100 ? 'ERROR: tokenbrake self-test marker' : `line ${i + 1} tokenbrake self-test filler`)).join('\n');
+const SELF_TEST_FILE = '/tokenbrake-self-test/edited.js';
+const hookOut = (stdout) => { try { const o = JSON.parse(stdout); return (o && o.hookSpecificOutput) || null; } catch { return null; } };
+const SELF_TESTS = {
+  'read-pre': {
+    setup: () => ({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: __filename, limit: 1 } }),
+    check: (stdout) => stdout.trim() === '' ? 'ok (spawns; bounded read left untouched)' : `unexpected output: ${stdout.slice(0, 80)}`
+  },
+  'post': {
+    setup: () => ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'tokenbrake status' },
+      tool_response: { stdout: SELF_TEST_STDOUT, stderr: '', interrupted: false, isImage: false } }),
+    check: (stdout) => {
+      const o = hookOut(stdout);
+      if (!o) return `FAILED: stdout is not JSON: ${stdout.slice(0, 80)}`;
+      const u = o.updatedToolOutput;
+      if (!u || typeof u !== 'object') return 'FAILED: no object-shaped updatedToolOutput (Claude Code would reject a string and keep the full output)';
+      if (!String(u.stdout).includes('[tokenbrake]') || !String(u.stdout).includes('self-test marker')) return 'FAILED: trimmed output missing marker or flagged error line';
+      return `ok (${SELF_TEST_STDOUT.length.toLocaleString()} chars in -> ${u.stdout.length.toLocaleString()} out, error line kept)`;
+    }
+  },
+  /* A one-edit transcript inside the throwaway config dir, with compactPrep on there, so the spawn proves the
+     whole path: the transcript is found, parsed, and the edited file comes back as a pointer. */
+  'session-start': {
+    setup: (tmp) => {
       const dir = path.join(tmp, 'projects', 'self-test');
       fs.mkdirSync(dir, { recursive: true });
       const tp = path.join(dir, 'self-test.jsonl');
       fs.writeFileSync(tp, [
-        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: SELF_FILE } }] } },
+        { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: SELF_TEST_FILE } }] } },
         { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
           toolUseResult: { structuredPatch: [{ newStart: 10, newLines: 3 }] } }
       ].map(e => JSON.stringify(e)).join('\n') + '\n');
       fs.writeFileSync(path.join(tmp, 'tokenbrake.json'), JSON.stringify({ compactPrep: true }));
-      payload = { hook_event_name: 'SessionStart', source: 'compact', session_id: 'self-test', transcript_path: tp };
+      return { hook_event_name: 'SessionStart', source: 'compact', session_id: 'self-test', transcript_path: tp };
+    },
+    check: (stdout) => {
+      const o = hookOut(stdout);
+      const ctx = o && o.additionalContext;
+      return typeof ctx === 'string' && ctx.includes(SELF_TEST_FILE) && ctx.includes('lines 10-12')
+        ? `ok (spawns; a compaction's working set comes back as pointers, ${ctx.length} chars)` : 'FAILED: no working set in additionalContext';
     }
-    r = spawnSync(h.command, hookArgs, { input: JSON.stringify(payload), encoding: 'utf8', shell: false, timeout: 15000,
+  }
+};
+
+function selfTest(h) {
+  const hookArgs = (h.args || []).map(a => a.replace('${CLAUDE_PROJECT_DIR}', process.cwd()));
+  const test = SELF_TESTS[hookArgs[1]] || SELF_TESTS.post;
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenbrake-status-'));
+  let r;
+  try {
+    r = spawnSync(h.command, hookArgs, { input: JSON.stringify(test.setup(tmp)), encoding: 'utf8', shell: false, timeout: 15000,
       env: { ...process.env, CLAUDE_CONFIG_DIR: tmp } });
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
   if (r.error) return `FAILED to start: ${r.error.code || r.error.message} -- '${h.command}' could not be spawned without a shell. Re-run init (records an absolute node path) or init --node=<path-to-node>.`;
   if (r.status !== 0) return `FAILED: exit ${r.status}${r.stderr ? ' -- ' + r.stderr.trim().split('\n')[0] : ''}`;
-  if (mode === 'read-pre') return r.stdout.trim() === '' ? 'ok (spawns; bounded read left untouched)' : `unexpected output: ${r.stdout.slice(0, 80)}`;
-  let out; try { out = JSON.parse(r.stdout); } catch { return `FAILED: stdout is not JSON: ${r.stdout.slice(0, 80)}`; }
-  if (mode === 'session-start') {
-    const ctx = out && out.hookSpecificOutput && out.hookSpecificOutput.additionalContext;
-    return typeof ctx === 'string' && ctx.includes(SELF_FILE) && ctx.includes('lines 10-12')
-      ? `ok (spawns; a compaction's working set comes back as pointers, ${ctx.length} chars)` : 'FAILED: no working set in additionalContext';
-  }
-  const u = out && out.hookSpecificOutput && out.hookSpecificOutput.updatedToolOutput;
-  if (!u || typeof u !== 'object') return 'FAILED: no object-shaped updatedToolOutput (Claude Code would reject a string and keep the full output)';
-  if (!String(u.stdout).includes('[tokenbrake]') || !String(u.stdout).includes('self-test marker')) return 'FAILED: trimmed output missing marker or flagged error line';
-  return `ok (${stdout.length.toLocaleString()} chars in -> ${u.stdout.length.toLocaleString()} out, error line kept)`;
+  return test.check(r.stdout);
 }
 
 function status() {
@@ -867,26 +887,26 @@ function readsReport() {
    until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
    stage counts automatic compactions on Opus 5 only, outside benchmark and calibration sessions, from --since. */
 function compactionsReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
-  const since = opt('--since') ? Date.parse(opt('--since')) : null;
-  if (opt('--since') && !Number.isFinite(since)) { console.log('--since takes a date, like --since=2026-09-19'); process.exitCode = 1; return; }
-  const W = transcript.LIMIT_WEIGHTS;
+  const sinceArg = opt('--since');
+  const since = sinceArg ? Date.parse(sinceArg) : null;
+  if (sinceArg && !Number.isFinite(since)) { console.log('--since takes a date, like --since=2026-09-19'); process.exitCode = 1; return; }
   const [chargeLow, chargeHigh] = transcript.COMPACT_CHARGE;
   const rows = [];
   for (const f of transcript.findTranscripts(CFG_DIR)) {
+    if (since && f.mtime < since) continue;   // untouched since then: no later compaction in it
     let p;
-    try { p = transcript.parseTranscript(f.file); } catch { continue; }
-    if (!p.boundaries.length) continue;
-    const excluded = /tokenbrake-bench|calibration/i.test(p.cwd || '');
+    try {
+      if (!fs.readFileSync(f.file, 'utf8').includes('"compact_boundary"')) continue;   // the cheap test before the full parse
+      p = transcript.parseTranscript(f.file);
+    } catch { continue; }
     for (const r of transcript.compactionView(p)) {
       if (since && (r.at || 0) < since) continue;
-      r.eligible = !excluded && r.trigger === 'auto' && String(r.model || '').startsWith(W.model);
-      r.why = excluded ? 'benchmark/calibration' : r.trigger !== 'auto' ? (r.trigger || '?') + ' trigger' : !r.eligible ? 'model ' + (r.model || '?') : '';
+      r.why = transcript.compactionWhy(r, p.cwd);
       rows.push(r);
     }
   }
-  const k = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : Math.round(n / 1000) + 'k';
-  console.log('Compactions -- ' + rows.length + ' found' + (since ? ' since ' + opt('--since') : '')
+  const k = transcript.kfmt;
+  console.log('Compactions -- ' + rows.length + ' found' + (since ? ' since ' + sinceArg : '')
     + '. Points of the five-hour window, calibrated on Opus 5 (AB-TASK.md, "Calibration results").');
   if (!rows.length) { console.log('\n  None yet. A compaction is recorded in the transcript when Claude Code compacts a session.'); return; }
   console.log('\n  when              trigger  context       later  saving  recovery (files re-read)   counts');
@@ -894,19 +914,18 @@ function compactionsReport() {
     const when = r.at ? new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') : '?';
     console.log('  ' + when.padEnd(17) + ' ' + String(r.trigger || '?').padEnd(8) + ' ' + (k(r.pre) + ' -> ' + k(r.post)).padEnd(13)
       + ' ' + String(r.later).padStart(5) + '  ' + r.saving.toFixed(2).padStart(6) + '  '
-      + (r.recovery.pts.toFixed(2) + ' (' + r.recovery.files.length + ')').padEnd(25) + '  ' + (r.eligible ? 'yes' : 'no -- ' + r.why));
+      + (r.recovery.pts.toFixed(2) + ' (' + r.recovery.files.length + ')').padEnd(25) + '  ' + (r.why ? 'no -- ' + r.why : 'yes'));
   }
-  const el = rows.filter(r => r.eligible);
-  const saving = el.reduce((s, r) => s + r.saving, 0);
-  const recovery = el.reduce((s, r) => s + r.recovery.pts, 0);
-  const share = (c) => saving > 0 ? Math.round(100 * c / saving) + '%' : 'n/a';
-  const costLow = recovery + chargeLow * el.length, costHigh = recovery + chargeHigh * el.length;
-  console.log('\n  Counted: ' + el.length + ' of the 8 automatic compactions stage 2 needs.'
-    + '  Saving ' + saving.toFixed(1) + ' points; recovery ' + recovery.toFixed(1)
+  const v = transcript.compactionVerdict(rows.filter(r => !r.why));
+  const { n: need, share: bar } = transcript.STAGE2;
+  const share = (c) => v.saving > 0 ? Math.round(100 * c / v.saving) + '%' : 'n/a';
+  console.log('\n  Counted: ' + v.n + ' of the ' + need + ' automatic compactions stage 2 needs.'
+    + '  Saving ' + v.saving.toFixed(1) + ' points; recovery ' + v.recovery.toFixed(1)
     + '; compaction charged at ' + chargeLow + ' and ' + chargeHigh + ' points each.');
-  console.log('  Cost as a share of the saving: ' + share(costLow) + ' at the estimate, ' + share(costHigh) + ' at the bound.'
-    + ' Stage 2 passes under 50% at the bound, with 8 counted.');
-  if (el.length >= 8) console.log('  Verdict: ' + (saving > 0 && costHigh < saving / 2 ? 'PASS' : costLow < saving / 2 ? 'NOT YET -- passes at the estimate, not at the bound; the default stays off' : 'FAIL') + ' (and only with no more than one "felt worse" logged).');
+  console.log('  Cost as a share of the saving: ' + share(v.costLow) + ' at the estimate, ' + share(v.costHigh) + ' at the bound.'
+    + ' Stage 2 passes under ' + Math.round(bar * 100) + '% at the bound, with ' + need + ' counted.');
+  if (v.verdict) console.log('  Verdict: ' + (v.verdict === 'NOT YET' ? 'NOT YET -- passes at the estimate, not at the bound; the default stays off' : v.verdict)
+    + ' (and only with no more than one "felt worse" logged).');
   console.log('\n  Recovery is inferred: a file read again after a compaction may be one the next step needed anyway.');
 }
 
@@ -1163,13 +1182,12 @@ function doctor() {
   const settings = readJson(settingsPath, {});
   const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
   const has = (ev) => ours(ev).length > 0;
-  const EVENTS = HOOK_EVENTS;
 
   console.log(`tokenbrake doctor (${PROJECT ? 'project' : 'user'} scope)`);
   console.log(`  settings: ${settingsPath}`);
 
-  const missing = EVENTS.filter(ev => !has(ev));
-  if (missing.length === EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
+  const missing = HOOK_EVENTS.filter(ev => !has(ev));
+  if (missing.length === HOOK_EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
   else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
 
   const srcSha = guardSha(path.join(__dirname, 'guard.js'));
@@ -1194,7 +1212,7 @@ function doctor() {
     } catch { problems.push({ sev: 'error', msg: `${cfgPath} is not valid JSON; the guard silently falls back to defaults`, fix: 'fix the JSON or delete the file' }); }
   }
 
-  for (const ev of EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
+  for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
     if (!isOurs({ hooks: [h] })) continue;
     const v = selfTest(h);
     if (!/^ok/.test(v)) problems.push({ sev: 'error', msg: `${ev} hook spawn (${h.command}): ${v}`, fix: 'check the node path; re-run init with --node=<path-to-node>' });
@@ -1202,8 +1220,8 @@ function doctor() {
 
   const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
   const other = readJson(otherPath, null);
-  const otherHas = !!(other && other.hooks && EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
-  if (otherHas && EVENTS.some(has)) problems.push({ sev: 'warn', msg: `also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one scope' });
+  const otherHas = !!(other && other.hooks && HOOK_EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
+  if (otherHas && HOOK_EVENTS.some(has)) problems.push({ sev: 'warn', msg: `also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one scope' });
 
   const fixed = problems.filter(p => p.fixed);
   const errors = problems.filter(p => p.sev === 'error' && !p.fixed);

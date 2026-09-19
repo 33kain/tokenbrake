@@ -31,12 +31,7 @@ function readJsonl(file) {
 /* The text a tool_result put in front of the model. A string, or an array of blocks whose text
    blocks are what count; images count as nothing here (they are billed by pixel, not by character,
    and this estimate is about text that scrolls off into the context). */
-function resultText(block) {
-  const c = block && block.content;
-  if (typeof c === 'string') return c;
-  if (Array.isArray(c)) return c.map(b => (b && b.type === 'text' && typeof b.text === 'string') ? b.text : '').join('\n');
-  return '';
-}
+function resultText(block) { return GUARD.resultText(block); }   // one definition, the guard's
 
 /* What a tool call was about, for the report's one-line label: the command, the file, the pattern.
    Never the result -- the report names calls, it does not echo output. */
@@ -513,10 +508,13 @@ function usageCtx(u) {
      default window, because there the session would have compacted anyway.
    - the recovery: files read in the `recoveryWindow` requests after the compaction that were already read before
      it, each priced as a fresh write plus its re-reads until the next compaction -- the model finding its place.
-   Compaction's own draw is not in the transcript and is added by the caller at COMPACT_CHARGE. Pure. */
+   Compaction's own draw is not in the transcript and is added by the caller at COMPACT_CHARGE. Pure.
+   Recovery here differs from recoveryReads on purpose: that one looks within a compaction window, and this one
+   looks across the boundary, which is the only place a compaction's own recovery can show. */
 function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
   carry(parsed);
   const reqs = parsed.requests;
+  const times = reqs.map(q => Date.parse(q.at) || 0);
   const rows = [];
   parsed.boundaries.forEach((b, bi) => {
     const k = b.atReq;
@@ -525,26 +523,44 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
     const post = usageCtx(reqs[k].usage);
     const pre = b.preTokens != null ? b.preTokens : (k ? usageCtx(reqs[k - 1].usage) : 0);
     const drop = Math.max(0, pre - post);
-    let readsAvoided = 0, writesAvoided = 0, requestsCounted = 0;
+    let colds = 0, requestsCounted = 0;
     for (let i = k; i < end; i++) {
       const u = reqs[i].usage;
       if (usageCtx(u) + drop > defaultWindow) break;
-      readsAvoided += drop; requestsCounted++;
-      const gap = i ? (Date.parse(reqs[i].at) || 0) - (Date.parse(reqs[i - 1].at) || 0) : 0;
-      if (gap > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) writesAvoided += drop;
+      requestsCounted++;
+      if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
     const before = new Set(parsed.results.filter(r => r.file && r.afterReq < k).map(r => r.file));
     const recov = parsed.results.filter(r => r.file && !r.isError && r.afterReq >= k && r.afterReq < k + recoveryWindow && before.has(r.file));
-    const recTokens = recov.reduce((s, r) => s + r.tokens, 0);
-    const recPts = recov.reduce((s, r) => s + (r.tokens * weights.write + r.tokens * (r.carriedTurns || 0) * weights.read), 0) / 1e6;
     rows.push({
-      session: parsed.sessionId, at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop,
-      later: end - k, requestsCounted,
-      saving: (readsAvoided * weights.read + writesAvoided * weights.write) / 1e6,
-      recovery: { n: recov.length, files: [...new Set(recov.map(r => r.file))], tokens: recTokens, pts: recPts }
+      at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
+      saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,
+      recovery: { files: [...new Set(recov.map(r => r.file))],
+        pts: recov.reduce((s, r) => s + r.tokens * (weights.write + (r.carriedTurns || 0) * weights.read), 0) / 1e6 }
     });
   });
   return rows;
+}
+
+/* Stage 2's rules (AB-TASK.md, "An earlier compaction window"), in one pure place: which compactions count, and
+   the verdict once enough have. A compaction counts when it was automatic, on the calibrated model, and outside
+   benchmark and calibration sessions. The stage passes when recovery plus compaction's own charge, at the bound,
+   stays under half the saving across STAGE2.n counted compactions. */
+const STAGE2 = { n: 8, share: 0.5 };
+function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
+  if (/tokenbrake-bench|calibration/i.test(cwd || '')) return 'benchmark/calibration';
+  if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
+  if (!String(row.model || '').startsWith(weights.model)) return 'model ' + (row.model || '?');
+  return '';
+}
+function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
+  const saving = counted.reduce((s, r) => s + r.saving, 0);
+  const recovery = counted.reduce((s, r) => s + r.recovery.pts, 0);
+  const costLow = recovery + chargeLow * counted.length, costHigh = recovery + chargeHigh * counted.length;
+  const verdict = counted.length < STAGE2.n ? null
+    : saving > 0 && costHigh < saving * STAGE2.share ? 'PASS'
+    : saving > 0 && costLow < saving * STAGE2.share ? 'NOT YET' : 'FAIL';
+  return { n: counted.length, saving, recovery, costLow, costHigh, verdict };
 }
 
 /* The carried cost of each result: size x the number of later requests that re-read it, stopping at
@@ -1026,8 +1042,8 @@ function usageTotals(parsed) {
     const u = q.usage; if (!u) continue;
     requestsWithUsage++;
     const inp = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
-    processed += inp + cr + cw; cacheRead += cr; cacheWrite += cw; input += inp; out += u.output_tokens || 0;
-    last = inp + cr + cw;
+    last = usageCtx(u);
+    processed += last; cacheRead += cr; cacheWrite += cw; input += inp; out += u.output_tokens || 0;
   }
   return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last };
 }
@@ -2334,7 +2350,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, compactionView, LIMIT_WEIGHTS, COMPACT_CHARGE, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, carry, compactionView, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings,
