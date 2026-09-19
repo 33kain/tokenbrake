@@ -3506,3 +3506,36 @@ The 300k window with the preparation step becomes tokenbrake's default (`init` w
 `uninstall` removes it, `status` shows it) **only if both stages pass**. Until then both ship off, exactly as
 `CLAUDE.md` requires for anything that changes what enters context. A failed stage is recorded as it falls, with
 the numbers, and is not re-run with a looser rule.
+
+### Amendment after the stage 1 pilot — 2026-09-19, before any counted run
+
+The pilot (ON arm, 150k window, session `d3bd6db9`, about 3 points of the five-hour window) was void by design, and
+it found two things wrong with the task as written. Neither is a result about compaction.
+
+- **The compaction fired inside message 1, twice, not between the messages.** The first fired at 183,558 tokens,
+  not 150,000, because one batch of parallel reads carried the context past the window in a single step; the
+  compaction kept the recent segment and landed at 101,670. The second fired at 205,325 and landed at 24,444.
+  Both came after the facts steps and before message 2. So the mechanism under test held (a compaction between
+  learning a fact and needing it), just not at the point the protocol named.
+- **The recall probes could be answered without the model remembering anything.** Message 1 ended by echoing
+  the error line and the option chosen, and that reply came after both compactions. The old and new values of
+  the constant, and the line range, were written in the task prompt, which the compaction summary keeps. The
+  pilot's 10 of 10 without the preparation step therefore measures nothing.
+
+**The task as amended, for every counted run:**
+- Message 1 ends with the single word "done". Nothing learned is echoed.
+- Every recall probe asks for something seen only in tool output or the model's own working:
+  - the error line `node check.js` prints (as before);
+  - the constant's values, with the edit now "double RETRY_LIMIT", so its old value (7) is only in the file and
+    the new one (14) is computed;
+  - the option, which the model states in its working as `CHOICE: LANTERN` or `CHOICE: HARBOR` before it moves
+    on, and never in the final reply;
+  - the line count of guard.js (as before);
+  - the cache-read weight given in AB-TASK.md's "Calibration results" section, which message 1 finds and reads
+    (0.20), in place of a line range the prompt itself named.
+- **Where the compaction falls:** a run counts when **at least one automatic compaction happens, and every one
+  of them falls after step 3 and before message 2**. A compaction during the facts steps voids the run. One to
+  two compactions per run is accepted, since a long real session compacts more than once too.
+
+The fresh five, the arms, the three runs per arm, and every pass rule stand as pre-registered. A second pilot runs
+the amended task once in the ON arm to confirm the placement, and it is void by design as well.
