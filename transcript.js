@@ -534,6 +534,7 @@ function lookupOf(r, byName) {
   for (const seg of segs) {
     const hay = seg.toLowerCase();
     for (const [name, key] of byName) {
+      if (!name) continue;
       for (let at = hay.indexOf(name); at >= 0; at = hay.indexOf(name, at + 1)) {
         const pre = at ? hay[at - 1] : ' ', post = hay[at + name.length] || ' ';
         if (/[\s\/\\'"=:*]/.test(pre) && /[\s'"),;:*]/.test(post)) return key;
@@ -568,7 +569,11 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
       if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
     for (; seen < parsed.results.length && parsed.results[seen].afterReq < k; seen++) {
-      if (keys[seen]) { before.add(keys[seen]); byName.set(path.basename(keys[seen]).toLowerCase(), keys[seen]); }
+      if (keys[seen]) {
+        before.add(keys[seen]);
+        const name = path.basename(keys[seen]).toLowerCase();
+        if (name) byName.set(name, keys[seen]);   // a drive root ("C:") has no basename, and an empty name would match everywhere forever
+      }
     }
     const files = new Set();
     let pts = 0;
