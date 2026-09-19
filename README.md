@@ -131,6 +131,7 @@ npx tokenbrake report --caps              # every file the Read cap fired on
 npx tokenbrake report --reads             # every file you read whole -- the evidence for readMaxBytes
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
 npx tokenbrake report --backfire          # what the guard withheld vs. what the model pulled back -- the net
+npx tokenbrake report --compactions       # every compaction priced: what the drop saves, what re-reading cost
 npx tokenbrake tune                       # read your recent sessions and recommend which off-by-default features to turn on
 ```
 
@@ -396,6 +397,16 @@ instead. Its one real risk is a **compaction** between the two reads — which t
 dropped the content; `reReadRecency` *mitigates* that (it limits elision to still-fresh reads, it is not a
 compaction bound), and a re-read that has to go back for the file anyway is a **backfire** `report --backfire`
 counts (`Re-read elisions: N fired; M sent the model back`). Off until an A/B moves it.
+
+`compactPrep` (default `false`) works on how long context stays, not on what enters it. After Claude Code compacts
+a session, a `SessionStart` hook puts back the **working set** as pointers only, never file contents: the files
+edited (with the line ranges touched), the files read (with their ranges), the last command that failed and its
+first error line, and the first words of the task. It's built from the session's own transcript and capped at
+`compactPrepMaxChars` (default 8,000, about 2,000 tokens). The point is that the model re-reads only what its
+next step needs instead of searching for its place. It pairs with an earlier compaction window
+(`/autocompact 300k`, Claude Code's own setting), and `report --compactions` prices every compaction: what the
+drop in context saves, and what re-reading afterwards costs. Off by default until the two-stage measurement in
+`AB-TASK.md` ("An earlier compaction window") passes; with it off, shadow records what it would have injected.
 
 `blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
 minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,

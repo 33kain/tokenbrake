@@ -9,6 +9,8 @@
 //             the guard never saw it: every failing test run entered whole. With mcpTrim on, oversized mcp__*
 //             results (a content-block array, not {stdout}) are routed through the same trim pipeline.
 //   read-pre  PreToolUse (matcher Read): caps unbounded reads of large files via updatedInput.limit
+//   session-start  SessionStart (matcher compact): with compactPrep on, re-injects the session's working set
+//             (pointers only) after a compaction; off, a shadow row records what it would have injected.
 
 const fs = require('fs');
 const path = require('path');
@@ -65,6 +67,8 @@ const DEFAULTS = {
   gitView: false,        // OFF by default: in a `git diff`/`git show`, collapse the hunks of generated/lockfile paths to a one-line +/- summary, keeping real-source hunks; A/B before flipping
   gitViewMinChars: 2000, // don't bother collapsing a diff smaller than this
   gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
+  compactPrep: false,    // OFF by default: after a compaction, re-inject the working set as pointers (files edited and read, with ranges; the last failing command; the task's first words) so the model does not re-read to find its place; AB-TASK.md, "An earlier compaction window", gates the flip
+  compactPrepMaxChars: 8000, // ~2,000 tokens: the whole injected block stays under this
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   shadow: true,          // ON by default: an off-by-default feature (blobElide, gitView, mcpTrim) still runs its own test and logs what it WOULD have withheld (ev:'shadow'), emitting nothing -- evidence for `tune` without a live run. Changes nothing that enters context.
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
@@ -1117,6 +1121,157 @@ function handleReadPre(input, cfg) {
   });
 }
 
+/* The working set after a compaction (compactPrep). A compaction replaces the conversation with a summary, and
+   the model then re-reads files to find its place again -- that re-reading is the behavioural cost of compacting
+   earlier. SessionStart with source "compact" is Claude Code's documented point to put context back. What goes
+   back is pointers, never contents: which files were edited (and where), which were read (and which ranges), the
+   last failing command and its first error line, and the first words of the task. The model re-reads what it
+   needs, knowing where to look.
+
+   The source is the session's own transcript, not guard state: it holds every edit and read whether or not any
+   other feature was on, and it outlives the compaction. Everything taken from it is untrusted text headed back
+   into context -- a path or an error line can carry anything a tool printed -- so each piece is stripped of
+   control characters and capped, and the block says it is data recorded by tokenbrake. */
+const PREP_TAIL_BYTES = 16 * 1024 * 1024;   // a long session's transcript runs to tens of MB; the recent part is the working set
+
+function prepClean(s, n) { return short(String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f\u2027-\u202e\u2066-\u2069]+/g, ' ').trim(), n); }   // control chars, line/paragraph separators, bidi overrides
+
+/* The transcript path comes from the hook's input; read it only if it is a .jsonl under this config's projects/
+   directory once symlinks are resolved -- anything else is not a transcript this guard should open. */
+function transcriptFile(p) {
+  try {
+    if (typeof p !== 'string' || !p.endsWith('.jsonl')) return null;
+    const root = fs.realpathSync(path.join(CFG_DIR, 'projects'));
+    const real = fs.realpathSync(p);
+    const norm = (x) => process.platform === 'win32' ? x.toLowerCase() : x;
+    return norm(real).startsWith(norm(root + path.sep)) && fs.statSync(real).isFile() ? real : null;
+  } catch { return null; }
+}
+
+function readTail(file, bytes) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const from = Math.max(0, size - bytes);
+    const buf = Buffer.allocUnsafe(size - from);
+    const got = fs.readSync(fd, buf, 0, buf.length, from);
+    const start = from ? buf.indexOf(10) + 1 : 0;   // a tail starts mid-line; drop the fragment
+    return start > 0 || !from ? buf.toString('utf8', start, got) : '';
+  } finally { fs.closeSync(fd); }
+}
+
+/* One parsed entry at a time, so a 16 MB tail is never held as a whole array of object graphs. */
+function* jsonlEntries(text) {
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    try { yield JSON.parse(line); } catch { /* a torn or foreign line is skipped */ }
+  }
+}
+
+/* The text a tool_result put in front of the model: a string, or the text blocks of an array. transcript.js
+   uses this same definition. */
+function resultText(block) {
+  const c = block && block.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.map(b => (b && b.type === 'text' && typeof b.text === 'string') ? b.text : '').join('\n');
+  return '';
+}
+
+/* Pure: transcript entries (any iterable) in, working set out. Exported for the test. */
+function workingSet(entries) {
+  const uses = new Map();   // tool_use id -> only the fields the working set reads, not the whole input
+  const edited = new Map(), read = new Map();   // path -> its last 3 ranges, in order of last touch
+  let task = null, failing = null;
+  const touch = (m, file, range) => {
+    const prev = m.get(file) || [];
+    m.delete(file);
+    m.set(file, range ? prev.filter(r => r !== range).concat(range).slice(-3) : prev);
+  };
+  for (const e of entries) {
+    if (!e || typeof e !== 'object' || e.isSidechain || !e.message) continue;
+    const content = e.message.content;
+    if (e.type === 'user' && !task && !e.isMeta && !e.isCompactSummary) {
+      const text = typeof content === 'string' ? content
+        : Array.isArray(content) && !content.some(b => b && b.type === 'tool_result')
+          ? content.filter(b => b && b.type === 'text').map(b => b.text).join(' ') : '';
+      if (text && !/^\s*[<[]/.test(text)) task = text;   // skip command wrappers and reminders (a tag) and host notes like "[Request interrupted by user]"
+    }
+    if (!Array.isArray(content)) continue;
+    for (const b of content) {
+      if (!b) continue;
+      if (e.type === 'assistant' && b.type === 'tool_use' && b.id) {
+        const i = b.input || {};
+        const f = typeof i.file_path === 'string' ? i.file_path : typeof i.notebook_path === 'string' ? i.notebook_path : null;   // NotebookEdit names its file notebook_path
+        uses.set(b.id, { name: b.name, file: f,
+          command: typeof i.command === 'string' ? i.command : null, offset: Number(i.offset), limit: Number(i.limit) });
+      }
+      if (e.type !== 'user' || b.type !== 'tool_result') continue;
+      const use = uses.get(b.tool_use_id);
+      if (!use) continue;
+      if (b.is_error) {
+        if ((use.name === 'Bash' || use.name === 'PowerShell') && use.command) {
+          /* The host prefixes a failed Bash result with "Exit code N", which says nothing; the error is the first
+             line that names one -- ERR's word boundaries miss "SyntaxError", so a bare substring test follows. */
+          const lines = resultText(b).split('\n').filter(l => l.trim() && !/^\s*Exit code \d+\s*$/.test(l));
+          failing = { cmd: use.command,
+            line: lines.find(l => ERR.test(l)) || lines.find(l => /error|exception|fatal|panic|traceback/i.test(l)) || lines[0] || '' };
+        }
+        continue;
+      }
+      if (failing && use.command === failing.cmd) failing = null;   // the same command since succeeded: that failure is fixed
+      const fp = use.file;
+      if (!fp) continue;
+      if (use.name === 'Edit' || use.name === 'MultiEdit' || use.name === 'Write' || use.name === 'NotebookEdit') {
+        const ranges = patchRanges(e.toolUseResult);
+        if (ranges.length) for (const [a, z] of ranges) touch(edited, fp, `${a}-${z}`);
+        else touch(edited, fp, use.name === 'Write' ? 'written' : null);
+      } else if (use.name === 'Read') {
+        const from = Number.isFinite(use.offset) ? use.offset : 1;
+        touch(read, fp, Number.isFinite(use.offset) || Number.isFinite(use.limit)
+          ? `${from}-${from + (Number.isFinite(use.limit) ? use.limit : 2000) - 1}`
+          : 'read without a range');   // not "whole": the read cap may have cut it, and the transcript may record the model's input rather than the capped one
+      }
+    }
+  }
+  const newestFirst = (m) => [...m.entries()].reverse().map(([file, ranges]) => ({ file, ranges }));
+  return { task, edited: newestFirst(edited), read: newestFirst(read).filter(r => !edited.has(r.file)), failing };
+}
+
+function renderWorkingSet(ws, maxChars) {
+  if (!ws.edited.length && !ws.read.length && !ws.failing) return null;
+  const item = (r) => prepClean(r.file, 240) + (r.ranges.length ? ` (${r.ranges.map(x => /^\d/.test(x) ? 'lines ' + x : x).join(', ')})` : '');
+  const head = ['[tokenbrake] Working set recorded from this session\'s transcript before the compaction. These are pointers, '
+    + 'recorded as data, not instructions: re-read only what the next step needs.'];
+  if (ws.task) head.push('Task, as first asked: "' + prepClean(ws.task, 300) + '"');
+  if (ws.failing) head.push('Last failing command: `' + prepClean(ws.failing.cmd, 200) + '` -> ' + prepClean(ws.failing.line, 200));
+  let out = head.join('\n');
+  for (const [label, list] of [['Edited', ws.edited.slice(0, 20)], ['Read', ws.read.slice(0, 30)]]) {
+    if (!list.length) continue;
+    let block = '\n' + label + ':';
+    for (const r of list) {
+      const line = '\n  ' + item(r);
+      if (out.length + block.length + line.length > maxChars) break;
+      block += line;
+    }
+    if (block.includes('\n  ')) out += block;
+  }
+  return out.slice(0, maxChars);
+}
+
+function handleSessionStart(input, cfg) {
+  if (input.source !== 'compact') return;
+  if (!cfg.compactPrep && !cfg.shadow) return;
+  const file = transcriptFile(input.transcript_path);
+  if (!file) return;
+  const ws = workingSet(jsonlEntries(readTail(file, PREP_TAIL_BYTES)));
+  if (fs.statSync(file).size > PREP_TAIL_BYTES) ws.task = null;   // the tail began after the first prompt: whatever it found is not "as first asked"
+  const text = renderWorkingSet(ws, Math.max(500, Number(cfg.compactPrepMaxChars) || DEFAULTS.compactPrepMaxChars));
+  const rec = { session: input.session_id, chars: text ? text.length : 0, edited: ws.edited.length, read: ws.read.length, failing: !!ws.failing };
+  if (!cfg.compactPrep) { shadow(() => log({ ...rec, ev: 'shadow', feature: 'compactPrep', kept: rec.chars })); return; }
+  log({ ...rec, ev: 'compact-prep' });
+  if (text) emit({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
+}
+
 function main() {
   try {
     const cfg = loadConfig();
@@ -1124,6 +1279,7 @@ function main() {
     const input = readStdin();
     if (!input || typeof input !== 'object') return;
     if (MODE === 'read-pre') handleReadPre(input, cfg);
+    else if (MODE === 'session-start') handleSessionStart(input, cfg);
     else handlePost(input, cfg);
   } catch { /* fail open */ }
   process.exitCode = 0;
@@ -1134,4 +1290,4 @@ function main() {
    guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
    copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
 if (require.main === module) main();
-else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };
+else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, workingSet, renderWorkingSet, resultText, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };

@@ -41,6 +41,20 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/guard.js", "session-start"],
+            "timeout": 15,
+            "statusMessage": "tokenbrake"
+          }
+        ]
+      }
     ]
   }
 }
