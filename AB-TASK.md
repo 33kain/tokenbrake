@@ -3413,3 +3413,96 @@ that didn't foresee them.
 **Limits of this calibration.** One model (Opus 5) at effort low, driven headless. The pool mixes models, and
 Fable weighs differently, so the shares are Opus-weighted. The miss classification is a heuristic, not Claude
 Code's own miss count. Compaction's own draw is a bound, not a count.
+
+## An earlier compaction window, and whether the work survives it — pre-registered 2026-09-19, before anything is built or run
+
+**The lever.** Claude Code's `autoCompactWindow` (user setting, `/autocompact`, `--autocompact`, or
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW`; 100k to 1M) sets when a session compacts itself. On Opus 5 with the 1M context
+the default is about 967k, so a long session re-reads a growing context for hundreds of requests and never
+compacts. Replaying the owner's 123 transcripts with the calibrated weights (`scripts/compact-replay.mjs`, 50k
+after compaction, 7k summary) puts the net saving of a **300k window at 16.2% of all weighted draw** (14.3% with an
+80k post-compaction context and a 20k summary), from 5 compactions. It is concentrated: the 3 sessions that ever
+passed 300k are 46% of the owner's whole draw. A `/clear` at every break, assuming the owner always agrees, comes
+to 17-18%, so a notice asking the user reaches no further than the setting. It stays a possible upgrade for
+quality, not the core.
+
+**Why this is not a paired total-token A/B.** The saving is mechanical: once a session compacts, every later request
+re-reads less, and the replay prices that exactly. The only uncertain part is behavioural: after compacting, does
+the model re-read what it lost, take extra steps, or get things wrong. A paired A/B on session totals would bury that
+under the 42.6% OFF/OFF band, and the effect lives only in long sessions, where each pair costs most of a five-hour
+window. So the claim is split: **the saving from the replay, the behavioural cost measured directly** in two
+stages, and the cost is subtracted from the saving.
+
+**What gets built first, default-off, before either stage runs:**
+- **The preparation step.** A `SessionStart` hook matching `compact` that injects the working set after a
+  compaction, as pointers only, never file contents, capped at 2,000 tokens: the files edited this session (path
+  and the line ranges touched), the files read (path and range), the last failing command with its first error
+  line, and the first 300 characters of the session's first user message. The documented pattern for re-injecting
+  context after compaction; it runs only when the owner turns it on.
+- **`report --compactions`.** For every compaction a transcript records (`compact_boundary`, trigger `auto`): the
+  context before and after, the saving the replay model predicts from there to the end of the session, and the
+  **recovery**: every file read in the 30 requests after the boundary that was already read before it in the same
+  session, its tokens entered, priced as a write plus its re-reads until the session ends. Compaction's own draw is
+  not in any transcript, so it is charged at the calibration's estimate, 0.5 points, and at its bound, 1.6, both
+  shown.
+
+### Stage 1 — controlled, three arms, scaled down
+
+A scripted task on a fixture copy of this repository at a pinned commit, Opus 5, effort as the owner runs it,
+driven headless, two messages per session:
+
+1. **Message 1 (before).** Read five named files in full and a sixth by range, which grows the context past
+   200k. Run a seeded failing command and note its first error line. Make one seeded edit (a named constant
+   changed). Pick one of two named options and give the reason in one sentence.
+2. **Message 2 (after).** Ten questions with exact answers. Five are **recall probes** on message 1: the error
+   line, the constant's old and new value, the option picked, the line count of one of the five files, the range
+   of the sixth. Five are **fresh**: they need files message 1 never touched, as a control on plain correctness.
+
+| arm | window | preparation step | runs |
+|---|---|---|---|
+| OFF | default (~967k) | off | 3 |
+| ON | 150k (`CLAUDE_CODE_AUTO_COMPACT_WINDOW=150000`) | off | 3 |
+| ON+PREP | 150k | on | 3 |
+
+The window is scaled down so that each run costs a few points instead of most of a window; the mechanism, a
+compaction between what was learned and when it is needed, is the same. Three OFF runs also give this task's own
+OFF/OFF spread. **Step 0, a pilot, void by design:** one ON run to confirm that a compaction actually fires between
+the two messages. If it fires in the middle of message 1 instead, the task is resized before any counted run.
+
+**Measured per run:** correct answers out of 10 (recall 5, fresh 5), recovery reads after the compaction and their
+priced tokens, requests in message 2, and total weighted draw (transcript usage × the calibrated weights).
+
+**Stage 1 passes when, fixed now:**
+- **Correct:** each ON arm's median score is at least the OFF median minus 1 (out of 10), and the fresh five
+  never score lower than in OFF. A lower fresh score means something other than lost context broke.
+- **Remembers:** ON+PREP answers **all five recall probes correctly in all three runs**. That is the preparation
+  step's whole job; one miss fails it.
+- **Doesn't claw it back:** recorded, and decisive only if it is clear. The ON+PREP median draw is compared with the
+  OFF median. If the OFF runs' own spread is larger than the difference, stage 1 says nothing on cost, and stage 2
+  decides.
+
+If ON fails "correct" and ON+PREP passes, the preparation step is mandatory with any lowered window. If both fail,
+the window lever is dead as designed and the plan returns to discussion.
+
+### Stage 2 — the owner's real work, at 300k
+
+The owner sets `/autocompact 300k` and turns the preparation step on, and works as usual on Opus 5. Stage 2 runs
+until **8 automatic compactions** are recorded, however long that takes. At the owner's history (5 in the whole
+pool at 300k), that could be weeks. Manual `/compact`, other models, and sessions under `tokenbrake-bench` or a
+calibration directory don't count.
+
+**Measured per compaction, by `report --compactions`:** predicted saving, recovery cost, compaction's own charge.
+Any compaction after which the work felt worse to the owner is written down the same day with one line, and it
+counts. It doesn't need a number.
+
+**Stage 2 passes when:** across the 8 compactions, recovery cost plus compaction charges (at the 1.6 bound) is
+**under half the predicted saving**. If it passes at the 0.5 estimate but not at the 1.6 bound, the verdict
+states both and the default stays off. **And** the owner has logged no more than one "felt worse", and none of
+them is attributed to a lost fact the preparation step should have carried.
+
+### The flip
+
+The 300k window with the preparation step becomes tokenbrake's default (`init` writes `autoCompactWindow`,
+`uninstall` removes it, `status` shows it) **only if both stages pass**. Until then both ship off, exactly as
+`CLAUDE.md` requires for anything that changes what enters context. A failed stage is recorded as it falls, with
+the numbers, and is not re-run with a looser rule.
