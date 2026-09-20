@@ -603,8 +603,14 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
    benchmark and calibration sessions. The stage passes when recovery plus compaction's own charge, at the bound,
    stays under half the saving across STAGE2.n counted compactions. */
 const STAGE2 = { n: 8, share: 0.5 };
+/* Staged work: a benchmark fixture or a calibration arm, driven by a script over a prepared repo. Stage 2
+   pre-registered this rule (AB-TASK.md, "sessions under tokenbrake-bench or a calibration directory don't
+   count") and the saving listing separates the same set, so it lives here once rather than being re-spelled
+   per view. cli.js's narrower isBench is a different, deliberately narrower skip -- widening it would move
+   populations the pooled views already report. */
+const stagedCwd = (cwd) => /tokenbrake-bench|calibration/i.test(cwd || '');
 function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
-  if (/tokenbrake-bench|calibration/i.test(cwd || '')) return 'benchmark/calibration';
+  if (stagedCwd(cwd)) return 'benchmark/calibration';
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
   if (!calibrated(row.model, weights)) return 'model ' + (row.model || '?');
   return '';
@@ -2426,7 +2432,8 @@ function renderCompare(A, B, ledger) {
 
 /* One line per session, for --all: enough to pick the one worth opening.
    `marks` adds the two columns the question "which of these may a claim about ordinary work rest on" turns
-   on: whether the guard was recording there, and whether the cwd is the benchmark's. Both are omitted
+   on: whether the guard was recording there, and what the cwd makes it (the benchmark's, a calibration
+   arm's, or ordinary work -- `marks.tag` is whichever short label the caller's view uses). Both are omitted
    entirely when the caller has not established them -- a column reading "no guard" for a caller that never
    opened the ledger would be a claim about the guard made from nothing. */
 function renderSummaryLine(parsed, marks) {
@@ -2447,6 +2454,6 @@ function renderSummaryLine(parsed, marks) {
 module.exports = { parseTranscript, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
-  reachPooled, commandTool, trimmedResults, trimSavings, pfmt,
+  reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd,
   GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, sweepOffline, SWEEP_KNOBS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };

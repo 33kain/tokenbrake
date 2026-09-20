@@ -4171,7 +4171,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     rs.status === 0 && /savesess\.\.\.\s+3 req\s+3k processed\s+209 carried\s+1 trim\s+10k out\s+30k not carried\s+0\.09 pts/.test(rs.stdout),
     (rs.stdout.match(/[^\n]*savesess[^\n]*/) || [rs.stderr])[0]);
   t('report --saved: a session that saved nothing is left out, and the header says how many were read',
-    !/quietsess/.test(rs.stdout) && /1 of 2 on disk; the rest saved nothing/.test(rs.stdout));
+    !/quietsess/.test(rs.stdout) && rs.stdout.includes('1 ordinary of 2 readable on disk') && rs.stdout.includes('1 of the 2 readable session(s) on disk have no saving at all'));
   t('report --saved: the total is over what it listed, in tokens, never money',
     /Total over 1 session\(s\): ~ 10k tokens kept out, ~ 30k token-reads not carried/.test(rs.stdout) && !/\$\s?\d/.test(rs.stdout));
 
@@ -4214,6 +4214,32 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rs = sv('--ledger', '--compare');
   t('--compare draws the note too: the arity check must not count as the command reading it',
     /Note: --compare had no effect on this view\./.test(rs.stdout), rs.stdout.trim().split('\n').pop());
+
+  /* Sorted by what was saved, and staged work listed apart: a chronological list buries the session that
+     saved the most, and a calibration arm sitting at the top of a sorted one reads as ordinary work. */
+  const mkAt = (sid, id, cwd, chars) => {
+    writeFileSync(join(cfgS, 'projects', '-w', sid + '.jsonl'),
+      [JSON.stringify({ type: 'assistant', requestId: 'q1', uuid: 'q1-a', sessionId: sid, cwd, message: { model: 'claude-opus-5', usage: usageS, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }] } }),
+       JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: sid, cwd, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: '[tokenbrake] ' + 'x'.repeat(400) }] }, toolUseResult: {} }),
+       asstS(sid, 'q2', 't2'), resS(sid, 't2', 'nothing much'),
+       asstS(sid, 'q3', 't3'), resS(sid, 't3', 'nothing much')].join('\n') + '\n');
+    return JSON.stringify({ ev: 'post', t: Date.now(), session: sid, id, tool: 'Bash', what: 'ls', chars, kept: 400 });
+  };
+  const big = mkAt('bigsess', 't9', 'C:\w', 80000);              // 19,900 tokens x 3 requests
+  const cal = mkAt('calibsess', 't8', 'C:/x/calibration/a1', 20000);   // 4,900 x 3, and staged by its cwd
+  writeFileSync(join(cfgS, 'tokenbrake', 'ledger.jsonl'),
+    [JSON.stringify({ ev: 'post', t: Date.now(), session: 'savesess', id: 't1', tool: 'Bash', what: 'ls', chars: 40000, kept: 400 }), big, cal].join('\n') + '\n');
+  rs = sv('--saved');
+  t('report --saved ranks by token-reads not carried, not by when',
+    rs.stdout.indexOf('bigsess') < rs.stdout.indexOf('savesess') && /60k not carried/.test(rs.stdout),
+    (rs.stdout.match(/[^\n]*bigsess[^\n]*/) || [''])[0]);
+  t('a calibration cwd is listed under staged work, not among ordinary sessions',
+    /Staged work -- benchmark fixtures and calibration arms/.test(rs.stdout)
+    && rs.stdout.indexOf('calibses') > rs.stdout.indexOf('Staged work')
+    && /calibses[^\n]*guard\s+calib\s/.test(rs.stdout));
+  t('the totals keep staged work out of the ordinary-work figure',
+    /Total over 3 session\(s\): ~ 35k tokens kept out/.test(rs.stdout) && /Ordinary work over 2 session\(s\): ~ 30k tokens kept out/.test(rs.stdout),
+    (rs.stdout.match(/[^\n]*Ordinary work[^\n]*/) || [''])[0]);
 
   /* SPEC is hand-written, and the day someone adds a flag and forgets one of the three places is the day
      it starts lying. The three lists are cheap to compare, so compare them: what the code reads, what SPEC
