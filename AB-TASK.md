@@ -3809,3 +3809,43 @@ Neither moves a rule.
 **Stage A passes.** Under "The flip, v2", the default now waits on stage B alone: v1's stage 2, unchanged, on the
 owner's real work at `/autocompact 300k` with `compactPrep` on, until 8 automatic compactions are recorded. v1's
 stage 1 fail stays on the record as the answer to its own question.
+
+## Amendment: the workload filter widens to bench *or* calibration — 2026-09-20, before any number is read under it
+
+`--where`, `--reads`, `--reach` and `tune` skip staged work so that a claim about ordinary work is not drawn
+from fixtures. Each of them spells that skip as **a cwd under `tokenbrake-bench`**. Stage 2 spells the same
+idea wider — "sessions under `tokenbrake-bench` or a calibration directory don't count" — and `report --saved`,
+added 2026-09-20, separates the same wide set. The narrow spelling was written when the benchmark was the only
+staged thing on this machine. It has not been since 2026-09-19.
+
+**What is on disk today**, by cwd alone (a classification, not a result): of **137** sessions, **23** are under
+`tokenbrake-bench`, **41** are calibration arms, and **73** are ordinary work. The 41 are the stage 1 and stage A
+runs driven by `scripts/compact-stage1.mjs` over prepared fixtures, all under
+`…\scratchpad\calibration-stage1\…` and `…\scratchpad\calibration-stageA\…`.
+
+**What that does to `--reach`'s pool as it stands:** 91 sessions pooled, of which **30 are calibration arms**.
+They carry **881 of the ~3,464** pooled tool results and **292 of the 2,190** shell results. So about a quarter
+of the results the reach shares are computed over, and an eighth of the shell results the verdict rule counts,
+come from a scripted workload whose tool use was chosen by a script, not by the work.
+
+**The amendment, from this date:** the four views skip on the wide rule — `transcript.stagedCwd(cwd)`, the one
+stage 2 already uses — instead of the narrow one. `--cwd=<substring>` still overrides it, as it always has, so
+any staged set can be asked for on purpose.
+
+**What does not move.** No weight, no counting rule, no `compactionView` figure, no trim accounting, and stage
+2's own population (it was already on the wide rule, so nothing it has recorded changes). `report --saved`
+already lists staged work apart rather than skipping it, and keeps doing so: a saving in a fixture is a real
+saving, it is just not a claim about ordinary work.
+
+**What the amendment voids, and what it does not.** The reach figures on the record — first run, **8 of 40**
+sessions with the guard recording, **W = 4.4%** of carried tokens inside the trim's reach, **22%** of the
+carried tokens it could have reached — were computed under the narrow pool and stay on the record as that.
+**No verdict may be drawn from any `--reach` output computed before this line.** The open question's
+thresholds are untouched and are not being rewritten: still **under 5% of carried tokens and the README must
+say the mechanism is essentially absent, in those words**, and still **ten sessions with the guard running and
+200 shell results in them** before a verdict at all. Both counts are now counts over the narrowed pool, so
+guarded sessions and shell results already accumulated inside a calibration directory do not count toward
+them. The first `--reach` run after the code change lands is the first one whose numbers count.
+
+This is written before the change is made and before any figure is read under it, which is the order
+`CLAUDE.md` requires.
