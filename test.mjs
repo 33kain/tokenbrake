@@ -468,8 +468,14 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   };
   mkSession('-c-work-realrepo', 'realsess', [10, 40, 120, 350, 600], 'C:\\work\\realrepo');
   mkSession('-c-desktop-tokenbrake-bench-work-kestrel', 'benchsess', [900, 910, 920, 930, 940, 950], 'C:\\Desktop\\tokenbrake-bench\\work\\kestrel');
+  /* A calibration arm is staged for the same reason a fixture is -- a script chose its tool use -- and since
+     AB-TASK.md's 2026-09-20 amendment the pooled views skip it on the same rule. */
+  mkSession('-c-work-calibration-stage1', 'calibsess', [900, 910, 920], 'C:\\work\\calibration-stage1\\fixture-OFF-1');
   mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
   const capRow = { t: T0 + 2500, ev: 'read-cap', session: 'realsess', tool: 'Read', what: '/x.js', bytes: 80000, lines: 1900, limit: 300, persisted: false };
+  /* The calibration arm ran WITH the guard recording. Without this row it reads as unguarded, and then "with
+     guard records outside staged work" counts the same whether it subtracts staged work or only the bench. */
+  const calibRow = { t: T0 + 3000, ev: 'post', session: 'calibsess', tool: 'Bash', what: 'node check.js', chars: 5000, kept: 500, id: 'cal1' };
   const writeLedger = (extra) => writeFileSync(join(cfg, 'tokenbrake', 'ledger.jsonl'),
     [...ledger, ...extra].map(x => JSON.stringify(x)).join('\n') + '\n');
   writeLedger([]);
@@ -479,10 +485,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      nobody looked for. */
   t('cli: --where says the separation was not attempted when no cap ever fired',
     /Guard-induced: not attempted/.test(r.stdout) && /absence of evidence about the confound/.test(r.stdout));
-  writeLedger([capRow]);
+  writeLedger([capRow, calibRow]);
   r = run(['--where']);
-  t('cli: --where skips benchmark sessions by default, and says why',
-    /benchses\s+benchmark session/.test(r.stdout) && /realsess \(5\)/.test(r.stdout), r.stdout.split('\n')[0]);
+  t('cli: --where skips staged sessions by default, and says why',
+    /benchses\s+staged session/.test(r.stdout) && /realsess \(5\)/.test(r.stdout), r.stdout.split('\n')[0]);
+  t('cli: --where skips a calibration arm on the same rule as the benchmark',
+    /calibses\s+staged session/.test(r.stdout) && !/calibses \(/.test(r.stdout),
+    (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
   t('cli: --where pools the real session and not the benchmark', /All ranged reads: 5/.test(r.stdout) && !/benchses \(/.test(r.stdout),
     (r.stdout.match(/All ranged reads:[^\n]*/) || [])[0]);
   t('cli: --where marks the configured cap', /<- your current readLimitLines/.test(r.stdout));
@@ -546,6 +555,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --reach pools sessions and reports the share of carried tokens the trim can act on',
     /Where the trim can reach/.test(r.stdout) && /W = [\d.]+% of carried tokens/.test(r.stdout),
     (r.stdout.match(/[^\n]*W = [^\n]*/) || [])[0]);
+  /* All four pooled views skip on one rule since AB-TASK.md's 2026-09-20 amendment, so each of them is
+     asserted on a calibration arm: a view that kept the narrow rule would pool an arm as the owner's work. */
+  t('cli: --reach skips a calibration arm on the same rule as the benchmark',
+    /calibses\s+staged session/.test(r.stdout) && !/calibses \(/.test(r.stdout),
+    (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
   t('cli: --reach names the tools from the guard\'s own sessions, not from every session',
     /Only the \d+ session\(s\) the guard was recording in|No session had the guard/.test(r.stdout),
     (r.stdout.match(/[^\n]*session\(s\) the guard was recording in, since[^\n]*/) || [])[0]);
@@ -590,8 +604,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   /* --reads: the trigger's half of the question. The fixture's reads are line-numbered exactly as Claude Code
      delivers them, so the sizes the grid works from are the files' own and not what the reads cost. */
   r = run(['--reads']);
+  t('cli: --reads skips a calibration arm on the same rule as the benchmark',
+    /calibses\s+staged session/.test(r.stdout) && !/calibses \(/.test(r.stdout),
+    (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
   t('cli: --reads pools the real session and skips the benchmark',
-    /realsess \(/.test(r.stdout) && /benchses\s+benchmark session/.test(r.stdout) && !/benchses \(/.test(r.stdout),
+    /realsess \(/.test(r.stdout) && /benchses\s+staged session/.test(r.stdout) && !/benchses \(/.test(r.stdout),
     r.stdout.split('\n')[0]);
   t('cli: --reads says where each size came from, because they are not equally good',
     /Sized from: /.test(r.stdout) && /line numbering \(subtracted\)/.test(r.stdout),
@@ -623,7 +640,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --ledger counts one event once when two installs logged it twice',
     /1 duplicate row\(s\) dropped/.test(r.stdout) && withDup === single,
     'two rows -> ' + withDup + ' trimmed; one row -> ' + single);
-  writeLedger([capRow]);
+  writeLedger([capRow, calibRow]);
   t('cli: --ledger counts the two Read-cap halves apart',
     /Read caps fired: 1 -- 1 on a large source file \(readLimitLines\), 0 on a shell cat of one/.test(r.stdout)
     && !/Large reads capped/.test(r.stdout), r.stdout.split('\n').filter(l => /Read caps/.test(l)).join(' | '));
@@ -638,18 +655,25 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --all leaves the column blank where it was not, rather than calling it off',
     !/guard/.test(benchLine) && /carried\s+bench\s/.test(benchLine), benchLine);
   t('cli: --all tags the benchmark cwd the other views skip', /bench\s+C:.Desktop.tokenbrake-bench/.test(r.stdout), benchLine);
+  /* The listing names which kind of staged work a row is, so the tag and the pooled views' skip are the same
+     fact: a calibration arm reading blank here while --reach drops it is how the two start to disagree. */
+  t('cli: --all tags a calibration arm too, not just the benchmark',
+    /calib\s+C:.work.calibration-stage1/.test(r.stdout),
+    (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
   r = run(['--all', '--top=1']);
   t('cli: --all stops truncating silently and says how to see the rest',
-    /Sessions, newest first \(3, newest 1 shown\)/.test(r.stdout)
-    && /2 older session\(s\) not listed -- add --top=3 for every one/.test(r.stdout),
+    /Sessions, newest first \(4, newest 1 shown\)/.test(r.stdout)
+    && /3 older session\(s\) not listed -- add --top=4 for every one/.test(r.stdout),
     (r.stdout.match(/[^\n]*not listed[^\n]*/) || [])[0]);
   /* The counts are the point of the block and they are taken over every session, not the printed ones: a
      count whose population is smaller than the header says is the defect one line above. */
   t('cli: --all counts over every session, not the ones it printed',
-    /Of 3 readable session\(s\): 1 benchmark, 2 with guard records, 2 with guard records outside the benchmark/.test(r.stdout),
+    /* 3 guarded, 2 outside staged work: the calibration arm has a ledger row, so the last number only comes
+       out at 2 if it subtracts staged work rather than the benchmark alone. */
+    /Of 4 readable session\(s\): 1 benchmark, 1 calibration, 3 with guard records, 2 with guard records outside staged work/.test(r.stdout),
     (r.stdout.match(/[^\n]*readable session[^\n]*/) || [])[0]);
   t('cli: --all says the count is still not eligibility, because an A/B arm looks like ordinary work',
-    /not a count of eligible sessions/.test(r.stdout) && /A.B arm is ordinary work by its cwd/.test(r.stdout));
+    /not a count of eligible sessions/.test(r.stdout) && /A.B arm run outside a calibration directory is ordinary/.test(r.stdout));
   {
     const p1 = T.parseTranscript(join(cfg, 'projects', '-c-work-realrepo', 'realsess.jsonl'));
     const bare = T.renderSummaryLine(p1);
@@ -661,6 +685,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   }
   rmSync(join(cfg, 'projects', '-c-work-realrepo'), { recursive: true, force: true });
   rmSync(join(cfg, 'projects', '-c-desktop-tokenbrake-bench-work-kestrel'), { recursive: true, force: true });
+  rmSync(join(cfg, 'projects', '-c-work-calibration-stage1'), { recursive: true, force: true });
 
   r = run(['--session=nope']);
   t('cli: an unknown session says so', /No transcript whose session id starts with nope/.test(r.stdout));
@@ -4255,6 +4280,16 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     t('every option the code reads is declared in SPEC', missing(read, spec, ['--help']).join(' ') === '', missing(read, spec, ['--help']).join(' '));
     t('every option SPEC declares is one the code reads', missing(spec, read, RETIRED).join(' ') === '', missing(spec, read, RETIRED).join(' '));
     t('every option SPEC declares is documented in help', missing(spec, doc, RETIRED).join(' ') === '', missing(spec, doc, RETIRED).join(' '));
+    /* The four pooled views must drop staged work on ONE rule (AB-TASK.md, 2026-09-20). --where, --reads and
+       --reach are asserted on a calibration fixture above; tune's arms are a separate config, so the fourth
+       is held structurally: nowhere in cli.js does a view test a cwd for staged-ness on its own. */
+    const pools = (src.match(/poolSkip\(cwd, only,/g) || []).length;
+    t('all four pooled views drop staged work through the one filter', pools === 4, pools + ' call site(s)');
+    const own = { regex: (src.match(/\/tokenbrake-bench/g) || []).length,
+      cwdTest: (src.match(/transcript\.stagedCwd\(/g) || []).length,
+      kind: (src.match(/transcript\.stagedKind\(/g) || []).length };
+    t('cli.js does not spell the staged rule itself: one predicate, one kind, no regex of its own',
+      own.regex === 0 && own.cwdTest === 1 && own.kind === 1, JSON.stringify(own));
   }
   rmSync(cfgS, { recursive: true, force: true });
 }

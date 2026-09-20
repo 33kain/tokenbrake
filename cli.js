@@ -238,8 +238,19 @@ function loadLedger() {
 }
 const tok = (c) => Math.round(c / 4); // rough: ~4 chars per token for code/logs
 const fmt = (n) => n.toLocaleString();
-/* One bench rule. It was written out at six call sites, so a second benchmark cwd meant six edits. */
-const isBench = (cwd) => /tokenbrake-bench/i.test(cwd || '');
+/* One pool filter for the views that pool sessions across the machine. --cwd is the explicit override: ask
+   for a staged set and you get it; otherwise staged work is skipped and the reason says how to bring it back.
+   The rule was written out at each call site, so widening it (AB-TASK.md 2026-09-20) meant four coordinated
+   edits and the four messages had already drifted -- one of them never mentioned --cwd. */
+const poolSkip = (cwd, only, why) => only
+  ? (cwd.toLowerCase().includes(only.toLowerCase()) ? '' : 'cwd does not contain "' + only + '"')
+  : (transcript.stagedCwd(cwd) ? 'staged session -- ' + why + '; --cwd to include' : '');
+
+/* One copy of the A/B-arm caveat. --saved and --all both have to state it, and stating it in their own words
+   is how they drifted: one said "outside a calibration directory" and the other did not. */
+const AB_ARM_NOTE = '  An A/B arm run outside a calibration directory is ordinary work by its cwd and is not ordinary\n'
+  + '  work, and no transcript says it was an arm. Those come off by hand before a number here is read as a\n'
+  + '  number about ordinary work -- HANDOFF.md lists the ones on record.';
 
 /* Brake 4 -- what's eating your tokens. Transcript-first: the Claude Code session transcript holds every
    tool result exactly as the model saw it and the API's usage per request, so the ranking comes from there;
@@ -278,8 +289,9 @@ function guardCfg() {
 
    The workload filter. Run over four of this repo's own benchmark sessions the per-session line read 48% of
    targets past line 300, against 24% on an ordinary working session -- because the benchmark's fixtures are
-   BUILT with the evidence past line 300. Benchmark sessions are skipped by default, every skip is printed
-   with its reason, and --cwd=<substring> restricts the pool explicitly when that is wanted.
+   BUILT with the evidence past line 300. The same holds for a calibration arm, whose tool use was chosen by
+   the script driving it. Staged sessions -- benchmark or calibration -- are skipped by default, every skip is
+   printed with its reason, and --cwd=<substring> restricts the pool explicitly when that is wanted.
 
    The confound filter, which is the same mistake from the other direction. A capped Read delivers lines
    1..limit and its additionalContext tells the model to come back with an offset. It does, and the
@@ -304,12 +316,8 @@ function whereReport() {
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
     const cwd = p.cwd || '';
-    if (only) {
-      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (isBench(cwd)) {
-      skipped.push([id, 'benchmark session -- synthetic fixtures, evidence placed past line 300 by design; --cwd to include']);
-      continue;
-    }
+    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, evidence placed past line 300 by design');
+    if (skip) { skipped.push([id, skip]); continue; }
     const cls = transcript.classifyRangedReads(p, ledger, { sessionId: p.sessionId || f.session });
     if (!cls.all.length) { skipped.push([id, 'no ranged reads']); continue; }
     pooled.push([id, cls.all.length, cwd]);
@@ -497,12 +505,8 @@ function reachReport() {
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
     const cwd = p.cwd || '';
-    if (only) {
-      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (isBench(cwd)) {
-      skipped.push([id, 'benchmark session -- a staged workload, which is the thing this view exists to check against']);
-      continue;
-    }
+    const skip = poolSkip(cwd, only, 'a benchmark or calibration workload, which is the thing this view exists to check against');
+    if (skip) { skipped.push([id, skip]); continue; }
     transcript.carry(p);
     const trimmed = transcript.trimmedResults(p, ledger);
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
@@ -682,12 +686,8 @@ function readsReport() {
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
     const cwd = p.cwd || '';
-    if (only) {
-      if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (isBench(cwd)) {
-      skipped.push([id, 'benchmark session -- synthetic fixtures, sizes chosen by design; --cwd to include']);
-      continue;
-    }
+    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, sizes chosen by design');
+    if (skip) { skipped.push([id, skip]); continue; }
     const sessionId = p.sessionId || f.session;
     const u = transcript.unboundedReads(p, ledger, { sessionId, readMaxBytes: cfg.readMaxBytes });
     const d = transcript.readDepths(p, ledger, { sessionId, linesOnDisk });
@@ -987,16 +987,15 @@ function report(plain) {
         const g = transcript.guardRan(p, ledger, String(p.sessionId));
         let sv = null;
         if (onlySaved && p.results.some((r) => r.marker)) { transcript.carry(p); sv = transcript.trimSavings(p, posts); }
-        return { f, p, cwd, bench: isBench(cwd), staged: transcript.stagedCwd(cwd), guard: g.ran, via: g.via, sv };
+        return { f, p, cwd, tag: transcript.stagedKind(cwd), guard: g.ran, via: g.via, sv };
       });
       const unreadable = rows.filter((x) => x.err).length, readable = rows.length - unreadable;
       if (onlySaved) {
         /* Sorted by what was saved rather than by when: a trim in a 487-request session is worth many times
            the same trim in a short one, and a chronological list buries that. Staged work is listed apart
            instead of mixed in and footnoted -- a benchmark fixture and a calibration arm are not a claim
-           about ordinary work, and whoever scans a sorted list reads the top row as one. Staged is stage 2's
-           own rule (transcript.stagedCwd), not a third spelling of it; the pooled views keep their narrower
-           bench skip, so no population they already report moves. */
+           about ordinary work, and whoever scans a sorted list reads the top row as one. Staged is one rule
+           for every view (transcript.stagedKind): this one lists it apart, the pooled views drop it. */
         const saved = rows.filter((x) => x.sv && x.sv.count).sort((a, b) => b.sv.savedCarried - a.sv.savedCarried);
         if (!saved.length) {
           /* "The guard kept nothing out" over zero readable sessions is a finding drawn from nothing. When
@@ -1011,14 +1010,14 @@ function report(plain) {
           }
           return;
         }
-        const work = saved.filter((x) => !x.staged);
-        const staged = saved.filter((x) => x.staged);
+        const work = saved.filter((x) => !x.tag);
+        const staged = saved.filter((x) => x.tag);
         const group = (label, rs, of = '') => {
           if (!rs.length) return;
           const shown = rs.slice(0, allTop);
           console.log(label + ' (' + rs.length + of + (rs.length > shown.length ? ', top ' + shown.length + ' shown' : '') + '):');
           for (const x of shown) console.log(transcript.renderSummaryLine(x.p,
-            { guard: x.guard, tag: x.bench ? 'bench' : (x.staged ? 'calib' : ''), saved: x.sv }));
+            { guard: x.guard, tag: x.tag, saved: x.sv }));
           /* --top governs each group, so the hint names what covers BOTH of them: two groups each advising
              their own length is two numbers neither of which lists the whole view. */
           if (rs.length > shown.length) console.log('  (' + (rs.length - shown.length)
@@ -1051,9 +1050,8 @@ function report(plain) {
         if (all.unpriced) console.log('  ' + all.unpriced + ' trim(s) ran on a model the point weights are not calibrated for and count in tokens only.');
         if (unreadable) console.log('  ' + unreadable + ' transcript(s) could not be read at all and are in none of the counts above.');
         console.log('  Points are drawn from separate five-hour windows: they add up as a total of what was saved,');
-        console.log('  never as a share of one window. An A/B arm outside a calibration directory is ordinary work by');
-        console.log('  its cwd and no transcript says it was an arm -- HANDOFF.md lists the ones on record, and they');
-        console.log('  come off by hand before a saving here is read as a saving on ordinary work.');
+        console.log('  never as a share of one window.');
+        console.log(AB_ARM_NOTE);
         console.log('\nOpen one with: tokenbrake report --session=<prefix>');
         return;
       }
@@ -1062,29 +1060,31 @@ function report(plain) {
         + (rows.length > shown.length ? ', newest ' + shown.length + ' shown' : '') + '):');
       for (const x of shown) {
         if (x.err) { console.log('  ' + x.f.session.slice(0, 8) + '...  unreadable: ' + x.err); continue; }
-        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '' }));
+        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.tag }));
       }
       if (rows.length > shown.length) console.log('  (' + (rows.length - shown.length)
         + ' older session(s) not listed -- add --top=' + rows.length + ' for every one)');
       const ok = rows.filter((x) => !x.err);
-      const bench = ok.filter((x) => x.bench).length;
+      const bench = ok.filter((x) => x.tag === 'bench').length;
+      const calib = ok.filter((x) => x.tag === 'calib').length;
       const guarded = ok.filter((x) => x.guard).length;
-      const outside = ok.filter((x) => x.guard && !x.bench).length;
+      /* Outside STAGED work, not outside the benchmark: a calibration arm's tool use was chosen by the script
+         driving it, and the views that pool sessions skip it for the same reason they skip a fixture. */
+      const outside = ok.filter((x) => x.guard && !x.tag).length;
       const byMarkerAll = ok.filter((x) => x.via === 'marker').length;
       console.log('\n  guard = the guard was running in that session -- established from its ledger rows, or, when the');
       console.log('  ledger has none (a transcript read away from the machine it ran on carries no ledger), from a');
       console.log('  trim marker in the transcript itself. A blank means it was not running there, which is a');
       console.log('  different conclusion from running and leaving everything alone, and the two look identical in');
-      console.log('  every other column. bench = a cwd under tokenbrake-bench, which --where, --reads and --reach');
-      console.log('  skip by default as a staged workload.');
+      console.log('  every other column. bench = a cwd under tokenbrake-bench, calib = a calibration directory.');
+      console.log('  Both are staged work, which --where, --reads, --reach and tune skip by default.');
       if (byMarkerAll) console.log('  ' + byMarkerAll + ' session(s) here rest on the marker alone, which is a LOWER BOUND: one the guard'
         + '\n  ran in and never trimmed carries no marker and reads as a blank.');
-      console.log('  Of ' + readable + ' readable session(s): ' + bench + ' benchmark, ' + guarded
-        + ' with guard records, ' + outside + ' with guard records outside the benchmark.');
+      console.log('  Of ' + readable + ' readable session(s): ' + bench + ' benchmark, ' + calib + ' calibration, '
+        + guarded + ' with guard records, ' + outside + ' with guard records outside staged work.');
       console.log('  That last number is the population a claim about ordinary work has to come from. It is still');
-      console.log('  not a count of eligible sessions: an A/B arm is ordinary work by its cwd and is not ordinary');
-      console.log('  work, and no transcript says it was an arm. Those come off by hand -- HANDOFF.md lists the');
-      console.log('  ones on record.');
+      console.log('  not a count of eligible sessions:');
+      console.log(AB_ARM_NOTE);
       console.log('\nOpen one with: tokenbrake report --session=<prefix>');
       return;
     }
@@ -1446,8 +1446,8 @@ function tuneReport() {
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
     const cwd = p.cwd || '';
-    if (only) { if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; } }
-    else if (isBench(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
+    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, not your work');
+    if (skip) { skipped.push([id, skip]); continue; }
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
     parsed.push(p);   // autotune backfills a missing p.sessionId from the transcript filename itself
   }
@@ -1740,18 +1740,20 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       Read cap at each size would have hidden. The evidence for
                                       readLimitLines. Reads a cap on the same file provoked are separated
                                       out -- the cap tells the model to come back with an offset, so those
-                                      start lines are the cap's. Benchmark sessions are skipped;
+                                      start lines are the cap's. Staged sessions are skipped;
                                       --cwd=<text> restricts the pool explicitly
       --caps                          every file the Read cap has fired on, pooled across sessions, with the
                                       two knobs counted apart and the share of each file delivered;
                                       --session=<prefix> narrows, --top=N widens
       --reach                         of everything that entered context, the share of CARRIED tokens sitting
                                       where the trim can act at all, and which tools put it there. The
-                                      question of whether the guard needs poor tooling to have anything to do
+                                      question of whether the guard needs poor tooling to have anything to do.
+                                      Staged sessions are skipped; --cwd=<text> restricts the pool explicitly
       --reads                         every file you read WHOLE, at its own size with Claude Code's line
                                       numbering subtracted: how many reads a lower readMaxBytes would catch,
                                       how much of each a limit would then withhold, and how deep the targets
-                                      sit as a share of the file. The evidence for readMaxBytes
+                                      sit as a share of the file. The evidence for readMaxBytes. Staged
+                                      sessions are skipped; --cwd=<text> restricts the pool explicitly
       --backfire                      the Backfire Auditor: what the guard withheld, how much the model then
                                       pulled back (its saved out/ file, or 'show'), and the NET token-reads
                                       saved. The gate a narrowing passes before its default moves. Tokens only
@@ -1781,7 +1783,7 @@ STEP TWO -- the brake, if your report says there is something in its reach.
       [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
                                       where it has not, plus the Read cap's health and a per-person grid and
                                       advice for maxChars and readMaxBytes (recommend-only). Prints the exact
-                                      knob to set. Benchmark sessions skipped
+                                      knob to set. Staged sessions skipped
       --sweep                         the stateful features (dedup, reReadElide, readAfterEdit) replayed over your
                                       transcripts at several values of each knob, your own marked. Data only
       --write                         turn ON the features with a clean MEASURED record (estimates, and features
