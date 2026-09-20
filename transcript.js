@@ -2436,12 +2436,17 @@ function renderSummaryLine(parsed, marks) {
   const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8);
   const m = marks || {};
   const cols = m.guard == null ? '' : '  ' + (m.guard ? 'guard' : '     ') + '  ' + String(m.tag || '').padEnd(5);
-  return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${cols}  ${(parsed.cwd || '').slice(-40)}`;
+  /* The saving listing is this listing under a filter, so the brake's own three figures join this row
+     rather than getting a second row format that can drift from it. */
+  const sv = m.saved ? '  ' + String(m.saved.count).padStart(3) + (m.saved.count === 1 ? ' trim ' : ' trims')
+    + '  ' + kfmt(m.saved.saved).padStart(6) + ' out  ' + kfmt(m.saved.savedCarried).padStart(7) + ' not carried  '
+    + (m.saved.unpriced === m.saved.count ? '--' : pfmt(m.saved.pts)).padStart(6) + ' pts' : '';
+  return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
 module.exports = { parseTranscript, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
-  reachPooled, commandTool, trimmedResults, trimSavings,
+  reachPooled, commandTool, trimmedResults, trimSavings, pfmt,
   GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, sweepOffline, SWEEP_KNOBS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };
