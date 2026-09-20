@@ -960,9 +960,8 @@ function report(plain) {
   if (!file) {
     /* --session is read after the listing branch, not before it: read up here it would count as consulted
        and the note below would stay quiet about `--saved --session=x`, which the listing does not honour. */
-    /* --saved is the same listing under a filter, not a second one: same rows, same --top, same omission
-       notice. A saving view with its own row format and its own population sentence is how two listings of
-       one thing start to disagree. Bare --saved implies the listing, so `report --saved` needs no --all. */
+    /* --saved shares this listing's rows and row format; what it orders and groups them by is its own, and
+       the comment on that branch says why. Bare --saved implies the listing, so it needs no --all. */
     const onlySaved = flag('--saved');
     if (flag('--all') || onlySaved) {
       if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '. Try --transcript=<path>, or --ledger for the trimming record alone.'); return; }
@@ -976,7 +975,7 @@ function report(plain) {
          no marker cannot have a saving and is not worth carrying or indexing. posts is that ledger filter
          hoisted out of the loop -- ledgerIndex applies the same test per session, over every row. */
       const posts = onlySaved ? ledger.filter((r) => r && r.ev === 'post' && r.kept != null) : null;
-      let rows = found.map((f) => {
+      const rows = found.map((f) => {
         let p;
         try { p = transcript.parseTranscript(f.file); } catch (e) { return { f, err: e.message }; }
         const cwd = p.cwd || '';
@@ -988,48 +987,90 @@ function report(plain) {
         const g = transcript.guardRan(p, ledger, String(p.sessionId));
         let sv = null;
         if (onlySaved && p.results.some((r) => r.marker)) { transcript.carry(p); sv = transcript.trimSavings(p, posts); }
-        return { f, p, cwd, bench: isBench(cwd), guard: g.ran, via: g.via, sv };
+        return { f, p, cwd, bench: isBench(cwd), staged: transcript.stagedCwd(cwd), guard: g.ran, via: g.via, sv };
       });
-      const readAll = rows;
-      if (onlySaved) rows = rows.filter((x) => x.sv && x.sv.count);
-      const shown = rows.slice(0, allTop);
-      console.log((onlySaved ? 'Sessions the guard kept something out of, newest first (' : 'Sessions, newest first (') + rows.length
-        + (onlySaved ? ' of ' + readAll.length + ' on disk; the rest saved nothing' : '')
-        + (rows.length > shown.length ? ', newest ' + shown.length + ' shown' : '') + '):');
-      for (const x of shown) {
-        if (x.err) { console.log('  ' + x.f.session.slice(0, 8) + '...  unreadable: ' + x.err); continue; }
-        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '', saved: x.sv }));
-      }
-      if (rows.length > shown.length) console.log('  (' + (rows.length - shown.length)
-        + ' older session(s) not listed -- add --top=' + rows.length + ' for every one)');
+      const unreadable = rows.filter((x) => x.err).length, readable = rows.length - unreadable;
       if (onlySaved) {
-        const sum = (rs, k) => rs.reduce((n, x) => n + x.sv[k], 0);
-        const plain = rows.filter((x) => !x.bench);
+        /* Sorted by what was saved rather than by when: a trim in a 487-request session is worth many times
+           the same trim in a short one, and a chronological list buries that. Staged work is listed apart
+           instead of mixed in and footnoted -- a benchmark fixture and a calibration arm are not a claim
+           about ordinary work, and whoever scans a sorted list reads the top row as one. Staged is stage 2's
+           own rule (transcript.stagedCwd), not a third spelling of it; the pooled views keep their narrower
+           bench skip, so no population they already report moves. */
+        const saved = rows.filter((x) => x.sv && x.sv.count).sort((a, b) => b.sv.savedCarried - a.sv.savedCarried);
+        if (!saved.length) {
+          /* "The guard kept nothing out" over zero readable sessions is a finding drawn from nothing. When
+             every transcript failed to parse, that is the whole of what this view can say. */
+          if (!readable) console.log('No transcript could be read: all ' + unreadable + ' under '
+            + path.join(CFG_DIR, 'projects') + ' failed to parse, so this view has nothing to say about saving.');
+          else {
+            console.log('No session on disk has a trim saving: over ' + readable
+              + ' readable session(s) the guard kept nothing out.');
+            console.log('That is a finding, not an error -- report --reach says how much of what entered sits where the trim can act at all.');
+            if (unreadable) console.log(unreadable + ' further transcript(s) could not be read at all and are not among those ' + readable + '.');
+          }
+          return;
+        }
+        const work = saved.filter((x) => !x.staged);
+        const staged = saved.filter((x) => x.staged);
+        const group = (label, rs, of = '') => {
+          if (!rs.length) return;
+          const shown = rs.slice(0, allTop);
+          console.log(label + ' (' + rs.length + of + (rs.length > shown.length ? ', top ' + shown.length + ' shown' : '') + '):');
+          for (const x of shown) console.log(transcript.renderSummaryLine(x.p,
+            { guard: x.guard, tag: x.bench ? 'bench' : (x.staged ? 'calib' : ''), saved: x.sv }));
+          /* --top governs each group, so the hint names what covers BOTH of them: two groups each advising
+             their own length is two numbers neither of which lists the whole view. */
+          if (rs.length > shown.length) console.log('  (' + (rs.length - shown.length)
+            + ' smaller one(s) not listed -- add --top=' + saved.length + ' for every one)');
+        };
+        /* Every count in this view is out of the readable sessions, so the three of them add up on screen:
+           ordinary with a saving, staged with a saving, and no saving at all. A header counting one
+           population next to a footer counting another is how "the rest saved nothing" went wrong. */
+        group('Sessions the guard kept something out of, by token-reads not carried', work,
+          ' ordinary of ' + readable + ' readable on disk');
+        if (staged.length) {
+          console.log('');
+          group('Staged work -- benchmark fixtures and calibration arms, not a claim about ordinary work', staged);
+        }
+        const tot = (rs) => rs.reduce((t, x) => { for (const k in t) t[k] += x.sv[k]; return t; },
+          { saved: 0, savedCarried: 0, unpriced: 0, count: 0, pts: 0 });
         /* pfmt(0) reads '< 0.01', which is also what a total of nothing-priced prints -- and "not
            calibrated" read off the screen as "about zero points saved" is the wrong conclusion. */
-        const total = (label, rs) => console.log('  ' + label + ' over ' + rs.length + ' session(s): ~ ' + transcript.kfmt(sum(rs, 'saved'))
-          + ' tokens kept out, ~ ' + transcript.kfmt(sum(rs, 'savedCarried')) + ' token-reads not carried, '
-          + (sum(rs, 'unpriced') === sum(rs, 'count') ? '-- points (none on a calibrated model)' : '~ ' + transcript.pfmt(sum(rs, 'pts')) + ' points'));
+        const total = (label, rs, t) => console.log('  ' + label + ' over ' + rs.length + ' session(s): ~ ' + transcript.kfmt(t.saved)
+          + ' tokens kept out, ~ ' + transcript.kfmt(t.savedCarried) + ' token-reads not carried, '
+          + (t.unpriced === t.count ? '-- points (none on a calibrated model)' : '~ ' + transcript.pfmt(t.pts) + ' points'));
+        const all = tot(saved);
         console.log('');
-        total('Total', rows);
-        if (plain.length !== rows.length) total('Outside the benchmark', plain);
-        const unpriced = sum(rows, 'unpriced');
-        if (unpriced) console.log('  ' + unpriced + ' trim(s) ran on a model the point weights are not calibrated for and count in tokens only.');
-        const unreadable = readAll.filter((x) => x.err).length;
-        if (unreadable) console.log('  ' + unreadable + ' transcript(s) could not be read at all: they are in neither figure, and are not'
-          + ' among the sessions said to have saved nothing.');
+        total('Total', saved, all);
+        /* An "Ordinary work over 0 session(s)" line would read '-- points (none on a calibrated model)' off
+           an empty sum -- the same wrong conclusion the note above guards against, from the other side. */
+        if (staged.length && work.length) total('Ordinary work', work, tot(work));
+        console.log('  ' + (readable - saved.length) + ' of the ' + readable
+          + ' readable session(s) on disk have no saving at all.');
+        if (all.unpriced) console.log('  ' + all.unpriced + ' trim(s) ran on a model the point weights are not calibrated for and count in tokens only.');
+        if (unreadable) console.log('  ' + unreadable + ' transcript(s) could not be read at all and are in none of the counts above.');
         console.log('  Points are drawn from separate five-hour windows: they add up as a total of what was saved,');
-        console.log('  never as a share of one window. A/B arms are ordinary work by their cwd and no transcript says');
-        console.log('  they were arms -- HANDOFF.md lists the ones on record, and they come off by hand before a');
-        console.log('  saving here is read as a saving on ordinary work.');
+        console.log('  never as a share of one window. An A/B arm outside a calibration directory is ordinary work by');
+        console.log('  its cwd and no transcript says it was an arm -- HANDOFF.md lists the ones on record, and they');
+        console.log('  come off by hand before a saving here is read as a saving on ordinary work.');
         console.log('\nOpen one with: tokenbrake report --session=<prefix>');
         return;
       }
-      const readable = rows.filter((x) => !x.err);
-      const bench = readable.filter((x) => x.bench).length;
-      const guarded = readable.filter((x) => x.guard).length;
-      const outside = readable.filter((x) => x.guard && !x.bench).length;
-      const byMarkerAll = readable.filter((x) => x.via === 'marker').length;
+      const shown = rows.slice(0, allTop);
+      console.log('Sessions, newest first (' + rows.length
+        + (rows.length > shown.length ? ', newest ' + shown.length + ' shown' : '') + '):');
+      for (const x of shown) {
+        if (x.err) { console.log('  ' + x.f.session.slice(0, 8) + '...  unreadable: ' + x.err); continue; }
+        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '' }));
+      }
+      if (rows.length > shown.length) console.log('  (' + (rows.length - shown.length)
+        + ' older session(s) not listed -- add --top=' + rows.length + ' for every one)');
+      const ok = rows.filter((x) => !x.err);
+      const bench = ok.filter((x) => x.bench).length;
+      const guarded = ok.filter((x) => x.guard).length;
+      const outside = ok.filter((x) => x.guard && !x.bench).length;
+      const byMarkerAll = ok.filter((x) => x.via === 'marker').length;
       console.log('\n  guard = the guard was running in that session -- established from its ledger rows, or, when the');
       console.log('  ledger has none (a transcript read away from the machine it ran on carries no ledger), from a');
       console.log('  trim marker in the transcript itself. A blank means it was not running there, which is a');
@@ -1038,7 +1079,7 @@ function report(plain) {
       console.log('  skip by default as a staged workload.');
       if (byMarkerAll) console.log('  ' + byMarkerAll + ' session(s) here rest on the marker alone, which is a LOWER BOUND: one the guard'
         + '\n  ran in and never trimmed carries no marker and reads as a blank.');
-      console.log('  Of ' + readable.length + ' readable session(s): ' + bench + ' benchmark, ' + guarded
+      console.log('  Of ' + readable + ' readable session(s): ' + bench + ' benchmark, ' + guarded
         + ' with guard records, ' + outside + ' with guard records outside the benchmark.');
       console.log('  That last number is the population a claim about ordinary work has to come from. It is still');
       console.log('  not a count of eligible sessions: an A/B arm is ordinary work by its cwd and is not ordinary');
@@ -1688,10 +1729,11 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       the context it was carried through (size x later requests), from
                                       the Claude Code transcript, with what tokenbrake trimmed
       --all                           one line per session on disk, newest first
-      --saved                         the same listing, filtered to the sessions the guard kept something out
-                                      of, each row carrying what it kept out, what that was then not carried
-                                      through, and the points -- with the totals under it. Sessions it saved
-                                      nothing in are left out; --all lists every one
+      --saved                         the same rows, only the sessions the guard kept something out of,
+                                      ranked by what was then not carried and split from staged work; each
+                                      row carries what it kept out, what that was not carried through, and
+                                      the points -- with the totals under it. Sessions it saved nothing in
+                                      are left out; --all lists every one, newest first
       --session=<prefix>              a particular session;  --transcript=<path> a particular file
       --top=N                         widen the ranking (default 10);  --ledger  the guard's own record only
       --where                         every session pooled: where the model's ranged reads land, and what a
