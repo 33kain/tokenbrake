@@ -655,12 +655,29 @@ the evidence of one pair, documented as trading "acting less for acting wrongly 
 guard's remaining reach. `sed` ranges are exactly what it exempted. It is the first thing this project has
 measured that could overturn a change made here rather than a default inherited from elsewhere.
 
-**What it needs is time, not work.** The owner installed the guard at **user scope** on 2026-09-12, so it now
-records in every session **on the machine it is installed on** -- which is not the same as every session, see
-the third bullet below. Ten sessions with the guard running and 200 shell results in them, and `report --reach`
-returns a verdict on its own.
+**What it needed was time, not work** — and the time is in. The owner installed the guard at **user scope** on
+2026-09-12, so it records in every session **on the machine it is installed on**, which is not the same as every
+session (see the third bullet below). The rule wanted ten sessions with the guard running and 200 shell results
+in them.
 
-Three things to remember while that accumulates:
+**Answered 2026-09-20, on `be51821`, recorded in `AB-TASK.md` under "first counted run".** 61 sessions pooled of
+137 (64 staged, 12 with no tool results), the guard recording in **30** of them with **1,614 shell results** —
+both gates cleared. **W = 9.7%**, which is the 5%–20% band: **present but marginal, and no claim may be made
+from it.** The 5% branch did not fire, so the README is not required to call the mechanism essentially absent;
+nothing licenses calling it present and worth having either. The pre-registered question comes back not settled
+either way on this evidence, which is the answer rather than a reason to re-run it differently.
+
+Two things the run says that the verdict does not: the guard reached **99%** of the carried tokens it could
+reach inside those sessions (the first run's 22% was the worry, and it is not where the share went); and the
+largest bucket by far is **under the threshold** — 1,678 results, ~46.3M carried, **43.7%** — output too small
+to fire on, carried through every later request. That is the shape the "brake to 8-10" work aims at, and it is
+a different mechanism from the one this round measured.
+
+The suspicion above is still unresolved: single-file excerpts carry 12.2% of everything pooled, more than the
+reach itself, but those are excerpts the model asked for rather than reads the cap provoked. Separating the two
+is its own round.
+
+Three things to remember, now that it has accumulated:
 
 - **A user-scope install makes the benchmark's OFF arms impossible** — `verify-config --expect=off` requires
   zero guards at every scope. Before any future round: `node cli.js uninstall`.
