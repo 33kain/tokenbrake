@@ -3849,3 +3849,45 @@ them. The first `--reach` run after the code change lands is the first one whose
 
 This is written before the change is made and before any figure is read under it, which is the order
 `CLAUDE.md` requires.
+
+## Does the trim's mechanism appear when the agent has decent tools? — first counted run, 2026-09-20
+
+The rule was pre-registered before any of this was measured, thresholds and all, including the outcome that is
+bad for the product: **under 5% of carried tokens and the README must say the mechanism is essentially absent,
+in those words**; at or above 20% it is present and worth having; between the two it is present but marginal
+and no claim may be made from it. It returns **NO VERDICT** below **ten sessions with the guard running and
+200 shell results in them**. The first run, 2026-09-12, returned NO VERDICT: the guard was recording in 8 of
+40 sessions. Everything computed since then pooled calibration arms as the owner's own work, which the
+amendment above corrects; this is the first run whose numbers count under it, on `main` at `be51821`.
+
+**The pool.** 137 sessions on disk, **61 pooled**: 64 skipped as staged (23 benchmark, 41 calibration arms)
+and 12 with no tool results. Of the 61, the guard was recording in **30** (2 of them established from a trim
+marker rather than a ledger row, which is a lower bound), carrying **1,614 shell results**. Both gates are
+cleared, by 3x on sessions and 8x on shell results, so the verdict is live for the first time.
+
+**The number: W = 9.7%** of carried tokens sit where the trim can act, measured over the 30 sessions the guard
+was actually running in. (Over all 61 pooled it reads 11.1%; the verdict takes the guarded figure, since a
+tool list from sessions without the guard describes a machine that is not running this product.)
+
+**The rule, applied as written: between 5% and 20% -- present but marginal. That is the number; there is no
+claim to make from it.** The 5% branch did not fire, so the README is not required to say the mechanism is
+essentially absent, and nothing licenses saying it is present and worth having either. The question the round
+was pre-registered to answer -- whether the mechanism needs poor tooling to have anything to do -- comes back
+*not settled either way on this evidence*, and that is the answer, not a reason to re-run it differently.
+
+**Three things the run says that the verdict does not.**
+- **The guard is not leaving reachable work alone.** Inside those 30 sessions, 46 results sit within reach and
+  it acted on 42: **99% of the carried tokens it could reach**. The first run's 22% was the open worry; it is
+  not where the remaining share went.
+- **What it declines to touch is larger than what it reaches.** Single-file excerpts are 142 results and
+  ~12.9M carried, **12.2%** of everything pooled -- more than the 11.1% inside the reach. 0.2.3 stopped
+  trimming them on measured evidence (chunked re-reads doubled the tokens on one task), so this is the size of
+  a deliberate exemption, not a defect. It does not by itself confirm the standing suspicion about 0.2.6's
+  excerpt exemption: these are excerpts the model asked for, not reads the cap provoked.
+- **The biggest bucket is under the threshold.** 1,678 results, ~46.3M carried, **43.7%** -- output too small
+  for the trim to fire on, carried through every later request. That is the shape the "brake to 8-10" work is
+  aimed at, and it is a different mechanism from the one this round measured.
+
+**What may be quoted from this.** The verdict sentence and W, with the population named (30 guarded sessions
+of 61 pooled, staged work excluded). Not the pooled 11.1% as if it were W, and not any figure from a run
+before `be51821`.
