@@ -1372,5 +1372,38 @@ identical, and so was speed: `tune` 1.08 s both ways over three runs, `report --
 with an accessor that ignored its `cwd` once the stored value existed, so it was not merged. If a view ever profiles
 hot on it, memoize inside one accessor rather than adding a field.
 
+**Done since: the report answers "where did it bite", and arguments stopped saying nothing (#101, 2026-09-20).**
+`report all` printed the ordinary one-session report as though `all` had said nothing, and `report --help` did the
+same -- found by the owner asking for a listing twice and getting a single session both times. A report whose scope
+is not the scope that was asked for is the same class of defect this project exists to report on, so both halves are
+closed, by two mechanisms rather than one table. **Not real:** every argument is checked against the command that
+received it, the nearest real one is suggested (`report all` -> `did you mean --all?`), exit non-zero; unknown
+commands and a `--compare` refused for its arity now exit non-zero too, instead of reading as success. **Real, but
+said nothing:** `flag()`/`opt()` record what the running command actually asked about, and what is left over draws
+`Note: --top had no effect on this view.` That half needs no maintenance and covers every view automatically
+(`--ledger --top=5`, `--all --cwd=x`, `--saved --session=x`); the table only has to know which names exist. A test
+cross-checks SPEC against the flags the code reads and the ones `help()` documents, so a flag added to two of the
+three places fails the suite and is named.
+
+`report --saved` is the `--all` listing filtered to the sessions the guard kept something out of, each row carrying
+tokens kept out, token-reads not carried and points, with totals under it. It is a filter and not a second listing,
+so it inherits `--top` and the omission notice and cannot drift from `--all` -- the rule transcript.js states for
+pooled views. First run on this machine: **22 of 137 sessions have a saving; ~117k tokens kept out, ~5.0M
+token-reads not carried, ~1.4 points; outside the benchmark 16 sessions, ~61k and ~4.7M.** 31 of the trims ran on
+models the weights are not calibrated for and count in tokens only. A/B arms are ordinary work by their cwd, so
+those come off by hand before any of this is read as a saving on ordinary work.
+
+Found by the review and worth remembering: a transcript carrying no `sessionId` of its own made `trimSavings` index
+**every** ledger row by tool-use id, so another session's trim was credited to it and the cross-session total
+counted one saving twice. The per-session report could never do this; the first view that adds sessions together
+could. The filename is the session id `findTranscripts` and `--session=` already go by, and it is now backfilled
+before the lookup, with a test that reuses one tool-use id across two sessions. The same pass fixed a total that
+printed `~ < 0.01 points` where every row printed `--`, and unreadable transcripts being folded into "the rest saved
+nothing".
+
+Nothing here touches what a running stage measures -- `compactionView`, the weights and the counting rules are
+untouched, `guard.js` is untouched, and nothing changes what enters context. `/simplify`, `/code-review` and
+`/security-review` all ran; security found nothing.
+
 **Open, not started:**
 - A Fable calibration.
