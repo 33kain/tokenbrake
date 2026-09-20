@@ -1426,3 +1426,27 @@ untouched, `guard.js` is untouched, and nothing changes what enters context. `/s
 
 **Open, not started:**
 - A Fable calibration.
+
+## Two knob changes `tune` asks for, both held until stage B closes — 2026-09-20
+
+First `tune` run over the widened pool (staged = benchmark *or* calibration, per the 2026-09-20 amendment):
+**61 sessions pooled, 30 with the guard, 76 skipped; ~5.0M token-reads saved across the features already on,
+after pull-backs.** Per feature: `reReadElide` fired 38x with 0 backfires, `blobElide` 2x/0 (~170k token-reads),
+`dedup` 1x/**1**, and `gitView`, `mcpTrim` and `readAfterEdit` have still not fired in any pooled session.
+Trim reach ~9.6% of carried tokens, matching the `--reach` verdict recorded in `AB-TASK.md` the same day.
+
+Two recommendations came out of it. **Neither is applied, and neither should be applied while stage B is
+running** — both change what enters context, so taking one mid-stage makes the remaining compactions a
+different sample from the ones already counted. Revisit when the eighth compaction is recorded.
+
+- **`dedup` backfired, 1 of 1.** The only time it fired on this machine, the model went back for what it
+  withheld. `tune` prints it as `[!!] reconsider`. One firing in 61 sessions is too thin to call it either
+  way, which is also why it can wait: turning it off costs nothing measurable in the meantime.
+- **`readMaxBytes` 60,000 -> 45,000.** The cap fired 9x at 60,000; one step down catches 17 reads instead of
+  11 and reaches up to ~437k more token-reads. It is an *estimate* from what the model read, built to
+  under-count, and a Read cap's pull-back cannot be measured from transcripts at all — so the step needs its
+  own record: take it for a few sessions, then re-run `tune` and `report --reads`.
+
+**Open, not started (added here):**
+- Apply or reject `dedup: false` — after stage B.
+- Try `readMaxBytes: 45000` for a few sessions, then re-run `tune` — after stage B.
