@@ -1387,9 +1387,11 @@ three places fails the suite and is named.
 
 `report --saved` is the `--all` listing filtered to the sessions the guard kept something out of, each row carrying
 tokens kept out, token-reads not carried and points, with totals under it. It is a filter and not a second listing,
-so it inherits `--top` and the omission notice and cannot drift from `--all` -- the rule transcript.js states for
-pooled views. First run on this machine: **22 of 137 sessions have a saving; ~117k tokens kept out, ~5.0M
-token-reads not carried, ~1.4 points; outside the benchmark 16 sessions, ~61k and ~4.7M.** 31 of the trims ran on
+so it inherits the row format from `--all` and cannot drift from it. Since 2026-09-20 it ranks by token-reads not
+carried rather than by date, and lists staged work (benchmark fixtures and calibration arms) as its own group with
+its own total, so "Ordinary work" is a figure the view computes rather than a subtraction done by hand. First run
+on this machine, under the narrow bench-only rule that predates that: **22 of 137 sessions have a saving; ~117k
+tokens kept out, ~5.0M token-reads not carried, ~1.4 points; outside the benchmark 16 sessions, ~61k and ~4.7M.** 31 of the trims ran on
 models the weights are not calibrated for and count in tokens only. A/B arms are ordinary work by their cwd, so
 those come off by hand before any of this is read as a saving on ordinary work.
 

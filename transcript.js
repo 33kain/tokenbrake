@@ -605,10 +605,12 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
 const STAGE2 = { n: 8, share: 0.5 };
 /* Staged work: a benchmark fixture or a calibration arm, driven by a script over a prepared repo. Stage 2
    pre-registered this rule (AB-TASK.md, "sessions under tokenbrake-bench or a calibration directory don't
-   count") and the saving listing separates the same set, so it lives here once rather than being re-spelled
-   per view. cli.js's narrower isBench is a different, deliberately narrower skip -- widening it would move
-   populations the pooled views already report. */
-const stagedCwd = (cwd) => /tokenbrake-bench|calibration/i.test(cwd || '');
+   count"); the saving listing separates the same set, and since the 2026-09-20 amendment --where, --reads,
+   --reach and tune skip it. The KIND is the primitive and the predicate derives from it, so the label a
+   listing prints and the population a view drops can never come from two regexes that merely agree. */
+const STAGED = [['bench', /tokenbrake-bench/i], ['calib', /calibration/i]];
+const stagedKind = (cwd) => (STAGED.find(([, re]) => re.test(cwd || '')) || [''])[0];
+const stagedCwd = (cwd) => !!stagedKind(cwd);
 function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
   if (stagedCwd(cwd)) return 'benchmark/calibration';
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
@@ -2454,6 +2456,6 @@ function renderSummaryLine(parsed, marks) {
 module.exports = { parseTranscript, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
-  reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd,
+  reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd, stagedKind,
   GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, sweepOffline, SWEEP_KNOBS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };
