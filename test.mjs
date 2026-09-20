@@ -2733,7 +2733,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const r = cli(['report', '--compare', 'arma0000', 'armb0000'], PROJ);
   t('cli: report --compare resolves session prefixes', r.status === 0 && /Change is B against A/.test(r.stdout), (r.stdout + r.stderr).slice(0, 200));
   const r2 = cli(['report', '--compare', 'arma0000'], PROJ);
-  t('cli: one argument is a usage line, not a crash', r2.status === 0 && /Usage: tokenbrake report --compare/.test(r2.stdout));
+  /* A refused comparison used to exit 0, so a script could not tell it from a finished one -- the same
+     silent-success the argument check exists to end. It is a usage line, not a crash, and not a result. */
+  t('cli: one argument is a usage line, refused with a non-zero exit', r2.status === 1 && /Usage: tokenbrake report --compare/.test(r2.stdout));
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -4136,6 +4138,99 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2099-01-01/.test(rep('--since=2099-01-01').stdout));
   t('report --compactions --since: a non-date is refused, exit 1', rep('--since=someday').status === 1);
   rmSync(cfgC, { recursive: true, force: true });
+}
+
+{
+  console.log('\n-- report --saved, and the arguments that used to be ignored');
+  /* Two sessions of the same shape: one result carries the guard's marker and matches a ledger row, the
+     other carries neither. The first is a saving, the second is not, and --saved is the view that leaves
+     the second out. The arguments below all used to reach report() and print the ordinary one-session
+     report as though nothing had been asked -- `report all` was the one that sent a real reader looking
+     for a list that never came. */
+  const cfgS = mkdtempSync(join(tmpdir(), 'tokenbrake-saved-'));
+  mkdirSync(join(cfgS, 'projects', '-w'), { recursive: true });
+  mkdirSync(join(cfgS, 'tokenbrake'), { recursive: true });
+  const usageS = { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 100, output_tokens: 50 };
+  const asstS = (sid, rid, id) => JSON.stringify({ type: 'assistant', requestId: rid, uuid: rid + '-a', sessionId: sid, cwd: 'C:\w',
+    message: { model: 'claude-opus-5', usage: usageS, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }] } });
+  const resS = (sid, id, text) => JSON.stringify({ type: 'user', uuid: id + '-r', sessionId: sid, cwd: 'C:\w',
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] }, toolUseResult: {} });
+  const mkS = (sid, text) => writeFileSync(join(cfgS, 'projects', '-w', sid + '.jsonl'),
+    [asstS(sid, 'q1', 't1'), resS(sid, 't1', text),
+     asstS(sid, 'q2', 't2'), resS(sid, 't2', 'nothing much'),
+     asstS(sid, 'q3', 't3'), resS(sid, 't3', 'nothing much')].join('\n') + '\n');
+  mkS('savesess', '[tokenbrake] ' + 'x'.repeat(400));
+  mkS('quietsess', 'y'.repeat(400));
+  writeFileSync(join(cfgS, 'tokenbrake', 'ledger.jsonl'),
+    JSON.stringify({ ev: 'post', t: Date.now(), session: 'savesess', id: 't1', tool: 'Bash', what: 'ls', chars: 40000, kept: 400 }) + '\n');
+  const sv = (...a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', ...a], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgS } });
+
+  let rs = sv('--saved');
+  /* 9,900 tokens kept out of a result that two later requests would have re-read: 3 x 9,900 not carried. */
+  t('report --saved: the session the guard kept something out of, with kept-out and not-carried',
+    rs.status === 0 && /savesess\.\.\.\s+3 req\s+3k processed\s+209 carried\s+1 trim\s+10k out\s+30k not carried\s+0\.09 pts/.test(rs.stdout),
+    (rs.stdout.match(/[^\n]*savesess[^\n]*/) || [rs.stderr])[0]);
+  t('report --saved: a session that saved nothing is left out, and the header says how many were read',
+    !/quietsess/.test(rs.stdout) && /1 of 2 on disk; the rest saved nothing/.test(rs.stdout));
+  t('report --saved: the total is over what it listed, in tokens, never money',
+    /Total over 1 session\(s\): ~ 10k tokens kept out, ~ 30k token-reads not carried/.test(rs.stdout) && !/\$\s?\d/.test(rs.stdout));
+
+  rs = sv('all');
+  t('report all is refused rather than printing the one-session report, and points at --all',
+    rs.status === 1 && /takes no plain arguments, got: all -- did you mean --all\?/.test(rs.stdout), rs.stdout.split('\n')[0]);
+  rs = sv('--al');
+  t('an unknown option names itself and the nearest real one', rs.status === 1 && /unknown option --al for `report` -- did you mean --all\?/.test(rs.stdout));
+  rs = sv('--session');
+  t('an option written without its value says so instead of being dropped', rs.status === 1 && /--session takes a value/.test(rs.stdout));
+  rs = sv('--all=yes');
+  t('a flag handed a value says so', rs.status === 1 && /--all takes no value/.test(rs.stdout));
+  rs = sv('--help');
+  t('report --help prints the help, not a report', rs.status === 0 && /STEP ONE -- the report/.test(rs.stdout) && !/Sessions the guard kept something out of/.test(rs.stdout));
+  rs = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'frobnicate'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgS } });
+  t('an unknown command is refused, not answered with help at exit 0', rs.status === 1 && /Unknown command: frobnicate/.test(rs.stdout));
+  rs = sv('--compare', 'savesess', 'quietsess');
+  t('--compare keeps the two plain arguments it is meant to take', rs.status === 0 && /^A: savesess/m.test(rs.stdout) && /^B: quietses/m.test(rs.stdout), rs.stdout.split('\n')[0]);
+
+  /* The other half: an option that is real, and that the view it was handed never reads. */
+  rs = sv('--ledger', '--top=5');
+  t('an option the chosen view never reads is said out loud, not swallowed',
+    rs.status === 0 && /Note: --top had no effect on this view\./.test(rs.stdout), rs.stdout.trim().split('\n').pop());
+  rs = sv('--saved');
+  t('an option the view does read draws no note', rs.status === 0 && !/had no effect/.test(rs.stdout));
+
+  /* A transcript that carries no sessionId of its own used to make trimSavings index every post row by
+     tool-use id, so this session -- whose only result reuses the id 't1' -- was credited with savesess's
+     trim and the cross-session Total counted the same 10k twice. */
+  writeFileSync(join(cfgS, 'projects', '-w', 'orphansess.jsonl'),
+    [JSON.stringify({ type: 'assistant', requestId: 'q1', uuid: 'q1-a', cwd: 'C:\w', message: { model: 'claude-opus-5', usage: usageS, content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } }),
+     JSON.stringify({ type: 'user', uuid: 't1-r', cwd: 'C:\w', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: '[tokenbrake] ' + 'x'.repeat(400) }] }, toolUseResult: {} })].join('\n') + '\n');
+  rs = sv('--saved');
+  t('a session with no sessionId is not credited with another session\'s ledger row',
+    rs.status === 0 && !/orphanse/.test(rs.stdout) && /Total over 1 session\(s\): ~ 10k tokens kept out/.test(rs.stdout),
+    (rs.stdout.match(/[^\n]*Total over[^\n]*/) || [''])[0]);
+
+  rs = sv('--ledger', '--top=5', '--top=9');
+  t('an option written twice is named once in the note', /Note: --top had no effect/.test(rs.stdout) && !/--top, --top/.test(rs.stdout));
+  rs = sv('--ledger', '--compare');
+  t('--compare draws the note too: the arity check must not count as the command reading it',
+    /Note: --compare had no effect on this view\./.test(rs.stdout), rs.stdout.trim().split('\n').pop());
+
+  /* SPEC is hand-written, and the day someone adds a flag and forgets one of the three places is the day
+     it starts lying. The three lists are cheap to compare, so compare them: what the code reads, what SPEC
+     declares, and what help() documents -- modulo the two retired names, which SPEC keeps on purpose. */
+  {
+    const RETIRED = ['--cost', '--model'];
+    const src = readFileSync(join(process.cwd(), 'cli.js'), 'utf8');
+    const names = (s) => new Set((s.match(/--[a-z][a-z-]+/g) || []));
+    const spec = names(src.slice(src.indexOf('const SPEC = {'), src.indexOf('function nearest(')));
+    const read = names((src.match(/(?:flag|opt)\('--[a-z-]+'\)/g) || []).join(' '));
+    const doc = names(spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env }).stdout);
+    const missing = (a, b, skip) => [...a].filter((x) => !b.has(x) && !skip.includes(x));
+    t('every option the code reads is declared in SPEC', missing(read, spec, ['--help']).join(' ') === '', missing(read, spec, ['--help']).join(' '));
+    t('every option SPEC declares is one the code reads', missing(spec, read, RETIRED).join(' ') === '', missing(spec, read, RETIRED).join(' '));
+    t('every option SPEC declares is documented in help', missing(spec, doc, RETIRED).join(' ') === '', missing(spec, doc, RETIRED).join(' '));
+  }
+  rmSync(cfgS, { recursive: true, force: true });
 }
 
 rmSync(CFG, { recursive: true, force: true });

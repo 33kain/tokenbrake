@@ -14,7 +14,11 @@ const TB_DIR = path.join(CFG_DIR, 'tokenbrake');
 const LEDGER = path.join(TB_DIR, 'ledger.jsonl');
 const args = process.argv.slice(2);
 const cmd = args[0] || 'help';
-const flag = (f) => args.includes(f);
+/* Every argument name the running command looks at. An argument nobody looked at changed nothing, and a
+   report printed at the wrong scope in silence is the whole reason this file checks arguments at all.
+   Recording it here means the check is the command's own reading of argv -- no table, nothing to drift. */
+const asked = new Set();
+const flag = (f) => { asked.add(f); return args.includes(f); };
 const PROJECT = flag('--project');
 
 // Where the guard script lives and how settings.json refers to it.
@@ -31,8 +35,8 @@ const guardRef = PROJECT ? '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard
 // anyway); project scope keeps 'node' because that file is meant to be committed and shared. --node=<path>
 // overrides either. `status` spawns the recorded command exactly as Claude Code would, so a wrong path is
 // caught there instead of in a transcript that quietly got no smaller.
-const nodeFlag = args.find(a => a.startsWith('--node='));
-const nodeCmd = nodeFlag ? nodeFlag.slice('--node='.length) : (PROJECT ? 'node' : process.execPath);
+const opt = (name) => { asked.add(name); const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
+const nodeCmd = opt('--node') || (PROJECT ? 'node' : process.execPath);
 
 function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } }
 function writeJson(p, obj) {
@@ -65,7 +69,6 @@ const HOOKS = [
   { event: 'SessionStart', matcher: 'compact', mode: 'session-start' }
 ];
 const HOOK_EVENTS = HOOKS.map(h => h.event);
-const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
 function isOurs(group) {
   return Array.isArray(group.hooks) && group.hooks.some(h =>
     String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
@@ -235,6 +238,8 @@ function loadLedger() {
 }
 const tok = (c) => Math.round(c / 4); // rough: ~4 chars per token for code/logs
 const fmt = (n) => n.toLocaleString();
+/* One bench rule. It was written out at six call sites, so a second benchmark cwd meant six edits. */
+const isBench = (cwd) => /tokenbrake-bench/i.test(cwd || '');
 
 /* Brake 4 -- what's eating your tokens. Transcript-first: the Claude Code session transcript holds every
    tool result exactly as the model saw it and the API's usage per request, so the ranking comes from there;
@@ -284,7 +289,6 @@ function guardCfg() {
    joined against the reads, and the two distributions are printed side by side: everything, and the subset
    the guard did not provoke. Only the second may set a default. */
 function whereReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
   const CAPS = [100, 200, 300, 500, 800, 1200];
   const cfg = guardCfg();
@@ -302,7 +306,7 @@ function whereReport() {
     const cwd = p.cwd || '';
     if (only) {
       if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (/tokenbrake-bench/i.test(cwd)) {
+    } else if (isBench(cwd)) {
       skipped.push([id, 'benchmark session -- synthetic fixtures, evidence placed past line 300 by design; --cwd to include']);
       continue;
     }
@@ -410,7 +414,6 @@ function printPool(pooled, skipped) {
    never fired once -- while benchmark round 1 fired it one to four times per run on fixtures built large on
    purpose. Which of those a person's own week looks like is not a thing to reason about. */
 function capsReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   if (opt('--cwd') != null) {
     console.log('--cwd cannot apply to --caps: ledger rows carry no cwd, so a session cannot be told from a');
     console.log('working directory here. Use --session=<prefix>, or --where for the cwd-filtered view.');
@@ -482,7 +485,6 @@ function capsReport() {
    The share reported is of CARRIED tokens, not of results: a result costs its size times the later requests
    that re-read it, so counting results answers a different question from the one about the tokens. */
 function reachReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
   const top = Number(opt('--top') || 12) || 12;
   const cfg = guardCfg();
@@ -497,7 +499,7 @@ function reachReport() {
     const cwd = p.cwd || '';
     if (only) {
       if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (/tokenbrake-bench/i.test(cwd)) {
+    } else if (isBench(cwd)) {
       skipped.push([id, 'benchmark session -- a staged workload, which is the thing this view exists to check against']);
       continue;
     }
@@ -651,7 +653,6 @@ function reachReport() {
 }
 
 function readsReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
   const TRIGGERS = transcript.READ_MAX_STEPS;   // one list with tune's readMaxBytes grid
   const LIMITS = [100, 200, 300, 500, 800, 1200];
@@ -683,7 +684,7 @@ function readsReport() {
     const cwd = p.cwd || '';
     if (only) {
       if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; }
-    } else if (/tokenbrake-bench/i.test(cwd)) {
+    } else if (isBench(cwd)) {
       skipped.push([id, 'benchmark session -- synthetic fixtures, sizes chosen by design; --cwd to include']);
       continue;
     }
@@ -929,7 +930,7 @@ function compactionsReport() {
   console.log('\n  Recovery is inferred: a file read again after a compaction may be one the next step needed anyway.');
 }
 
-function report() {
+function report(plain) {
   if (flag('--ledger')) return ledgerReport();
   if (flag('--where')) return whereReport();
   if (flag('--caps')) return capsReport();
@@ -940,7 +941,6 @@ function report() {
   if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
   if (flag('--compactions')) return compactionsReport();
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const top = Number(opt('--top') || 10) || 10;
   const ledger = loadLedger();
   let file = opt('--transcript');
@@ -948,18 +948,23 @@ function report() {
   if (flag('--compare')) {
     /* report --compare A B: the AB-TASK.md table for two sessions, each a session-id prefix or a transcript path. */
     const pick = (x) => fs.existsSync(x) ? x : (found.find(f => f.session.startsWith(x)) || {}).file;
-    const want = args.filter(x => !x.startsWith('--') && x !== 'report');
-    if (want.length !== 2) { console.log('Usage: tokenbrake report --compare <A> <B>, each a session-id prefix or a transcript path. --all lists sessions.'); return; }
+    const want = plain || [];
+    if (want.length !== 2) { console.log('Usage: tokenbrake report --compare <A> <B>, each a session-id prefix or a transcript path. --all lists sessions.'); process.exitCode = 1; return; }
     const [fa, fb] = want.map(pick);
-    if (!fa || !fb) { console.log('No transcript for ' + (fa ? want[1] : want[0]) + '. tokenbrake report --all lists them.'); return; }
+    if (!fa || !fb) { console.log('No transcript for ' + (fa ? want[1] : want[0]) + '. tokenbrake report --all lists them.'); process.exitCode = 1; return; }
     let A, B;
     try { A = transcript.parseTranscript(fa); B = transcript.parseTranscript(fb); } catch (e) { console.log('Could not read: ' + e.message); return; }
     console.log(transcript.renderCompare(A, B, ledger));
     return;
   }
   if (!file) {
-    const want = opt('--session');
-    if (flag('--all')) {
+    /* --session is read after the listing branch, not before it: read up here it would count as consulted
+       and the note below would stay quiet about `--saved --session=x`, which the listing does not honour. */
+    /* --saved is the same listing under a filter, not a second one: same rows, same --top, same omission
+       notice. A saving view with its own row format and its own population sentence is how two listings of
+       one thing start to disagree. Bare --saved implies the listing, so `report --saved` needs no --all. */
+    const onlySaved = flag('--saved');
+    if (flag('--all') || onlySaved) {
       if (!found.length) { console.log('No transcripts found under ' + path.join(CFG_DIR, 'projects') + '. Try --transcript=<path>, or --ledger for the trimming record alone.'); return; }
       /* This printed the newest 30 under a header that said 65, with nothing to say 35 were missing, and a
          conclusion was drawn from the visible part within the hour. --top now governs it and an omission
@@ -967,22 +972,59 @@ function report() {
          population is smaller than the header says is the same defect one line further down. */
       const allTop = Number(opt('--top') || 30) || 30;
 
-      const rows = found.map((f) => {
+      /* trimSavings credits only a result that carries the marker AND matches a post row, so a session with
+         no marker cannot have a saving and is not worth carrying or indexing. posts is that ledger filter
+         hoisted out of the loop -- ledgerIndex applies the same test per session, over every row. */
+      const posts = onlySaved ? ledger.filter((r) => r && r.ev === 'post' && r.kept != null) : null;
+      let rows = found.map((f) => {
         let p;
         try { p = transcript.parseTranscript(f.file); } catch (e) { return { f, err: e.message }; }
         const cwd = p.cwd || '';
-        const g = transcript.guardRan(p, ledger, String(p.sessionId || f.session));
-        return { f, p, cwd, bench: /tokenbrake-bench/i.test(cwd), guard: g.ran, via: g.via };
+        /* Without this, a transcript carrying no sessionId of its own makes trimSavings index EVERY post
+           row by tool-use id, and another session's trim is credited to this one -- which the per-session
+           report could never do and a cross-session total silently doubles. The filename is the session id
+           findTranscripts and --session= already go by. */
+        if (!p.sessionId) p.sessionId = f.session;
+        const g = transcript.guardRan(p, ledger, String(p.sessionId));
+        let sv = null;
+        if (onlySaved && p.results.some((r) => r.marker)) { transcript.carry(p); sv = transcript.trimSavings(p, posts); }
+        return { f, p, cwd, bench: isBench(cwd), guard: g.ran, via: g.via, sv };
       });
+      const readAll = rows;
+      if (onlySaved) rows = rows.filter((x) => x.sv && x.sv.count);
       const shown = rows.slice(0, allTop);
-      console.log('Sessions, newest first (' + rows.length
+      console.log((onlySaved ? 'Sessions the guard kept something out of, newest first (' : 'Sessions, newest first (') + rows.length
+        + (onlySaved ? ' of ' + readAll.length + ' on disk; the rest saved nothing' : '')
         + (rows.length > shown.length ? ', newest ' + shown.length + ' shown' : '') + '):');
       for (const x of shown) {
         if (x.err) { console.log('  ' + x.f.session.slice(0, 8) + '...  unreadable: ' + x.err); continue; }
-        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '' }));
+        console.log(transcript.renderSummaryLine(x.p, { guard: x.guard, tag: x.bench ? 'bench' : '', saved: x.sv }));
       }
       if (rows.length > shown.length) console.log('  (' + (rows.length - shown.length)
         + ' older session(s) not listed -- add --top=' + rows.length + ' for every one)');
+      if (onlySaved) {
+        const sum = (rs, k) => rs.reduce((n, x) => n + x.sv[k], 0);
+        const plain = rows.filter((x) => !x.bench);
+        /* pfmt(0) reads '< 0.01', which is also what a total of nothing-priced prints -- and "not
+           calibrated" read off the screen as "about zero points saved" is the wrong conclusion. */
+        const total = (label, rs) => console.log('  ' + label + ' over ' + rs.length + ' session(s): ~ ' + transcript.kfmt(sum(rs, 'saved'))
+          + ' tokens kept out, ~ ' + transcript.kfmt(sum(rs, 'savedCarried')) + ' token-reads not carried, '
+          + (sum(rs, 'unpriced') === sum(rs, 'count') ? '-- points (none on a calibrated model)' : '~ ' + transcript.pfmt(sum(rs, 'pts')) + ' points'));
+        console.log('');
+        total('Total', rows);
+        if (plain.length !== rows.length) total('Outside the benchmark', plain);
+        const unpriced = sum(rows, 'unpriced');
+        if (unpriced) console.log('  ' + unpriced + ' trim(s) ran on a model the point weights are not calibrated for and count in tokens only.');
+        const unreadable = readAll.filter((x) => x.err).length;
+        if (unreadable) console.log('  ' + unreadable + ' transcript(s) could not be read at all: they are in neither figure, and are not'
+          + ' among the sessions said to have saved nothing.');
+        console.log('  Points are drawn from separate five-hour windows: they add up as a total of what was saved,');
+        console.log('  never as a share of one window. A/B arms are ordinary work by their cwd and no transcript says');
+        console.log('  they were arms -- HANDOFF.md lists the ones on record, and they come off by hand before a');
+        console.log('  saving here is read as a saving on ordinary work.');
+        console.log('\nOpen one with: tokenbrake report --session=<prefix>');
+        return;
+      }
       const readable = rows.filter((x) => !x.err);
       const bench = readable.filter((x) => x.bench).length;
       const guarded = readable.filter((x) => x.guard).length;
@@ -1005,6 +1047,7 @@ function report() {
       console.log('\nOpen one with: tokenbrake report --session=<prefix>');
       return;
     }
+    const want = opt('--session');
     if (want) {
       const hit = found.find(f => f.session.startsWith(want));
       if (!hit) { console.log('No transcript whose session id starts with ' + want + '. tokenbrake report --all lists them.'); return; }
@@ -1094,7 +1137,7 @@ function ledgerReport() {
 function clean() {
   const outDir = path.join(TB_DIR, 'out');
   if (!fs.existsSync(outDir)) { console.log('nothing to clean'); return; }
-  const days = Number((args.find(a => a.startsWith('--days=')) || '--days=7').split('=')[1]);
+  const days = Number(opt('--days') || 7);
   const cutoff = Date.now() - days * 86400000;
   let n = 0;
   for (const f of fs.readdirSync(outDir)) {
@@ -1239,8 +1282,7 @@ function doctor() {
    ledger saw (whose transcript still exists), else the newest transcript on disk. Returns { ledger, found,
    files } or null after printing the reason -- a caller returns on null. */
 function pickSessions() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
-  const ledger = loadLedger();
+    const ledger = loadLedger();
   const found = transcript.findTranscripts(CFG_DIR);
   let files = [];
   const tpath = opt('--transcript');
@@ -1340,7 +1382,6 @@ function auditReport() {
    the guard withholds next session, so it stays the person's explicit act -- the recommendation names the knob
    to paste). The recommendation engine is transcript.autotune, kept pure and tested; this only pools and prints. */
 function tuneReport() {
-  const opt = (name) => { const a = args.find(x => x.startsWith(name + '=')); return a ? a.slice(name.length + 1) : null; };
   const only = opt('--cwd');
   const want = opt('--session');
   const ledger = loadLedger();
@@ -1365,7 +1406,7 @@ function tuneReport() {
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
     const cwd = p.cwd || '';
     if (only) { if (!cwd.toLowerCase().includes(only.toLowerCase())) { skipped.push([id, 'cwd does not contain "' + only + '"']); continue; } }
-    else if (/tokenbrake-bench/i.test(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
+    else if (isBench(cwd)) { skipped.push([id, 'benchmark session -- staged fixtures, not your work; --cwd to include']); continue; }
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
     parsed.push(p);   // autotune backfills a missing p.sessionId from the transcript filename itself
   }
@@ -1647,6 +1688,10 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       the context it was carried through (size x later requests), from
                                       the Claude Code transcript, with what tokenbrake trimmed
       --all                           one line per session on disk, newest first
+      --saved                         the same listing, filtered to the sessions the guard kept something out
+                                      of, each row carrying what it kept out, what that was then not carried
+                                      through, and the points -- with the totals under it. Sessions it saved
+                                      nothing in are left out; --all lists every one
       --session=<prefix>              a particular session;  --transcript=<path> a particular file
       --top=N                         widen the ranking (default 10);  --ledger  the guard's own record only
       --where                         every session pooled: where the model's ranged reads land, and what a
@@ -1704,4 +1749,93 @@ STEP TWO -- the brake, if your report says there is something in its reach.
 }
 
 const cmds = { init, uninstall, status, doctor, report, tune: tuneReport, preset, show: showOutput, outputs, ls: outputs, clean, help };
-(cmds[cmd] || help)();
+
+/* What each command accepts. `report all` used to print the ordinary one-session report as though `all`
+   had said nothing, and `report --help` did the same: a report whose scope is not the scope that was asked
+   for is worse than no report, because nothing on the page says so. Every argument is checked against the
+   command that received it -- unknown one, name it, suggest the nearest real one, exit non-zero. `plain`
+   is how many arguments without a leading dash the command takes; anything a row leaves out is the
+   default below. This catches an argument that is not real; the note printed after the command catches
+   the other half, an argument that is real and did nothing. */
+const SPEC = {
+  init:      { flags: ['--project'], opts: ['--node'] },
+  uninstall: { flags: ['--project'] },
+  status:    { flags: ['--project'] },
+  doctor:    { flags: ['--project', '--fix'] },
+  /* --cost and its --model are retired (2026-09-18, tokens never money) and stay listed so the refusal
+     report() prints is what a script that still passes them reads, instead of an unknown-argument error. */
+  report:    { flags: ['--all', '--saved', '--ledger', '--where', '--caps', '--reach', '--reads', '--backfire', '--compactions', '--compare', '--cost'],
+               opts: ['--session', '--transcript', '--top', '--since', '--cwd', '--model'], plainWith: { '--compare': 2 } },
+  tune:      { flags: ['--sweep', '--write'], opts: ['--cwd', '--session'] },
+  preset:    { plain: 1 },
+  show:      { plain: 1 },
+  outputs:   {},
+  ls:        {},
+  clean:     { opts: ['--days'] },
+  help:      { plain: Infinity },
+};
+
+/* The nearest real argument to one that was not recognised: the same name under the other spelling first
+   (a value given to a flag, or a flag written as a value), then a containment match either way. The exact
+   pass is insurance for a future pair where one name is a prefix of another. No suggestion is better than
+   a wrong one, so anything looser than containment returns nothing. */
+function nearest(given, spec, exactOnly) {
+  const name = given.replace(/^-+/, '').split('=')[0].toLowerCase();
+  if (!name) return null;
+  const known = spec.flags.concat(spec.opts);
+  const hit = known.find((k) => k.slice(2) === name)
+    || (exactOnly ? null : known.find((k) => k.slice(2).startsWith(name) || name.startsWith(k.slice(2))));
+  return hit ? hit + (spec.opts.includes(hit) ? '=<value>' : '') : null;
+}
+
+/* Returns the plain arguments to hand the command, or null when it must not run. */
+function accept() {
+  if (flag('--help') || flag('-h')) { help(); return null; }
+  if (!Object.prototype.hasOwnProperty.call(cmds, cmd)) {
+    console.log('Unknown command: ' + cmd + '. Commands: ' + Object.keys(cmds).join(', ') + '.');
+    console.log('Run `tokenbrake help` for what each one does.');
+    process.exitCode = 1;
+    return null;
+  }
+  const spec = { flags: [], opts: [], plain: 0, plainWith: null, ...SPEC[cmd] };
+  const plain = [];
+  const problems = [];
+  for (const a of args.slice(1)) {
+    if (!a.startsWith('-')) { plain.push(a); continue; }
+    const name = a.split('=')[0], valued = a.includes('=');
+    const isFlag = spec.flags.includes(name), isOpt = spec.opts.includes(name);
+    if (valued && isFlag) problems.push(name + ' takes no value -- write it as ' + name);
+    else if (!valued && isOpt) problems.push(name + ' takes a value -- write it as ' + name + '=<value>');
+    else if (!isFlag && !isOpt) {
+      const near = nearest(a, spec);
+      problems.push('unknown option ' + a + ' for `' + cmd + '`' + (near ? ' -- did you mean ' + near + '?' : ''));
+    }
+  }
+  /* args.includes, not flag(): asking through flag() would record --compare as consulted for every
+     `report`, and the note below would then never fire on `report --ledger --compare`. */
+  const wide = Object.entries(spec.plainWith || {}).find(([f]) => args.includes(f));
+  const room = wide ? wide[1] : spec.plain;
+  if (plain.length > room) {
+    /* Exact only here: a plain argument is a session id or a path, and `--compare A B C` suggesting
+       --compactions for "C" is the wrong guess the comment above refuses to make. `report all` still
+       gets its --all, which is the case worth suggesting. */
+    const near = nearest(plain[room], spec, true);
+    problems.push('`' + cmd + '` takes ' + (room ? 'at most ' + room + ' plain argument(s)' : 'no plain arguments') + ', got: ' + plain.join(' ')
+      + (near ? ' -- did you mean ' + near + '?' : ''));
+  }
+  if (!problems.length) return plain;
+  for (const m of problems) console.log(m);
+  console.log('Run `tokenbrake help` for the full list.');
+  process.exitCode = 1;
+  return null;
+}
+
+const plainArgs = accept();
+if (plainArgs) {
+  cmds[cmd](plainArgs);
+  /* The other half of the same defect: `report --ledger --top=5` and `report --all --cwd=x` name real
+     options that the view they were given to never reads. flag()/opt() recorded what the command asked
+     about, so what is left over is exactly what said nothing -- said out loud rather than swallowed. */
+  const idle = [...new Set(args.slice(1).filter((a) => a.startsWith('-')).map((a) => a.split('=')[0]))].filter((n) => !asked.has(n));
+  if (idle.length && !process.exitCode) console.log('\nNote: ' + idle.join(', ') + ' had no effect on this view.');
+}
