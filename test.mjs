@@ -377,6 +377,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const prompt = (i) => line({ type: 'user', uuid: 'u' + i, version: '9.9.9', message: { role: 'user', content: 'do thing ' + i } });
     t('a normal transcript carries no format warning', T.formatWarning(p) === null, String(T.formatWarning(p)));
     t('an aborted session (one prompt, no reply) carries no format warning', T.formatWarning(parseLines([prompt(1)])) === null);
+    const slash = (i, text, extra) => line({ type: 'user', uuid: 's' + i, version: '9.9.9', ...extra, message: { role: 'user', content: text } });
+    const slashOnly = parseLines([slash(1, 'Caveat: local commands below', { isMeta: true }), slash(2, '<command-name>/model</command-name>'),
+      slash(3, '<local-command-stdout>Set model</local-command-stdout>'), slash(4, '<command-name>/exit</command-name>'),
+      slash(5, '<local-command-stdout>Bye!</local-command-stdout>'), slash(6, '[Request interrupted by user]')]);
+    t('a session of slash commands alone carries no format warning', T.formatWarning(slashOnly) === null, String(T.formatWarning(slashOnly)));
     const renamed = parseLines([0, 1, 2].flatMap((i) => [prompt(i), line({ type: 'model_turn', requestId: 'r' + i, message: { usage: usage(1), content: [] } })]));
     const w1 = T.formatWarning(renamed);
     t('a renamed assistant entry is reported as a format change, with the version', !!w1 && /model request/.test(w1) && /9\.9\.9/.test(w1), String(w1));

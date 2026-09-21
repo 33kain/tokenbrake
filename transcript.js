@@ -395,11 +395,11 @@ function parseTranscript(file) {
   const compactions = [];            // request indices at which context was reset
   const boundaries = [];             // { atReq, trigger, preTokens, at } from each compact_boundary: what compacted it, from what size
   let cwd = null, sessionId = null, version = null;
-  let userTurns = 0;                 // user entries with a message: the input formatWarning weighs requests against
+  let userTurns = 0;                 // typed prompts (isPrompt): the input formatWarning weighs requests against
 
   for (const e of entries) {
     if (!e || typeof e !== 'object' || e.isSidechain) continue;
-    if (e.type === 'user' && e.message) userTurns++;
+    if (isPrompt(e)) userTurns++;
     if (!cwd && e.cwd) cwd = e.cwd;
     if (!sessionId && e.sessionId) sessionId = e.sessionId;
     if (!version && e.version) version = e.version;
@@ -496,6 +496,19 @@ function parseTranscript(file) {
   }
 
   return { file, cwd, sessionId, version, userTurns, requests, results, compactions, boundaries };
+}
+
+/* A user entry the person typed as a prompt, which a model request answers. Not the ones Claude Code writes
+   itself and answers locally: a slash command and its output (/model, /exit), the isMeta caveat beside them,
+   an interrupt marker, or a turn of tool results. Counting those let a session of slash commands alone read
+   as three prompts with no reply. */
+const LOCAL_ENTRY = /^\s*(<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>|\[Request interrupted)/;
+function isPrompt(e) {
+  if (e.type !== 'user' || !e.message || e.isMeta) return false;
+  const c = e.message.content;
+  const text = typeof c === 'string' ? c
+    : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text || '').join('') : '';
+  return !!text && !LOCAL_ENTRY.test(text);
 }
 
 /* The transcript is Claude Code's internal format, not a versioned API. When it changes, the parser above
