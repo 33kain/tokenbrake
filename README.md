@@ -19,6 +19,11 @@ unbounded reads of large files before they enter context. Its measured record, l
 [`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md), and it is thinner than the report's:
 install it when your own report says there is something in its reach.
 
+**Source:** everything that ships is three files at the root of this repository: `cli.js` (the installer and
+the report), `guard.js` (the hooks) and `transcript.js` (the transcript reader). There are no dependencies and
+no build step, so what npm installs is those files as they are here. Tests: `npm test` (`test.mjs`), run in
+CI on Windows and Ubuntu with Node 18, 20 and 22.
+
 ## Why there is no percentage on this page
 
 Anyone publishing a token-saving percentage for this category owes a control pair alongside it: the same task
@@ -527,6 +532,11 @@ npx tokenbrake clean --days=7   # delete saved full outputs older than 7 days
 
 ## Notes and limits
 
+- The report reads Claude Code's session transcripts, which are an internal format rather than a versioned
+  API. If a transcript stops reading as a real session would (user turns with no model requests back,
+  requests with no token usage, or tool results that match no tool call), `report` says the format may have
+  changed and names the Claude Code version that wrote it, rather than printing an empty session as the
+  finding. The pooled views skip such a session and give that as the reason.
 - Rewriting a tool result needs `updatedToolOutput` support in PostToolUse, which Claude Code added for
   built-in tools in the v2.1.12x line. On older versions the hook runs but changes nothing. Claude Code checks
   the rewrite against the tool's own result shape (for Bash: the `{ stdout, stderr, … }` object) and drops a

@@ -315,6 +315,7 @@ function whereReport() {
     const id = String(f.session).slice(0, 8);
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, evidence placed past line 300 by design');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -504,6 +505,7 @@ function reachReport() {
     const id = String(f.session).slice(0, 8);
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'a benchmark or calibration workload, which is the thing this view exists to check against');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -685,6 +687,7 @@ function readsReport() {
     const id = String(f.session).slice(0, 8);
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, sizes chosen by design');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -1110,6 +1113,8 @@ function report(plain) {
   /* raw: the config as written, so the replay line applies the person's own settings (thresholds, noTrim,
      alwaysCap, per-tool entries) the way the guard would. */
   const { readLimitLines, maxChars, toolMaxChars, raw } = guardCfg();
+  const formatNote = transcript.formatWarning(parsed);
+  if (formatNote) console.log(formatNote + '\n');
   console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars, userCfg: raw }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
@@ -1445,6 +1450,7 @@ function tuneReport() {
     if (want && !String(f.session).startsWith(want)) continue;
     let p;
     try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
+    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, not your work');
     if (skip) { skipped.push([id, skip]); continue; }

@@ -93,6 +93,15 @@ from a handful of sessions — this package included — is measuring the agent'
 verdict flipped from a reduction to "no measurable difference" when the third control was added, and
 both the flip and the flaw found in the rule that caused it are in that repository's `DEVIATIONS.md`.
 
+**The smallest effect that round could have detected** is the width of its control band. That means a
+change of more than **42.6% in tokens entered** or **44.9% in tokens carried**. Anything smaller could not be
+told from two identical sessions without the hook, whether it was real or not. No formal power analysis is
+given: that needs the spread of the control differences, and three controls are too few to estimate it. The
+same round showed that its band estimator (the maximum) widens with every control added (see
+[`AB-TASK.md`](AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought)). A round 2, if there is one, is
+pre-registered with a median band over at least four controls. Until then, read any figure under that
+width, from this package or from any other tool measured the same way, as inside the noise.
+
 One thing in that round is sharp rather than inconclusive, and it is the most useful sentence here:
 **tokens entering context fell in every single pair, while tokens *carried* — size times the number of
 later requests that re-read them — fell in only four of six and rose in two, once by 72.6%.** Carried is
