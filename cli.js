@@ -246,6 +246,15 @@ const poolSkip = (cwd, only, why) => only
   ? (cwd.toLowerCase().includes(only.toLowerCase()) ? '' : 'cwd does not contain "' + only + '"')
   : (transcript.stagedCwd(cwd) ? 'staged session -- ' + why + '; --cwd to include' : '');
 
+/* The parse every pooled view starts with: the transcript, or why it stays out of the pool. One copy for the
+   same reason poolSkip is one copy -- the four views must name a skipped session the same way. */
+function pooledParse(file) {
+  let p;
+  try { p = transcript.parseTranscript(file); } catch { return { unread: 'unreadable' }; }
+  if (transcript.formatWarning(p)) return { unread: 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')' };
+  return { p };
+}
+
 /* One copy of the A/B-arm caveat. --saved and --all both have to state it, and stating it in their own words
    is how they drifted: one said "outside a calibration directory" and the other did not. */
 const AB_ARM_NOTE = '  An A/B arm run outside a calibration directory is ordinary work by its cwd and is not ordinary\n'
@@ -313,9 +322,8 @@ function whereReport() {
   const byFile = new Map();
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
-    let p;
-    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
-    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
+    const { p, unread } = pooledParse(f.file);
+    if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, evidence placed past line 300 by design');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -503,9 +511,8 @@ function reachReport() {
   const pooled = [], skipped = [], sessions = [];
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
-    let p;
-    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
-    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
+    const { p, unread } = pooledParse(f.file);
+    if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'a benchmark or calibration workload, which is the thing this view exists to check against');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -685,9 +692,8 @@ function readsReport() {
   const bySource = { session: 0, ledger: 0, eof: 0, disk: 0 };
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
-    let p;
-    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
-    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
+    const { p, unread } = pooledParse(f.file);
+    if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, sizes chosen by design');
     if (skip) { skipped.push([id, skip]); continue; }
@@ -1448,9 +1454,8 @@ function tuneReport() {
   for (const f of found) {
     const id = String(f.session).slice(0, 8);
     if (want && !String(f.session).startsWith(want)) continue;
-    let p;
-    try { p = transcript.parseTranscript(f.file); } catch { skipped.push([id, 'unreadable']); continue; }
-    if (transcript.formatWarning(p)) { skipped.push([id, 'transcript format not recognized (Claude Code ' + (p.version || '?') + ')']); continue; }
+    const { p, unread } = pooledParse(f.file);
+    if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
     const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, not your work');
     if (skip) { skipped.push([id, skip]); continue; }
