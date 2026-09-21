@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **The report says when the transcript format may have changed.** Claude Code's transcripts are an internal
+  format. A transcript that stops reading as a real session would now gets a warning at the top of `report`,
+  naming the Claude Code version that wrote it, instead of being shown as an empty session. The warning fires
+  on user turns with no model requests back, requests with no token usage, or tool results that match no tool
+  call. The pooled views skip such a session and give that as the reason. It is quiet on all 148 transcripts
+  on the machine this was written on. transcript.js exports `formatWarning`.
+- EVIDENCE.md states the smallest effect the ab10 round could have detected (42.6% entered, 44.9% carried),
+  and says why no formal power analysis is given.
+- README says where the source is and how it is tested.
+
 ## 0.4.0 — 2026-09-18
 
 The instrument is the product: `npx tokenbrake report` needs nothing installed, reports only in tokens, and says

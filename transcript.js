@@ -395,9 +395,11 @@ function parseTranscript(file) {
   const compactions = [];            // request indices at which context was reset
   const boundaries = [];             // { atReq, trigger, preTokens, at } from each compact_boundary: what compacted it, from what size
   let cwd = null, sessionId = null, version = null;
+  let userTurns = 0;                 // typed prompts (isPrompt): the input formatWarning weighs requests against
 
   for (const e of entries) {
     if (!e || typeof e !== 'object' || e.isSidechain) continue;
+    if (isPrompt(e)) userTurns++;
     if (!cwd && e.cwd) cwd = e.cwd;
     if (!sessionId && e.sessionId) sessionId = e.sessionId;
     if (!version && e.version) version = e.version;
@@ -493,7 +495,36 @@ function parseTranscript(file) {
     for (const r of results) if (r.compactedAt == null) r.compactedAt = atReq;
   }
 
-  return { file, cwd, sessionId, version, requests, results, compactions, boundaries };
+  return { file, cwd, sessionId, version, userTurns, requests, results, compactions, boundaries };
+}
+
+/* A user entry the person typed as a prompt, which a model request answers. Not the ones Claude Code writes
+   itself and answers locally: a slash command and its output (/model, /exit), the isMeta caveat beside them,
+   an interrupt marker, or a turn of tool results. Counting those let a session of slash commands alone read
+   as three prompts with no reply. */
+const LOCAL_ENTRY = /^\s*(<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>|\[Request interrupted)/;
+function isPrompt(e) {
+  if (e.type !== 'user' || !e.message || e.isMeta) return false;
+  const c = e.message.content;
+  const text = typeof c === 'string' ? c
+    : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text || '').join('') : '';
+  return !!text && !LOCAL_ENTRY.test(text);
+}
+
+/* The transcript is Claude Code's internal format, not a versioned API. When it changes, the parser above
+   does not throw: it just recognizes nothing, and the report would print an empty or zeroed session as if
+   that were the finding. This names the three shapes of "recognized nothing" that a real session cannot
+   produce, so the report can say the format moved instead. Null when the transcript reads normally. The
+   thresholds leave room for an aborted session (a prompt or two and no reply). */
+function formatWarning(p) {
+  let why = null;
+  if (!p.requests.length && (p.userTurns >= 3 || p.results.length)) why = `none of its ${p.userTurns} user entries got a model request back`;
+  else if (p.requests.length >= 3 && !p.requests.some(r => r.usage)) why = `none of its ${p.requests.length} requests carries token usage`;
+  else if (p.results.length >= 3 && p.results.every(r => r.name === '?')) why = `none of its ${p.results.length} tool results matches a tool call`;
+  if (!why) return null;
+  return `This transcript does not read as expected: ${why}. Claude Code's transcript format may have changed `
+    + `(this one was written by ${p.version ? 'Claude Code ' + p.version : 'an unrecorded Claude Code version'}), `
+    + 'so the figures below may be empty or wrong. Please report it: https://github.com/33kain/tokenbrake/issues';
 }
 
 /* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, as
@@ -2453,7 +2484,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd, stagedKind,
