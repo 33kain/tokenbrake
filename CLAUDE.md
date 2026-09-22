@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-tokenbrake: two Claude Code hooks (`guard.js`), an installer and report CLI (`cli.js`), and the transcript reader behind
+tokenbrake: four Claude Code hooks (one `guard.js`), an installer and report CLI (`cli.js`), and the transcript reader behind
 the report (`transcript.js`). Plain Node, no dependencies, no build step.
 
 ```bash

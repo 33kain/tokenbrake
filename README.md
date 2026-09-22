@@ -14,10 +14,14 @@ token-reads, and the ranking puts results like that at the top where you can see
 that the brake could act on at all, and, when tokenbrake was not running, whether installing it is worth it for
 work like yours. Often it is not, and the report says so.
 
-The brake is step two: two Claude Code hooks (`npx tokenbrake init`) that trim oversized shell output and cap
+The brake is step two: Claude Code hooks (`npx tokenbrake init`) that trim oversized shell output and cap
 unbounded reads of large files before they enter context. Its measured record, losses included, is in
 [`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md), and it is thinner than the report's:
 install it when your own report says there is something in its reach.
+
+**Built for long sessions.** Every tool result is re-sent with each request after it, so the longer the session,
+the more a trim at entry saves. It runs wherever Claude Code runs locally, from one user-scope install: the CLI,
+and the Claude Desktop app on Windows (a local Code session there loads the same `~/.claude/settings.json`).
 
 **Source:** everything that ships is three files at the root of this repository: `cli.js` (the installer and
 the report), `guard.js` (the hooks) and `transcript.js` (the transcript reader). There are no dependencies and
@@ -45,14 +49,14 @@ could reach, and it leaves the decision to that. The whole record, losses includ
 
 ## Install
 
-As a Claude Code plugin (0.2.0):
+As a Claude Code plugin (0.4.0):
 
 ```
 claude plugin marketplace add 33kain/tokenbrake
 claude plugin install tokenbrake@tokenbrake
 ```
 
-or with npx, which writes the two hooks into a settings file you own:
+or with npx, which writes the hooks into a settings file you own:
 
 ```
 npx tokenbrake init            # user scope: ~/.claude/settings.json, applies to every project
@@ -66,7 +70,8 @@ the second pass is a no-op on an already trimmed output, and the ledger records 
 `--caps` and `--reach` drop the duplicate and say how many they dropped, and `status` reports the overlap -- but that
 is cleanup after a misconfiguration, not a mode to run in.
 
-Restart Claude Code (or run `/hooks` to confirm two tokenbrake entries). Node 18+ is the only requirement — no
+Restart Claude Code (or run `/hooks`: `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and `SessionStart` each list
+a tokenbrake entry, `guard.js` in its command). Node 18+ is the only requirement — no
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
 
 ```
