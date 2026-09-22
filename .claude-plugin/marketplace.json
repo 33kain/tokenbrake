@@ -12,7 +12,7 @@
         "source": "github",
         "repo": "33kain/tokenbrake"
       },
-      "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Two hooks, no dependencies.",
+      "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Four hooks from one guard.js, no dependencies.",
       "version": "0.4.0",
       "author": {
         "name": "Mili"

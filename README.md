@@ -49,7 +49,7 @@ could reach, and it leaves the decision to that. The whole record, losses includ
 
 ## Install
 
-As a Claude Code plugin (0.2.0):
+As a Claude Code plugin (0.4.0):
 
 ```
 claude plugin marketplace add 33kain/tokenbrake
