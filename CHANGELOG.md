@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **`init`, `uninstall` and `preset` refuse a settings file they cannot merge, instead of replacing it.** `init`
+  and `preset` read the file through a parse-error fallback of `{}` and wrote the merge back; one trailing comma
+  in `~/.claude/settings.json` cost the person's `model` and `permissions` keys, exit 0, no warning. All three
+  now share `tune --write`'s refusal: a malformed file, a file that could not be read, a JSON root that is not
+  an object, or a `hooks` value that is not an object (`"hooks": []` installed nothing and printed success) is
+  named, nothing is written, exit 1. An empty file and a file with a UTF-8 BOM (PowerShell 5.1 redirection)
+  merge as before. `doctor` and `status` name such a file instead of reporting the hooks as missing with
+  "run init". A write that fails (permissions, full disk) is refused the same way at every site. `tune
+  --write`'s own refusals exit 1 too (they exited 0).
+- **`init` and `uninstall` remove only tokenbrake's own hook entries.** Ownership was decided per hook group, so
+  a group someone had merged our hook into lost its other hooks.
+- **Every command exits 1 on an error it did not refuse on purpose**, with one line on stderr naming the command
+  and the cause, instead of a stack trace and an exit code that depended on the path.
+- `--top` and `--days` must be whole numbers (`--top` at least 1) or the command refuses; `--top=0` and
+  `--top=abc` silently became the default, `--days=abc` printed NaN, and `--days=-1` deleted every saved output.
+- `report --compare` joins an id-less ledger row by tool and command, the key the index files it under; it looked
+  the row up by command alone, a fallback that could never match. Rows have carried ids since 0.1.0.
+- Recorded in AB-TASK.md, not fixed: `compactionView` reads a post-boundary request without usage as zero context
+  and a missing timestamp as epoch zero. Left until stage B closes; the three counted compactions are checked
+  clear of both.
 - **The report says when the transcript format may have changed.** Claude Code's transcripts are an internal
   format. A transcript that stops reading as a real session would now gets a warning at the top of `report`,
   naming the Claude Code version that wrote it, instead of being shown as an empty session. The warning fires

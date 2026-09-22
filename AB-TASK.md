@@ -3891,3 +3891,17 @@ was pre-registered to answer -- whether the mechanism needs poor tooling to have
 **What may be quoted from this.** The verdict sentence and W, with the population named (30 guarded sessions
 of 61 pooled, staged work excluded). Not the pooled 11.1% as if it were W, and not any figure from a run
 before `be51821`.
+
+## Known limitation in `compactionView`, left as is while stage B runs — 2026-09-22
+
+The 2026-09-21 architecture review found two edges in `compactionView`: a post-boundary request with no `usage`
+reads as zero context, so `drop` and the saving inflate; and a request with no timestamp reads as epoch zero, so
+the gap to the request before it exceeds an hour and can register a false cold rebuild. Both are real. Neither
+is fixed here, because the fix changes the saving figure stage B reads, and `CLAUDE.md` forbids that mid-stage
+without an amendment.
+
+**Checked 2026-09-22 against the three compactions counted so far** (sessions `4eaa149a` at 2026-09-20 14:29
+and 18:27, `230261b2` at 2026-09-21 11:51): the first request after each boundary carries usage, and no request
+in any counted range lacks usage or a timestamp. The numbers read so far are untouched by either edge. The fix
+lands after stage B closes at 8, and the five compactions still to come are checked the same way before the
+verdict is read.

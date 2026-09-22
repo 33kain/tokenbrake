@@ -816,8 +816,7 @@ function commandTool(cmd) {
 /* The ledger row the guard wrote for a result, by id, else by tool and command -- the one join every "what did
    the guard do to this result" question goes through. */
 function offeredOf(parsed, ledgerRecs) {
-  const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
-  return (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+  return ledgerIndex(ledgerRecs || [], parsed.sessionId);
 }
 function trimmedResults(parsed, ledgerRecs) {
   const offered = offeredOf(parsed, ledgerRecs);
@@ -829,12 +828,11 @@ function trimmedResults(parsed, ledgerRecs) {
    through every later request they no longer sit in (carriedTurns + 1). Tokens only, never money -- the
    project states every saving in tokens entered and carried. */
 function trimSavings(parsed, ledgerRecs) {
-  const idx = ledgerIndex(ledgerRecs || [], parsed.sessionId);
-  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
-  const trimmed = parsed.results.filter((r) => r.marker && offeredOf(r));
+  const offered = offeredOf(parsed, ledgerRecs);
+  const trimmed = parsed.results.filter((r) => r.marker && offered(r));
   let saved = 0, savedCarried = 0, pts = 0, unpriced = 0;
   for (const r of trimmed) {
-    const l = offeredOf(r);
+    const l = offered(r);
     const tok = Math.round((l.chars - l.kept) / CHARS_PER_TOKEN);
     saved += tok;
     savedCarried += tok * (r.carriedTurns + 1);
@@ -976,8 +974,7 @@ function backfireVerdict(n, net, backfired, min) {
 function backfireAudit(parsed, ledgerRecs, opts) {
   carry(parsed);
   const ledger = ledgerRecs || [];
-  const idx = ledgerIndex(ledger, parsed.sessionId);
-  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
+  const offered = offeredOf(parsed, ledger);
 
   /* The withholds this audit can net exactly: marker in the transcript (the model saw the replacement) AND a
      ledger row that saved the withheld bytes to out/ (the original and kept sizes). kind is read from the row
@@ -997,7 +994,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const withholds = [];
   for (const r of parsed.results) {
     if (!r.marker) continue;
-    const l = offeredOf(r);
+    const l = offered(r);
     if (!l || l.excerpt) continue;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
     const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : (l.gitview ? 'gitview' : 'trim')));
@@ -1175,7 +1172,8 @@ function ledgerIndex(ledgerRecs, sessionId) {
     if (r.id) byId.set(r.id, r);
     else byWhat.set(r.tool + '|' + String(r.what || '').slice(0, 120), r);
   }
-  return { byId, byWhat };
+  /* The one join: a result's row by id, else by tool and command, the key the id-less rows were filed under. */
+  return (r) => byId.get(r.id) || byWhat.get(r.name + '|' + String(r.what || '').slice(0, 120));
 }
 
 /* The Read cap's own firings, from the ledger rather than the transcript: a capped Read produces a
@@ -2235,16 +2233,15 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
   lines.push(`  Tool results entered ~ ${kfmt(entered)} tokens of context, carried through later requests ~ ${kfmt(carried)} token-reads`);
 
-  const idx = ledgerIndex(ledger, parsed.sessionId);
   /* A ledger row says the guard offered a replacement. Only the transcript says whether the model saw it:
      above Claude Code's own ~30,000-character ceiling the hook gets a truncated copy and the model gets a
      2 KB persisted-output preview, and on PostToolUseFailure the replacement is ignored outright. Credit
      goes only to results whose text carries the guard's marker; the rest are reported as offered and not
      applied, never as savings. Found on the first Windows run (AB-TASK.md). */
-  const offeredOf = (r) => idx.byId.get(r.id) || idx.byWhat.get(r.name + '|' + r.what.slice(0, 120));
-  const trimmedOf = (r) => (r.marker ? offeredOf(r) : null);
+  const offered = offeredOf(parsed, ledger);
+  const trimmedOf = (r) => (r.marker ? offered(r) : null);
   const trimmed = parsed.results.filter(trimmedOf);
-  const ignored = parsed.results.filter(r => offeredOf(r) && !r.marker);
+  const ignored = parsed.results.filter(r => offered(r) && !r.marker);
   const sv = trimSavings(parsed, ledger);
   if (trimmed.length) {
     const svPts = sv.count > sv.unpriced
@@ -2360,7 +2357,7 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   const ranked = [...parsed.results].sort((a, b) => b.carried - a.carried || b.tokens - a.tokens).slice(0, top);
   for (const r of ranked) {
     const l = trimmedOf(r);
-    const mark = l ? `  [trimmed from ${kfmt(l.chars / CHARS_PER_TOKEN)}]` : (offeredOf(r) ? '  [trim not applied]' : (r.isError ? '  [error]' : ''));
+    const mark = l ? `  [trimmed from ${kfmt(l.chars / CHARS_PER_TOKEN)}]` : (offered(r) ? '  [trim not applied]' : (r.isError ? '  [error]' : ''));
     lines.push(`  ${kfmt(r.tokens).padStart(7)}  ${kfmt(r.carried).padStart(8)}  ${String(r.carriedTurns).padStart(5)}  ${r.name.padEnd(18).slice(0, 18)} ${r.what.slice(0, 56)}${mark}`);
   }
 
@@ -2393,10 +2390,10 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
 function sessionFacts(parsed, ledger) {
   carry(parsed);
   const u = usageTotals(parsed), rep = repeatReads(parsed);
-  const idx = ledgerIndex(ledger || [], parsed.sessionId);
+  const offered = offeredOf(parsed, ledger);
   let trimmed = 0, keptOut = 0;
   for (const r of parsed.results) {
-    const l = (r.id && idx.byId.get(r.id)) || idx.byWhat.get(r.what);
+    const l = offered(r);
     if (l && l.kept != null && l.chars != null && l.kept < l.chars) { trimmed++; keptOut += Math.round((l.chars - l.kept) / CHARS_PER_TOKEN); }
   }
   /* Split entered/carried by the tool class each guard feature acts on -- Read (the read cap), shell
