@@ -110,6 +110,20 @@ What this does not give you is the record. A cloud session's ledger and transcri
 go when it does, so `report` on your own machine never sees that work. The guard trims there; it just does not
 keep receipts.
 
+### From the phone, on your own machine — Remote Control
+
+A session you start from the phone is a cloud session. To use the phone *and* your own install -- the guard, the
+ledger and the transcripts on your disk -- start the session on your machine and drive it from the phone:
+
+```
+claude remote-control          # in the project folder; leave it running
+```
+
+The session then shows up in the Code tab of the Claude mobile app and at [claude.ai/code](https://claude.ai/code).
+It runs on your machine, so the user-scope hooks run exactly as they do at the keyboard, and `report` sees the work
+afterwards; the phone only types and reads. The machine has to stay on and the process running.
+`claude remote-control -c` reattaches to the last session started in that folder, for a few hours afterwards.
+
 ## What it does
 
 **Shell output trim** (PostToolUse on `Bash` / `PowerShell`; a command that exits non-zero fires `PostToolUseFailure` instead, where the guard is registered since 0.2.2 and records the failure, but current Claude Code ignores a hook's replacement on that event, so a failing run's output enters as Claude Code caps it, about 7,500 characters; see `AB-TASK.md`, "The failing command"). Output over 6,000 chars is replaced by up to 20
