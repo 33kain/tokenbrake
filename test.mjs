@@ -239,7 +239,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
 {
   console.log('\n-- cli: init / status / uninstall');
-  writeFileSync(join(CFG, 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo theirs' }] }] } }));
+  /* The person's own group carries a tokenbrake entry merged in by hand: ownership is per hook, so init
+     and uninstall must take that entry out and leave the group's other hook where it is. Deciding it per
+     group dropped the whole group, "echo theirs" included. */
+  writeFileSync(join(CFG, 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, hooks: { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo theirs' }, { type: 'command', command: 'node', args: ['/elsewhere/tokenbrake/guard.js', 'post'] }] }] } }));
   let r = cli(['init']);
   t('init exits 0', r.status === 0, r.stderr);
   const s = JSON.parse(readFileSync(join(CFG, 'settings.json'), 'utf8'));
@@ -253,8 +256,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      PATH Claude Code itself was started with. User scope records this node's path. */
   t('user scope records the absolute path of the installing node', post.command === process.execPath);
   t('guard.js was copied next to settings', existsSync(join(CFG, 'hooks', 'tokenbrake', 'guard.js')));
-  t('pre-existing hook group and permissions untouched',
-    s.permissions.allow[0] === 'Bash(ls)' && s.hooks.PostToolUse.some(g => g.hooks[0].command === 'echo theirs'));
+  t('pre-existing hook group and permissions untouched; only the tokenbrake entry left the shared group',
+    s.permissions.allow[0] === 'Bash(ls)' && s.hooks.PostToolUse.some(g => g.matcher === 'Bash' && g.hooks.length === 1 && g.hooks[0].command === 'echo theirs'), JSON.stringify(s.hooks.PostToolUse));
   r = cli(['init']);
   t('init is idempotent (re-run does not duplicate groups)', JSON.parse(readFileSync(join(CFG, 'settings.json'), 'utf8')).hooks.PostToolUse.length === 2);
 
@@ -326,6 +329,82 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('uninstall removes only our groups', after.hooks.PostToolUse.length === 1 && after.hooks.PostToolUse[0].hooks[0].command === 'echo theirs' && !after.hooks.PreToolUse);
   t('uninstall leaves permissions and the ledger', after.permissions.allow[0] === 'Bash(ls)' && existsSync(join(CFG, 'tokenbrake', 'ledger.jsonl')));
   t('uninstall removes the guard copy', !existsSync(join(CFG, 'hooks', 'tokenbrake', 'guard.js')));
+}
+
+{
+  console.log('\n-- cli: a file that cannot be merged is refused, never replaced');
+  /* init read settings.json through readJson, whose parse-error fallback is {}; the merge then wrote {} plus
+     tokenbrake's hooks back over the file. One trailing comma cost the person's model and permissions keys,
+     exit 0, no warning. tune --write had the refusal since 0.4.0; init, uninstall and preset now share it.
+     (Its parse and non-object branches are covered through tune --write further down; this is the wiring.) */
+  const sp = join(CFG, 'settings.json');
+  const before = readFileSync(sp, 'utf8');
+  const broken = '{ "model": "opus", "permissions": { "allow": ["Bash(ls)"] }, }';
+  writeFileSync(sp, broken);
+  let r = cli(['init']);
+  t('init refuses a malformed settings.json, exit 1', r.status === 1 && /is not valid JSON/.test(r.stdout), (r.stdout + r.stderr).split('\n').find(l => /JSON|Error/.test(l)) || '(no refusal)');
+  const left = readFileSync(sp, 'utf8');
+  t('and leaves the file byte-identical', left === broken, left);
+  r = cli(['uninstall']);
+  t('uninstall refuses it the same way', r.status === 1 && /is not valid JSON/.test(r.stdout) && readFileSync(sp, 'utf8') === broken);
+  /* doctor and status read the same file: a malformed one was diagnosed as "no hooks installed, run init",
+     and init refuses it -- a loop. */
+  r = cli(['doctor']);
+  t('doctor names the unmergeable settings file instead of sending the person to init', r.status === 1 && /is not valid JSON/.test(r.stdout) && !/no tokenbrake hooks installed/.test(r.stdout), r.stdout.split('\n').find(l => /ERROR/.test(l)));
+  r = cli(['status']);
+  t('status says so too', /the settings file is not valid JSON/.test(r.stdout));
+  /* "hooks": [] passes the object check on the root; the per-event lists init hung on the array were dropped
+     by JSON.stringify, so init printed success and installed nothing. */
+  writeFileSync(sp, '{ "hooks": [] }');
+  r = cli(['init']);
+  t('init refuses a settings file whose hooks value is not an object', r.status === 1 && /"hooks" value that is not an object/.test(r.stdout) && readFileSync(sp, 'utf8') === '{ "hooks": [] }', r.stdout.split('\n')[0]);
+  /* Nothing to lose in an empty file, and a BOM is what PowerShell 5.1 redirection writes: both install. */
+  for (const [name, body] of [['empty', ''], ['whitespace', '  \n'], ['BOM', '\uFEFF{ "model": "opus" }']]) {
+    writeFileSync(sp, body);
+    r = cli(['init']);
+    const got = JSON.parse(readFileSync(sp, 'utf8'));
+    t('init installs over a settings file that is ' + name, r.status === 0 && got.hooks && got.hooks.PostToolUse.length === 1 && (name !== 'BOM' || got.model === 'opus'), (r.stdout + r.stderr).split('\n')[0]);
+  }
+  /* A group of theirs that was already empty is not ours to drop. */
+  writeFileSync(sp, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edit', hooks: [] }] } }));
+  cli(['init']); cli(['uninstall']);
+  t('an empty group that was never ours survives init and uninstall', JSON.parse(readFileSync(sp, 'utf8')).hooks.PostToolUse.some(g => g.matcher === 'Edit'), readFileSync(sp, 'utf8'));
+
+  const cp = join(CFG, 'tokenbrake.json');
+  const had = existsSync(cp) ? readFileSync(cp, 'utf8') : null;
+  writeFileSync(cp, '{ "maxChars": 5000, }');
+  r = cli(['preset', 'balanced']);
+  t('preset refuses a malformed tokenbrake.json, exit 1, file untouched', r.status === 1 && /is not valid JSON/.test(r.stdout) && readFileSync(cp, 'utf8') === '{ "maxChars": 5000, }', r.stdout.split('\n')[0]);
+  if (had === null) rmSync(cp, { force: true }); else writeFileSync(cp, had);
+
+  /* `--days=abc` printed "removed 0 saved outputs older than NaN days"; `--days=-1` deleted every saved
+     output; `--top=0` and `--top=abc` silently became the default. */
+  for (const bad of ['abc', '-1', '1.5', '']) {
+    r = cli(['clean', '--days=' + bad]);
+    t('clean refuses --days=' + bad, r.status === 1 && /--days=.* is not a whole number of 0 or more/.test(r.stdout), r.stdout.split('\n')[0]);
+  }
+  r = cli(['report', '--top=0']);
+  t('report refuses --top=0', r.status === 1 && /--top=0 is not a whole number of 1 or more/.test(r.stdout), r.stdout.split('\n')[0]);
+  r = cli(['clean', '--days=3650']);
+  t('a whole number is accepted', r.status === 0 && /older than 3650 days/.test(r.stdout), r.stdout);
+  {
+    const fresh = mkdtempSync(join(tmpdir(), 'tokenbrake-clean-'));   // no out/ yet: the early return used to come first
+    const rf = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'clean', '--days=-1'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: fresh } });
+    t('clean refuses a bad --days whether or not out/ exists', rf.status === 1 && /is not a whole number/.test(rf.stdout), rf.stdout.split('\n')[0]);
+    rmSync(fresh, { recursive: true, force: true });
+  }
+
+  /* Anything a command did not refuse on purpose ended as a raw stack trace, exit 1 on some paths and 0 on
+     others. The dispatcher now reports it as one line on stderr, exit 1. init on a guard dir that is a file
+     throws from mkdirSync before anything is written. */
+  writeFileSync(sp, before);   // a readable settings file, so init gets past the read
+  const gd = join(CFG, 'hooks', 'tokenbrake');
+  rmSync(gd, { recursive: true, force: true });
+  writeFileSync(gd, 'not a directory');
+  r = cli(['init']);
+  t('an unexpected error is one line on stderr naming the command, exit 1, no stack trace',
+    r.status === 1 && /^tokenbrake init: /.test(r.stderr) && !/\n\s+at /.test(r.stderr) && r.stderr.trim().split('\n').length === 1, JSON.stringify(r.stderr.slice(0, 200)));
+  rmSync(gd, { force: true });
 }
 
 {
@@ -2775,6 +2854,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const zeroB = mk('zerob000', 'claude-opus-5', { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 1, cache_creation_input_tokens: 1 }, 39980);
   const cmpz = T.renderCompare(T.parseTranscript(zeroA), T.parseTranscript(zeroB), []);
   t('--compare: a sub-percent decrease renders +0%, never a signed -0%', !/-0%/.test(cmpz), cmpz.split('\n').find(l => /tool results entered/.test(l)));
+  /* Rows have carried ids since 0.1.0, so the by-command fallback is for older ledgers -- and sessionFacts
+     looked those rows up by command alone while the index filed them under tool|command, a join that could
+     never match. */
+  const idless = [{ ev: 'post', session: 'armb0000', tool: 'Bash', what: 'npm test', chars: 4000, kept: 200 }];
+  t('--compare joins an id-less ledger row by tool and command', T.sessionFacts(T.parseTranscript(armB), idless).trimmed === 1);
   const r = cli(['report', '--compare', 'arma0000', 'armb0000'], PROJ);
   t('cli: report --compare resolves session prefixes', r.status === 0 && /Change is B against A/.test(r.stdout), (r.stdout + r.stderr).slice(0, 200));
   const r2 = cli(['report', '--compare', 'arma0000'], PROJ);
@@ -3805,12 +3889,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   mkdirSync(dirAsCfg, { recursive: true });
   const rwDir = cli3(['tune', '--write']);
   t('tune --write names a read failure as a read failure, not as invalid JSON',
-    rwDir.status === 0 && /could not be read/.test(rwDir.stdout) && !/is not valid JSON/.test(rwDir.stdout),
+    rwDir.status === 1 && /could not be read/.test(rwDir.stdout) && !/is not valid JSON/.test(rwDir.stdout),
     rwDir.stdout.split('\n').find((l) => /could not be read|not valid JSON/.test(l)) || '(no refusal)');
   rmSync(dirAsCfg, { recursive: true, force: true });
   writeFileSync(cfg3Path, malformed);   // restore what this block displaced: the next assertion reads it back
 
-  t('tune --write aborts on a malformed config instead of wiping it', rwBad.status === 0 && /not valid JSON/.test(rwBad.stdout) && readFileSync(cfg3Path, 'utf8') === malformed, rwBad.stdout.split('\n').find(l => /valid JSON/.test(l)) || '(no abort)');
+  t('tune --write aborts on a malformed config instead of wiping it', rwBad.status === 1 && /not valid JSON/.test(rwBad.stdout) && readFileSync(cfg3Path, 'utf8') === malformed, rwBad.stdout.split('\n').find(l => /valid JSON/.test(l)) || '(no abort)');
 
   /* Valid JSON is not enough: every one of these parses, and each spreads into an empty (or index-keyed)
      merge base, so before the type check --write replaced the file with nothing but the flipped knobs --
@@ -3819,7 +3903,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     writeFileSync(cfg3Path, bad);
     const r = cli3(['tune', '--write']);
     t(`tune --write refuses a config whose JSON root is not an object: ${bad}`,
-      r.status === 0 && /is not a JSON object/.test(r.stdout) && readFileSync(cfg3Path, 'utf8') === bad,
+      r.status === 1 && /is not a JSON object/.test(r.stdout) && readFileSync(cfg3Path, 'utf8') === bad,
       readFileSync(cfg3Path, 'utf8') === bad ? (r.stdout.split('\n').find(l => /JSON object/.test(l)) || '(no refusal)') : 'FILE WAS REWRITTEN: ' + readFileSync(cfg3Path, 'utf8'));
   }
 
@@ -4294,7 +4378,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const src = readFileSync(join(process.cwd(), 'cli.js'), 'utf8');
     const names = (s) => new Set((s.match(/--[a-z][a-z-]+/g) || []));
     const spec = names(src.slice(src.indexOf('const SPEC = {'), src.indexOf('function nearest(')));
-    const read = names((src.match(/(?:flag|opt)\('--[a-z-]+'\)/g) || []).join(' '));
+    const read = names((src.match(/(?:flag|opt|count)\('--[a-z-]+'/g) || []).join(' '));
     const doc = names(spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env }).stdout);
     const missing = (a, b, skip) => [...a].filter((x) => !b.has(x) && !skip.includes(x));
     t('every option the code reads is declared in SPEC', missing(read, spec, ['--help']).join(' ') === '', missing(read, spec, ['--help']).join(' '));

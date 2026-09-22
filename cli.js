@@ -39,8 +39,48 @@ const opt = (name) => { asked.add(name); const a = args.find(x => x.startsWith(n
 const nodeCmd = opt('--node') || (PROJECT ? 'node' : process.execPath);
 
 function readJson(p, fallback) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return fallback; } }
+/* A message for the person, not a stack trace: the dispatcher at the bottom prints it and exits 1. For the
+   helpers below, which cannot `return` out of the command that called them; a command refusing in its own
+   body still prints and sets process.exitCode itself. */
+class Refusal extends Error {}
+/* The merge base for every command that spreads a person's file into a new one (init on settings.json;
+   preset and tune --write on tokenbrake.json). readJson's fallback is right for reading -- a broken file reads
+   as empty -- and wrong for writing back: {} spread into the merge and written replaces the file with nothing
+   but tokenbrake's own keys. Reproduced: one trailing comma in settings.json cost the model and permissions
+   keys, exit 0, no warning. A missing file starts fresh; anything else unusable is refused by name and nothing
+   is written. `null`, `[]`, `"x"` and `5` are valid JSON that spread to {} (or index keys) too, so they are
+   refused with the malformed ones. Read and parse are separated so EACCES and EISDIR are not reported as
+   "not valid JSON", which would send the person to edit a well-formed file. */
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+function mergeBase(p) {   // { value } or { why }
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); }
+  catch (e) { return e && e.code === 'ENOENT' ? { value: {} } : { why: 'could not be read (' + ((e && e.code) || 'unknown error') + ')' }; }
+  raw = raw.replace(/^\uFEFF/, '');   // PowerShell 5.1 redirection writes a BOM, which JSON.parse rejects
+  if (!raw.trim()) return { value: {} };   // an empty file has nothing to lose
+  let value;
+  try { value = JSON.parse(raw); } catch { return { why: 'is not valid JSON' }; }
+  if (!isObj(value)) return { why: 'is not a JSON object' };
+  /* "hooks": [] is an object by the check above and JSON.stringify drops the per-event lists init hangs
+     on an array, so the install printed success and installed nothing. */
+  if (value.hooks != null && !isObj(value.hooks)) return { why: 'has a "hooks" value that is not an object' };
+  return { value };
+}
+function readForWrite(p, before) {
+  const { value, why } = mergeBase(p);
+  if (why) throw new Refusal(p + ' ' + why + ' -- fix or remove it before ' + before + ', so its other settings are not lost. Nothing written.');
+  return value;
+}
+/* A whole-number option. Absent means the default; anything else that is not a whole number of at least
+   `min` is refused rather than silently read as the default (`--top=0`, `--top=abc`) or as NaN (`--days=x`
+   printed "NaN days" and deleted nothing; `--days=-1` deleted everything). */
+function count(name, def, min) {
+  const v = opt(name);
+  if (v === null) return def;
+  if (!/^\d+$/.test(v) || Number(v) < min) throw new Refusal(name + '=' + v + ' is not a whole number of ' + min + ' or more. Nothing done.');
+  return Number(v);
+}
 function writeJson(p, obj) {
-  fs.mkdirSync(path.dirname(p), { recursive: true });
   /* Write a sibling temp file and rename it over the target, rather than writing p directly: fs.writeFileSync
      opens with O_TRUNC, emptying an existing config before the write runs, so a failed write (full disk, quota,
      I/O error) would leave it wiped. temp-then-rename leaves the ORIGINAL untouched on any THROWN error -- the
@@ -51,8 +91,11 @@ function writeJson(p, obj) {
      target even when that target is itself a symlink (the config becomes a regular file), the accepted cost of
      an atomic replace. Not fsync-durable: a power loss in the rename window is out of scope for a config file. */
   const tmp = p + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
-  try { fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(tmp, p); }
-  catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(tmp, p); }
+  catch (e) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw new Refusal(p + ' could not be written (' + ((e && e.code) || 'unknown error') + ') -- your existing file was left unchanged. Check its permissions and free space, then re-run.');
+  }
 }
 /* Every hook tokenbrake installs, in one table: init installs exactly these, and uninstall, status and doctor
    look for exactly these events. hooks/hooks.json (the plugin) mirrors it, and test.mjs checks that it does.
@@ -69,9 +112,18 @@ const HOOKS = [
   { event: 'SessionStart', matcher: 'compact', mode: 'session-start' }
 ];
 const HOOK_EVENTS = HOOKS.map(h => h.event);
-function isOurs(group) {
-  return Array.isArray(group.hooks) && group.hooks.some(h =>
-    String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake')));
+const isOurHook = (h) => String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake'));
+function isOurs(group) { return Array.isArray(group.hooks) && group.hooks.some(isOurHook); }
+/* Remove tokenbrake's entries from an event's hook groups and keep everything else. A group is a matcher
+   plus a list of hooks; dropping every group that mentions tokenbrake took a person's other hooks in the
+   same group with it when they had merged ours into theirs by hand. A group ours was the whole of is
+   dropped; a group that was already empty is theirs and stays. */
+function withoutOurs(groups) {
+  return groups.flatMap(g => {
+    if (!isOurs(g)) return [g];
+    const hooks = g.hooks.filter(h => !isOurHook(h));
+    return hooks.length ? [{ ...g, hooks }] : [];
+  });
 }
 /* Hash guard.js by CONTENT, not raw bytes: a Windows checkout with core.autocrlf=true (the default) has a CRLF
    working tree while the git blob and the npm tarball are LF -- identical code, different bytes. Hashing raw
@@ -80,15 +132,15 @@ function isOurs(group) {
 function guardSha(p) { try { return require('crypto').createHash('sha256').update(fs.readFileSync(p, 'utf8').replace(/\r\n?/g, '\n')).digest('hex'); } catch { return null; } }
 
 function init() {
+  const settings = readForWrite(settingsPath, 'init');   // first, so a refusal has touched nothing
   fs.mkdirSync(guardDir, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'guard.js'), guardFile);
 
-  const settings = readJson(settingsPath, {});
   settings.hooks = settings.hooks || {};
   const hook = (mode) => ({ type: 'command', command: nodeCmd, args: [guardRef, mode], timeout: 15, statusMessage: 'tokenbrake' });
 
   for (const { event, matcher, mode } of HOOKS) {
-    settings.hooks[event] = (settings.hooks[event] || []).filter(g => !isOurs(g));
+    settings.hooks[event] = withoutOurs(settings.hooks[event] || []);
     settings.hooks[event].push({ matcher, hooks: [hook(mode)] });
   }
 
@@ -105,11 +157,11 @@ function init() {
 }
 
 function uninstall() {
-  const settings = readJson(settingsPath, null);
-  if (settings && settings.hooks) {
+  const settings = readForWrite(settingsPath, 'uninstall');
+  if (settings.hooks) {
     for (const ev of HOOK_EVENTS) {
       if (Array.isArray(settings.hooks[ev])) {
-        settings.hooks[ev] = settings.hooks[ev].filter(g => !isOurs(g));
+        settings.hooks[ev] = withoutOurs(settings.hooks[ev]);
         if (!settings.hooks[ev].length) delete settings.hooks[ev];
       }
     }
@@ -186,10 +238,12 @@ function selfTest(h) {
 }
 
 function status() {
-  const settings = readJson(settingsPath, {});
+  const base = mergeBase(settingsPath);
+  const settings = base.value || {};
   const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
   const has = (ev) => ours(ev).length > 0;
   console.log(`settings: ${settingsPath}`);
+  if (base.why) console.log(`  the settings file ${base.why} -- init and uninstall refuse it as it is; fix or remove it`);
   console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
   console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
@@ -210,7 +264,7 @@ function status() {
       + '`: until you do, the ledger records an older guard while the report reads it as this one.'
     : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
   for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
-    if (!isOurs({ hooks: [h] })) continue;
+    if (!isOurHook(h)) continue;
     console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
   }
   /* Both scopes at once means two guards per tool call: Claude Code runs the user-scope hooks and the
@@ -436,7 +490,7 @@ function capsReport() {
     console.log('working directory here. Use --session=<prefix>, or --where for the cwd-filtered view.');
     return;
   }
-  const top = Number(opt('--top') || 15) || 15;
+  const top = count('--top', 15, 1);
   const want = opt('--session');
   let recs = loadLedger();
   if (!recs.length) { console.log('No ledger yet. Run a Claude Code session with tokenbrake installed, then try again.'); return; }
@@ -503,7 +557,7 @@ function capsReport() {
    that re-read it, so counting results answers a different question from the one about the tokens. */
 function reachReport() {
   const only = opt('--cwd');
-  const top = Number(opt('--top') || 12) || 12;
+  const top = count('--top', 12, 1);
   const cfg = guardCfg();
   const ledger = loadLedger();
   const found = transcript.findTranscripts(CFG_DIR);
@@ -950,7 +1004,7 @@ function report(plain) {
   if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
   if (flag('--compactions')) return compactionsReport();
-  const top = Number(opt('--top') || 10) || 10;
+  const top = count('--top', 10, 1);
   const ledger = loadLedger();
   let file = opt('--transcript');
   const found = transcript.findTranscripts(CFG_DIR);
@@ -978,7 +1032,7 @@ function report(plain) {
          conclusion was drawn from the visible part within the hour. --top now governs it and an omission
          says so. The counts below are taken over EVERY session, not the printed ones: a count whose
          population is smaller than the header says is the same defect one line further down. */
-      const allTop = Number(opt('--top') || 30) || 30;
+      const allTop = count('--top', 30, 1);
 
       /* trimSavings credits only a result that carries the marker AND matches a post row, so a session with
          no marker cannot have a saving and is not worth carrying or indexing. posts is that ledger filter
@@ -1187,9 +1241,9 @@ function ledgerReport() {
 }
 
 function clean() {
+  const days = count('--days', 7, 0);   // before the early return, so a bad value is refused whether or not out/ exists
   const outDir = path.join(TB_DIR, 'out');
   if (!fs.existsSync(outDir)) { console.log('nothing to clean'); return; }
-  const days = Number(opt('--days') || 7);
   const cutoff = Date.now() - days * 86400000;
   let n = 0;
   for (const f of fs.readdirSync(outDir)) {
@@ -1222,7 +1276,7 @@ function preset() {
   }
   const keys = PRESETS[name];
   if (!keys) { console.log(`unknown preset "${name}". Known: ${Object.keys(PRESETS).join(', ')}`); process.exitCode = 1; return; }
-  const next = { ...readJson(cfgPath, {}), ...keys, preset: name };
+  const next = { ...readForWrite(cfgPath, 'preset'), ...keys, preset: name };
   writeJson(cfgPath, next);
   console.log(`preset "${name}" applied to ${cfgPath}`);
   console.log(`  ${JSON.stringify(next)}`);
@@ -1274,7 +1328,8 @@ function showOutput() {
 function doctor() {
   const FIX = flag('--fix');
   const problems = [];
-  const settings = readJson(settingsPath, {});
+  const base = mergeBase(settingsPath);
+  const settings = base.value || {};
   const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
   const has = (ev) => ours(ev).length > 0;
 
@@ -1282,7 +1337,10 @@ function doctor() {
   console.log(`  settings: ${settingsPath}`);
 
   const missing = HOOK_EVENTS.filter(ev => !has(ev));
-  if (missing.length === HOOK_EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
+  /* An unmergeable file first: reporting it as "no hooks installed, run init" sent the person to a command
+     that refuses the same file. */
+  if (base.why) problems.push({ sev: 'error', msg: `${settingsPath} ${base.why}`, fix: 'fix or remove it; init and uninstall refuse it as it is' });
+  else if (missing.length === HOOK_EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
   else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
 
   const srcSha = guardSha(path.join(__dirname, 'guard.js'));
@@ -1308,7 +1366,7 @@ function doctor() {
   }
 
   for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
-    if (!isOurs({ hooks: [h] })) continue;
+    if (!isOurHook(h)) continue;
     const v = selfTest(h);
     if (!/^ok/.test(v)) problems.push({ sev: 'error', msg: `${ev} hook spawn (${h.command}): ${v}`, fix: 'check the node path; re-run init with --node=<path-to-node>' });
   }
@@ -1530,45 +1588,15 @@ function tuneReport() {
       }
       return;
     }
-    /* Read the RAW file (not the defaults-merged cfg) as the merge base, so a default is never baked in. A
-       MISSING file starts fresh; a MALFORMED file is NOT overwritten -- readJson would swallow the parse error
-       and hand back {}, and writing that would wipe every real setting the merge exists to preserve. Abort and
-       let the person fix it instead. */
-    /* One refusal, whichever way the file is unusable: name what is wrong and change nothing. */
-    const refuse = (why) => console.log('  ' + cfgPath + ' ' + why + ' -- fix or remove it before --write, so its other settings are not lost. Nothing written.');
-    /* Read and parse are separated so the refusal names the real cause: catching both together reported
-       EACCES (a root-owned or locked config) and EISDIR as "is not valid JSON", which is false and sends the
-       person to edit a file that is perfectly well-formed. */
-    let raw, current;
-    try { raw = fs.readFileSync(cfgPath, 'utf8'); }
-    catch (e) {
-      if (e && e.code === 'ENOENT') raw = null;
-      else { refuse('could not be read (' + ((e && e.code) || 'unknown error') + ')'); return; }
-    }
-    if (raw === null) current = {};
-    else {
-      try { current = JSON.parse(raw); }
-      catch { refuse('is not valid JSON'); return; }
-    }
-    /* Parsing is not enough. `null`, `[]`, `"x"` and `5` are all VALID JSON, and spreading any of them into
-       the merge base below yields {} (or index keys, for a string) -- so the write would replace the file
-       with nothing but the flipped knobs. That is the same wipe the abort above exists to prevent, reached
-       through a different door. The guard treats such a file as inert (loadConfig spreads it over DEFAULTS
-       and gets DEFAULTS back, silently); here the identical shape is destructive, so it refuses instead. */
-    if (!current || typeof current !== 'object' || Array.isArray(current)) { refuse('is not a JSON object'); return; }
+    /* Read the RAW file (not the defaults-merged cfg) as the merge base, so a default is never baked in.
+       readForWrite refuses a malformed or non-object file (the guard treats such a file as inert; here the
+       identical shape would wipe every real setting the merge exists to preserve). */
+    const current = readForWrite(cfgPath, '--write');
     /* Every plan feature is off (decide() returns 'turn-on' only when the feature is off), so each is a real
        false -> true flip -- there is no "already matches" case (a matching feature is 'keep' and never here). */
     const next = { ...current };
     for (const f of plan) next[f.knob] = true;
-    /* The read and parse above refuse cleanly; the write itself can still fail (a root-owned or read-only
-       config, a full disk). writeJson writes a temp file and renames it into place, so a failure leaves the
-       existing config untouched -- catch it here to name the cause and stop, rather than end on an unhandled
-       stack trace that reads like a tokenbrake bug. */
-    try { writeJson(cfgPath, next); }
-    catch (e) {
-      console.log('  ' + cfgPath + ' could not be written (' + ((e && e.code) || 'unknown error') + ') -- your existing config was left unchanged. Check its permissions and free space, then re-run --write.');
-      return;
-    }
+    writeJson(cfgPath, next);   // a failed write is refused by name, the existing file untouched
     console.log('  Turned ON ' + plan.length + ' feature(s) in ' + cfgPath + ' (every other key preserved):');
     for (const f of plan) {
       const m = f.measured;   // always present with fired > 0: decide() gives 'turn-on' only to a measured feature
@@ -1887,10 +1915,20 @@ function accept() {
 
 const plainArgs = accept();
 if (plainArgs) {
-  cmds[cmd](plainArgs);
-  /* The other half of the same defect: `report --ledger --top=5` and `report --all --cwd=x` name real
-     options that the view they were given to never reads. flag()/opt() recorded what the command asked
-     about, so what is left over is exactly what said nothing -- said out loud rather than swallowed. */
-  const idle = [...new Set(args.slice(1).filter((a) => a.startsWith('-')).map((a) => a.split('=')[0]))].filter((n) => !asked.has(n));
-  if (idle.length && !process.exitCode) console.log('\nNote: ' + idle.join(', ') + ' had no effect on this view.');
+  try {
+    cmds[cmd](plainArgs);
+    /* The other half of the same defect: `report --ledger --top=5` and `report --all --cwd=x` name real
+       options that the view they were given to never reads. flag()/opt() recorded what the command asked
+       about, so what is left over is exactly what said nothing -- said out loud rather than swallowed. */
+    const idle = [...new Set(args.slice(1).filter((a) => a.startsWith('-')).map((a) => a.split('=')[0]))].filter((n) => !asked.has(n));
+    if (idle.length && !process.exitCode) console.log('\nNote: ' + idle.join(', ') + ' had no effect on this view.');
+  } catch (e) {
+    /* A Refusal is the command declining on purpose, worded for the person. Anything else (a rename the OS
+       refused, a settings.json that is a directory, a file that vanished mid-run) used to end as a raw stack
+       trace with exit 1 on some paths and 0 on others; now it is one line naming the command and the cause,
+       on stderr, exit 1. */
+    if (e instanceof Refusal) console.log(e.message);
+    else console.error('tokenbrake ' + cmd + ': ' + ((e && e.message) || String(e)) + (e && e.code ? ' (' + e.code + ')' : ''));
+    process.exitCode = 1;
+  }
 }
