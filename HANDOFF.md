@@ -1480,7 +1480,7 @@ node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
   Claude Code session (this one included), no claude.ai chat, no scheduled task or loop. A block whose rows
   show a `fiveResets` change is void.
 - **About 130 messages and three idles of over an hour.** On Opus 5 it took 4.6 hours and moved the meter
-  about 50 points, split over two windows. The script stops itself at 90%.
+  about 45 points, split over two windows. The script stops itself at 90%.
 - **After it:** weights from `calib.jsonl` the same way as the Opus 5 table. Record them in `AB-TASK.md` under
   their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
   holds one), and Opus 5.5 compactions count from the day that merges.
