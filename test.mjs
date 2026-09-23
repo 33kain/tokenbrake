@@ -4252,6 +4252,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('stage 2: manual, other models and bench or calibration sessions do not',
     TR.compactionWhy({ ...row, trigger: 'manual' }, '/w') === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, '/w'))
     && TR.compactionWhy(row, '/x/tokenbrake-bench') === 'benchmark/calibration' && TR.compactionWhy(row, '/tmp/calibration') === 'benchmark/calibration');
+  t('stage 2: Opus 5.5 is not Opus 5, though its id starts the same; a dated Opus 5 id still is',
+    TR.compactionWhy({ ...row, model: 'claude-opus-5-5' }, '/w') === 'model claude-opus-5-5'
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-20260301' }, '/w') === '');
   const rowsOf = (saving, rec) => Array.from({ length: TR.STAGE2.n }, () => ({ saving, recovery: { pts: rec } }));
   t('stage 2: no verdict before 8 are counted', TR.compactionVerdict(rowsOf(10, 0).slice(1)).verdict === null);
   t('stage 2: PASS when recovery plus the 1.6 charge stays under half the saving', TR.compactionVerdict(rowsOf(10, 1)).verdict === 'PASS');

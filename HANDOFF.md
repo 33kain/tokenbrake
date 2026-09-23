@@ -1450,3 +1450,37 @@ different sample from the ones already counted. Revisit when the eighth compacti
 **Open, not started (added here):**
 - Apply or reject `dedup: false` — after stage B.
 - Try `readMaxBytes: 45000` for a few sessions, then re-run `tune` — after stage B.
+
+## Stage B at 3 of 8, and the Opus 5.5 recalibration ready to run — 2026-09-23
+
+**Fixed: Opus 5.5 was being counted as Opus 5.** `calibrated()` in `transcript.js` matched by prefix, and
+`claude-opus-5-5` starts with `claude-opus-5`. So the 2026-09-22 23:52 compaction in `ae2c409a` (hq), which ran
+on Opus 5.5 (the session switched from Opus 5 at 20:56 UTC), was counted against the amendment's rule. It now
+matches the calibrated id exactly, or with a date suffix. `report --compactions` lists 23:52 as
+`model claude-opus-5-5`, and the count is **3 of 8** (15.0 points saved; cost 12% at the estimate, 34% at the
+bound). The same fix stops the report from pricing Opus 5.5 trims with Opus 5 points: they now count in tokens
+only until the 5.5 weights are in.
+
+**The recalibration, ready to run.** This is the 2026-09-18 run repeated unchanged on Opus 5.5 (AB-TASK.md,
+the 2026-09-22 amendment), in the order that run took. Run it from a directory whose path contains
+`calibration`, so every pool leaves these sessions out:
+
+```powershell
+mkdir C:\Users\Q\calibration-opus-5-5; cd C:\Users\Q\calibration-opus-5-5
+$cal = "C:\Users\Q\projects\tokenbrake\scripts\calibrate.mjs"
+node $cal --block=B0 --n=20                                  # floor; first row: check model = claude-opus-5-5
+node $cal --block=B1 --n=20 --build=250000                   # ~430k warm; note the session id it prints
+node $cal --block=B1 --n=40 --resume=<B1 id>                 # the 40-message repeat, only if B1 moved < 5 points (it did on Opus 5)
+node $cal --block=B5 --n=40 --prompt="Write about 4,000 words on any topic. Use no tools."
+node $cal --block=B3 --n=3 --resume=<B1 id> --idle=66        # three cold rewrites, a probe before each; ~3.5 hours
+node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
+```
+
+- **Before starting:** the five-hour window under 60%, and nothing else running on the account: no other
+  Claude Code session (this one included), no claude.ai chat, no scheduled task or loop. A block whose rows
+  show a `fiveResets` change is void.
+- **About 130 messages and three idles of over an hour.** On Opus 5 it took 4.6 hours and moved the meter
+  about 50 points, split over two windows. The script stops itself at 90%.
+- **After it:** weights from `calib.jsonl` the same way as the Opus 5 table. Record them in `AB-TASK.md` under
+  their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
+  holds one), and Opus 5.5 compactions count from the day that merges.
