@@ -532,7 +532,12 @@ function formatWarning(p) {
 const LIMIT_WEIGHTS = { model: 'claude-opus-5', read: 0.20, write: 8.9, output: 34 };
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
-const calibrated = (model, weights = LIMIT_WEIGHTS) => String(model || '').startsWith(weights.model);
+/* The calibrated model itself, or it with a date suffix -- not a later model whose id merely starts the same
+   (claude-opus-5-5 starts with claude-opus-5 and is not calibrated; AB-TASK.md, 2026-09-22 amendment). */
+const calibrated = (model, weights = LIMIT_WEIGHTS) => {
+  const m = String(model || '');
+  return m.startsWith(weights.model) && /^(-\d{8})?$/.test(m.slice(weights.model.length));
+};
 /* A result's price: written once, then re-read on each request that carries it. */
 const resultPts = (tokens, carriedTurns, weights = LIMIT_WEIGHTS) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
 
