@@ -3905,3 +3905,32 @@ and 18:27, `230261b2` at 2026-09-21 11:51): the first request after each boundar
 in any counted range lacks usage or a timestamp. The numbers read so far are untouched by either edge. The fix
 lands after stage B closes at 8, and the five compactions still to come are checked the same way before the
 verdict is read.
+
+## Amendment: stage B continues on Opus 5.5 after a recalibration — 2026-09-22, before any Opus 5.5 number is read
+
+**Why.** Claude Code's model picker no longer offers Opus 5; the owner's sessions now run on Opus 5.5
+(`claude-opus-5-5`). Stage B counts automatic compactions on the calibrated model only, so as written it can
+never reach 8. Three are counted on Opus 5 (2026-09-20 14:29 and 18:27, 2026-09-21 11:51), all passing with
+margin. Closing stage B at three would leave the 300k window without a verdict on the model the owner uses.
+The owner chose on 2026-09-22 to continue on Opus 5.5 instead.
+
+**What carries over, and what does not.** Opus 5.5 has the same tokenizer, the same 1M window and the same
+output cap as Opus 5, so a compaction at 300k removes the same context and later requests stop re-reading
+the same tokens. What is per model is the weight of each kind of token against the five-hour window, and
+`LIMIT_WEIGHTS` holds Opus 5's. Opus 5.5 is not assumed to weigh the same.
+
+**The recalibration.** The 2026-09-18 calibration, repeated unchanged on Opus 5.5: same blocks, same prompt,
+same resolution rules, same `scripts/calibrate.mjs` (its `--model opus` alias now resolves to Opus 5.5; the
+`model` column in `calib.jsonl` records what ran). Effort stays `low` as in the original. Not started above 60%
+of the five-hour window. Results are recorded here under their own heading before any Opus 5.5 compaction is
+priced.
+
+**How stage B counts after it.**
+- The three Opus 5 compactions stay counted, priced with the Opus 5 weights.
+- Opus 5.5 automatic compactions count from the day the Opus 5.5 weights are merged, priced with those
+  weights. Any Opus 5.5 compaction before that day is listed and not counted.
+- The pass rule is unchanged: 8 counted in total, recovery plus compaction's charge at the 1.6-point bound
+  under half the predicted saving, no more than one "felt worse" logged. The compaction charge bound is
+  re-derived from the Opus 5.5 run the same way, and the larger of the two bounds is used for the verdict.
+- If the Opus 5.5 weights differ from Opus 5's by more than the calibration's own resolution, the verdict is
+  also given separately for each model, and both are quoted.
