@@ -1485,19 +1485,29 @@ node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
   their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
   holds one), and Opus 5.5 compactions count from the day that merges.
 
-## The Opus 5.5 recalibration ran void; rerun it — 2026-09-24
+## The Opus 5.5 recalibration ran void; the daylight rerun is one command — 2026-09-24
 
 The first run (2026-09-23 18:44 to 2026-09-24 06:39 UTC) is void. The owner's `autoCompactWindow: 300000` (stage
-B's setting) applies to headless `claude -p` too, so the 411k B1 build auto-compacted to 2k after its first
-message, and B1, B3 and B4 all ran on a ~30k session. B5 also compacted once. Details and the per-block table are
-in `AB-TASK.md` under "Opus 5.5 recalibration, first run". No weights come from it; stage B stays at 3 of 8.
+B's setting) applies to headless `claude -p` too. The 411k B1 build auto-compacted to 2k after its first message,
+so B1, B3 and B4 ran on a ~30k session, and B5 compacted once as well. Details are in `AB-TASK.md` under "Opus 5.5
+recalibration, first run". Stage B stays at 3 of 8.
 
-`scripts/calibrate.mjs` now passes `--autocompact auto` and stops with `VOID:` on any compaction a block did not
-ask for. The rerun is the runbook above, unchanged, from a **new** directory (the old `calib.jsonl` must not mix
-in):
+**The rerun** is the amendment "the Opus 5.5 recalibration reruns in daylight". B3's overnight idles are replaced
+by three builds. The whole run is one command that checks its own conditions and stops within minutes if any
+fails. About 85 minutes, and about 45-60 points of the five-hour window. It is best started right after a reset,
+so it finishes in one window instead of waiting for the next.
 
 ```powershell
-mkdir C:\Users\Q\calibration-opus-5-5-r2; cd C:\Users\Q\calibration-opus-5-5-r2
+mkdir C:UsersQcalibration-opus-5-5-r2; cd C:UsersQcalibration-opus-5-5-r2
+node C:UsersQprojects	okenbrakescriptscalibrate.mjs --plan
+node C:UsersQprojects	okenbrakescriptscalibrate-weights.mjs
 ```
 
-then the same six commands. The check that it worked: the B1 rows after the build read ~411k each, not ~17k.
+- **Before:** close every other Claude Code session (this one too), claude.ai chat, and any scheduled task or
+  loop. The script voids a span if another session on this machine makes a request inside it, but claude.ai chat
+  leaves no trace here.
+- **It stops by itself** on a model other than `claude-opus-5-5`, an error, an unrequested compaction, a B1
+  message not at ~411k, a window reset inside a span, another session's request, or the window at 90%.
+- **After:** `calibrate-weights.mjs` prints the weights with their ranges, marks where Opus 5's fall inside or
+  outside them, and prints the B1/B4 checks and compaction's bound. They go into `AB-TASK.md` under their own
+  heading. Then `LIMIT_WEIGHTS` becomes per model, and Opus 5.5 compactions count from the day that merges.

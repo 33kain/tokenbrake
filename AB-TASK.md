@@ -3956,7 +3956,49 @@ No weight is read from it. It also records one change from the Opus 5 run, on Cl
 message writes about 9k tokens of 1-hour cache (B0: 185k over 20 messages; the Opus 5 B0 wrote 50k over 21). It is
 the same in every block, so the per-block differences the weights come from are not affected.
 
-**The rerun.** Unchanged, except that `scripts/calibrate.mjs` now passes `--autocompact auto` (the model's own
-window, as on 2026-09-18) and stops the run on any compaction a block did not ask for. That puts back the
-2026-09-18 conditions and changes nothing the calibration measures. Same blocks, same order, same resolution
-rules, from a fresh directory.
+**The script.** `scripts/calibrate.mjs` now passes `--autocompact auto` (the model's own window, as on
+2026-09-18) and stops the run on any compaction a block did not ask for.
+
+## Amendment: the Opus 5.5 recalibration reruns in daylight, B3 replaced by builds — 2026-09-24, before any of it is run
+
+**Why.** The first run is void, and the owner will not give it another night. The night was B3: three idles of
+over an hour, only to let the cache expire before each cold rewrite. Everything else took about 80 minutes. The
+2026-09-22 amendment stands: Opus 5.5 compactions count from the day these weights merge, priced with them. This
+amendment only changes how the weights are measured. It is committed before the rerun's first message.
+
+**What changes, and why it measures the same thing.**
+- **B3 becomes BW: three builds of the B1 size (~411k), each in a new session, back to back.** A cold rewrite and a
+  build are the same kind of token, a 1-hour cache write (`ephemeral_1h` in the usage), and both are about 411k.
+  An hour's wait adds nothing to the weight. BW does not record what Claude Code offers after a long break.
+- **B0 is not rerun.** No weight comes from it (on 2026-09-18 it was a floor below resolution), and the void
+  run's B0 is clean.
+- **Every span opens and closes on a probe**: one message in a new session, 90 seconds after the block's last
+  message. A span's tokens are its opening probe and the block's rows. The meter lags one message, so the closing
+  probe's reading holds everything before it and nothing of itself. On 2026-09-18 a span ran from one block's
+  first reading to the next block's. The lag rule is the same, but the edges are now clean.
+- **The B1 repeat is 60 messages, and it always runs.** On Claude Code 2.1.281 a resumed small session wrote ~9k of
+  1-hour cache per message (the void run). If the ~411k session does the same, a third of the span's draw is
+  writes, and 60 keeps the read weight above resolution after they are subtracted.
+- **B4 follows the B1 repeat directly**, while the B1 session is warm. On 2026-09-18 it followed B3's last cold
+  rewrite, which also left it warm.
+- **The weights are solved together.** B1R, BW and B5 each give one equation: reads x a + writes x w + output x o
+  = the meter's move, in millions of tokens, where writes are cache writes plus uncached input. Three spans, three
+  unknowns. The ranges take every combination of each move ±1 point. On 2026-09-18 the same subtraction was done
+  one weight at a time. B1 and B4 are checks: the weights' prediction against the meter, reported, not used.
+  Compaction's bound is B4's move + 1, less what the weights predict for its rows. The derivation is
+  `scripts/calibrate-weights.mjs`, committed with this amendment; `--selftest` recovers known weights from
+  synthetic rows.
+- **Windows.** The run starts under 60%. Before each block, if the reading plus the block's estimate would pass
+  85%, the script waits for the window to reset. A span whose probes straddle a reset is void.
+
+**Void, and the run stops (the script enforces each):** a model other than `claude-opus-5-5`; an error; a
+compaction outside B4; a B1 or B1R message under 380k of context; any other Claude Code session on this machine
+with a model reply inside a span; the window at 90%. Chat on claude.ai leaves no trace on this machine, so the
+owner keeps it closed.
+
+**Unchanged:** the "ok" prompt, `--model opus`, effort low, the build size, B5's prompt and 40 replies, the
+5-point resolution rule, and every rule of the 2026-09-18 section and the 2026-09-22 amendment.
+
+**One command:** `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path contains
+`calibration`, then `node <repo>/scripts/calibrate-weights.mjs` in it. The results go under their own heading
+below, before any Opus 5.5 compaction is priced.
