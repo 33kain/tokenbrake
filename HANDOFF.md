@@ -1484,3 +1484,20 @@ node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
 - **After it:** weights from `calib.jsonl` the same way as the Opus 5 table. Record them in `AB-TASK.md` under
   their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
   holds one), and Opus 5.5 compactions count from the day that merges.
+
+## The Opus 5.5 recalibration ran void; rerun it — 2026-09-24
+
+The first run (2026-09-23 18:44 to 2026-09-24 06:39 UTC) is void. The owner's `autoCompactWindow: 300000` (stage
+B's setting) applies to headless `claude -p` too, so the 411k B1 build auto-compacted to 2k after its first
+message, and B1, B3 and B4 all ran on a ~30k session. B5 also compacted once. Details and the per-block table are
+in `AB-TASK.md` under "Opus 5.5 recalibration, first run". No weights come from it; stage B stays at 3 of 8.
+
+`scripts/calibrate.mjs` now passes `--autocompact auto` and stops with `VOID:` on any compaction a block did not
+ask for. The rerun is the runbook above, unchanged, from a **new** directory (the old `calib.jsonl` must not mix
+in):
+
+```powershell
+mkdir C:\Users\Q\calibration-opus-5-5-r2; cd C:\Users\Q\calibration-opus-5-5-r2
+```
+
+then the same six commands. The check that it worked: the B1 rows after the build read ~411k each, not ~17k.

@@ -3934,3 +3934,29 @@ priced.
   re-derived from the Opus 5.5 run the same way, and the larger of the two bounds is used for the verdict.
 - If the Opus 5.5 weights differ from Opus 5's by more than the calibration's own resolution, the verdict is
   also given separately for each model, and both are quoted.
+
+### Opus 5.5 recalibration, first run — 2026-09-23 18:44 to 2026-09-24 06:39 UTC: void, rerun
+
+**Why it is void.** The owner's user settings carry stage B's `autoCompactWindow: 300000`, and headless
+`claude -p` honours it. The 2026-09-18 run had no such setting, so this run did not repeat it unchanged. The B1
+build reached 411,826 tokens, and the next message auto-compacted it to 2,433 (`compact_boundary`, trigger
+`auto`, in `201aa5a7`). Every block that resumed that session then ran at about 20-35k instead of 430k. The B5
+session auto-compacted once at 300k as well. The protocol voids a block for auto-compaction outside B4, so:
+
+| block | rows | five-hour | status |
+|---|---|---|---|
+| B0 fresh | 1 + 20 | 3 → 4 | clean, below resolution (as on Opus 5) |
+| B1 build + 20 | 1 + 20 | 4 → 9 | void: auto-compacted after its first message |
+| B1 repeat | 1 + 40 | 9 → 13 | void: ran at ~35k, not 430k |
+| B5 long replies | 1 + 40 | 13 → 29 | void: auto-compacted once |
+| B3 cold ×3 | 3 + 3 probes | 29 → 0 → 0 | void: each cold write was ~17k, not ~430k; the window reset inside the block |
+| B4 compact + 20 | 1 + 1 + 20 | 0 → 2 | void: compacted a ~34k session |
+
+No weight is read from it. It also records one change from the Opus 5 run, on Claude Code 2.1.281: every resumed
+message writes about 9k tokens of 1-hour cache (B0: 185k over 20 messages; the Opus 5 B0 wrote 50k over 21). It is
+the same in every block, so the per-block differences the weights come from are not affected.
+
+**The rerun.** Unchanged, except that `scripts/calibrate.mjs` now passes `--autocompact auto` (the model's own
+window, as on 2026-09-18) and stops the run on any compaction a block did not ask for. That puts back the
+2026-09-18 conditions and changes nothing the calibration measures. Same blocks, same order, same resolution
+rules, from a fresh directory.

@@ -2,6 +2,8 @@
 // One headless `claude -p` per message; logs the five-hour meter and the request's usage to ./calib.jsonl.
 // Run it from an empty directory whose path contains "calibration", so calibrate-pool.mjs leaves these sessions out.
 // The meter reading a message returns does not include that message yet: compare readings across spans.
+// `--autocompact auto` keeps the model's own window whatever the user settings say (stage B sets 300k, which
+// compacted the 2026-09-23 run's 411k build); any compaction a block didn't ask for stops the run.
 //
 //   node <repo>/scripts/calibrate.mjs --block=B0 --n=20
 //   node <repo>/scripts/calibrate.mjs --block=B1 --n=20 --build=250000   # new session; --build is a chars/4 target, and repo text is denser: 250000 gave 411k tokens
@@ -41,15 +43,16 @@ function filler(tokens) {
 }
 
 function send(input) {
-  const args = ['-p', '--model', 'opus', '--effort', 'low', '--output-format', 'stream-json', '--verbose'];
+  const args = ['-p', '--model', 'opus', '--effort', 'low', '--output-format', 'stream-json', '--verbose', '--autocompact', 'auto'];
   if (session) args.push('--resume', session);
   const r = spawnSync('claude', args, { input, encoding: 'utf8', shell: true, maxBuffer: 1 << 28, cwd: process.cwd() });
-  let meter = null, result = null;
+  let meter = null, result = null, compacted = false;
   for (const line of (r.stdout || '').split('\n')) {
     if (!line.startsWith('{')) continue;
     let e; try { e = JSON.parse(line); } catch { continue; }
     if (e.type === 'rate_limit_event') meter = e.rate_limit_info;
     if (e.type === 'result') result = e;
+    if (e.type === 'system' && e.subtype === 'compact_boundary') compacted = true;
   }
   if (!result) throw new Error('no result event: ' + (r.stderr || r.stdout || '').slice(0, 400));
   session = result.session_id;
@@ -62,7 +65,7 @@ function send(input) {
     input: u.input_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens,
     write1h: u.cache_creation?.ephemeral_1h_input_tokens, write5m: u.cache_creation?.ephemeral_5m_input_tokens,
     output: u.output_tokens, turns: result.num_turns, model: Object.keys(result.modelUsage || {}).join(','),
-    isError: result.is_error,
+    isError: result.is_error, compacted,
   };
   return row;
 }
@@ -70,6 +73,10 @@ function send(input) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const log = (row, kind) => {
   appendFileSync(LOG, JSON.stringify({ ...row, kind }) + '\n');
+  if (row.compacted && kind !== 'compact') {
+    console.log(`VOID: ${kind} auto-compacted in session ${row.session.slice(0, 8)}; this block does not count`);
+    process.exit(1);
+  }
   console.log(`${kind.padEnd(6)} five=${row.five} read=${row.cacheRead} write=${row.cacheWrite} out=${row.output} turns=${row.turns} session=${row.session.slice(0, 8)}`);
 };
 
