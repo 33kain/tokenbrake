@@ -4002,3 +4002,44 @@ owner keeps it closed.
 **One command:** `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path contains
 `calibration`, then `node <repo>/scripts/calibrate-weights.mjs` in it. The results go under their own heading
 below, before any Opus 5.5 compaction is priced.
+
+### Opus 5.5 recalibration, second run — 2026-09-24 17:56 to 22:54 UTC: void, rerun
+
+**Why it is void.** `--autocompact auto`, added after the first run, broke the prompt cache on every resumed call.
+Every B1 and B1R message read only the system prompt from cache (17,099) and wrote the whole ~395k session again as
+1-hour cache. B1R was meant to measure the read weight and measured writes instead. Each message drew about 3 points,
+not the 0.2 the plan assumed, and the window reached 90% after 31 of B1R's 60 messages.
+
+| block | rows | five-hour | cache writes | cache reads | status |
+|---|---|---|---|---|---|
+| B1 build + 20 | probe + 1 + 20 | 1 → 88 | 8.30M | 0.40M | not used: no message read the build |
+| B1R | probe + 31 | 0 → 90 (stopped) | 12.28M | 0.53M | void: stopped at 90%, and no message read the build |
+
+No weight is read from it. Both spans are almost entirely 1-hour writes, but they give about 10.5 and 7.3 points per
+million. That difference is recorded here without an explanation, and it is not used.
+
+**The cause, from an uncounted diagnostic** (2026-09-25, `C:\Users\Q\calibration-diag-cache`, a ~41k session and
+four resumed "ok" messages per arm). With `--autocompact auto`, every resumed message read 17,095 and wrote ~24k.
+Without the flag, and under the owner's `autoCompactWindow: 300000`, every resumed message read the whole ~41k from
+cache and wrote nothing. The first run had no flag, and its first resumed B1 message read 411,711 from cache.
+
+## Amendment: the compaction window comes from a settings file, chosen by a preflight — 2026-09-25, before any of it is run
+
+**What changes.**
+- **The window.** Each call widens the compaction window so that the 411k build is not compacted, as before. It no
+  longer uses `--autocompact auto`. A **preflight** runs before the first probe and tries two ways in order:
+  `--settings` with a file holding `autoCompactWindow: 1000000`, then `--autocompact 1000000`. Each gets a new
+  ~15k session and two resumed messages. The run uses the first way whose resumed messages both read at least 90% of
+  their context from cache. If neither does, the run stops before any span. The preflight's rows go to
+  `preflight.jsonl`, not `calib.jsonl`, and count toward nothing.
+- **A new void rule:** a B1 or B1R message that reads less than 380k from cache stops the run. It would have stopped
+  the second run after its first message, about 4 points in.
+
+The preflight checks the cache at ~15k, not whether the chosen way really keeps a 411k session from compacting. The
+existing rules check that: any compaction outside B4, or a B1 message under 380k of context, stops the run.
+
+**Unchanged:** everything in the 2026-09-24 amendment: the blocks, their sizes and order, the probes, the windows,
+the solve, and every void rule.
+
+**One command,** as before: `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path
+contains `calibration`.
