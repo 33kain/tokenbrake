@@ -3956,7 +3956,40 @@ No weight is read from it. It also records one change from the Opus 5 run, on Cl
 message writes about 9k tokens of 1-hour cache (B0: 185k over 20 messages; the Opus 5 B0 wrote 50k over 21). It is
 the same in every block, so the per-block differences the weights come from are not affected.
 
-**The rerun.** Unchanged, except that `scripts/calibrate.mjs` now passes `--autocompact auto` (the model's own
-window, as on 2026-09-18) and stops the run on any compaction a block did not ask for. That puts back the
-2026-09-18 conditions and changes nothing the calibration measures. Same blocks, same order, same resolution
-rules, from a fresh directory.
+**The script.** `scripts/calibrate.mjs` now passes `--autocompact auto` (the model's own window, as on
+2026-09-18) and stops the run on any compaction a block did not ask for, so a later calibration cannot repeat this.
+
+## Amendment: Opus 5.5 is priced with the Opus 5 weights, without a recalibration — 2026-09-24, after the void run was read
+
+**Why.** The owner will not rerun the calibration: it costs a night and most of a five-hour window. The void run
+still holds usable evidence. This amendment is written **after** its numbers were read, so it is a post-hoc
+decision and says so.
+
+**The evidence.** The spans of the void run with no compaction inside them, priced with the Opus 5 weights
+(0.20 / 8.9 / 34), against what the meter moved:
+
+| span | mix | measured | predicted with Opus 5 weights |
+|---|---|---|---|
+| B0 | reads + writes, tiny | 1 | 1.8 |
+| B1 repeat, at ~35k | writes (0.60M), reads 0.70M | 4 | 5.5 |
+| B5 | output (408k), reads 4.98M, writes 0.42M | 16 | 18.6, before its compaction request |
+| the whole first window | all of it | 26 | 31.2, before its two compaction requests |
+
+Every span drew less than the Opus 5 weights predict, about 15-25% less, whether writes or output dominate. At
+1-point resolution on 26 points, that is outside the quantisation. Within it, no kind of token weighs more on
+Opus 5.5 than on Opus 5.
+
+**What it does not show.** The read weight on Opus 5.5 is not tested on its own: no warm large-context block
+survived, and reads are a small share of every clean span. The compaction charge bound is not re-derived (B4 is
+void), so the Opus 5 bound, 1.6 points, stands.
+
+**Why the Opus 5 weights are safe for stage B's verdict.** The pass rule is a ratio: recovery plus compaction's
+charge against half the predicted saving, all priced with the same weights. A uniform scale cancels out. What
+could bias it is one kind weighing relatively more on 5.5, and the evidence above shows none heavier.
+
+**How stage B counts from here.** This replaces the 2026-09-22 amendment's recalibration step:
+- Opus 5.5 automatic compactions count from **2026-09-24 00:00 UTC**, priced with the Opus 5 weights. The
+  2026-09-22 23:52 compaction stays listed and not counted.
+- The three Opus 5 compactions stay counted. The pass rule, the 1.6-point bound and the "felt worse" limit are
+  unchanged. The verdict quotes the Opus 5 and Opus 5.5 compactions separately as well as together.
+- Only stage B's counting changes. The report's other point figures still price Opus 5.5 in tokens only.

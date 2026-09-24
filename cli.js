@@ -949,7 +949,7 @@ function readsReport() {
 /* `--compactions`: every compaction on this machine, priced with the calibrated weights -- the measurement for
    stage 2 of "An earlier compaction window" (AB-TASK.md). Per compaction: the saving the drop in context buys
    until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
-   stage counts automatic compactions on Opus 5 only, outside benchmark and calibration sessions, from --since. */
+   stage counts automatic compactions on Opus 5, and on Opus 5.5 from 2026-09-24, outside benchmark and calibration sessions, from --since. */
 function compactionsReport() {
   const sinceArg = opt('--since');
   const since = sinceArg ? Date.parse(sinceArg) : null;

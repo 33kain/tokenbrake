@@ -1485,19 +1485,15 @@ node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
   their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
   holds one), and Opus 5.5 compactions count from the day that merges.
 
-## The Opus 5.5 recalibration ran void; rerun it — 2026-09-24
+## The Opus 5.5 recalibration ran void; stage B prices 5.5 with the Opus 5 weights — 2026-09-24
 
-The first run (2026-09-23 18:44 to 2026-09-24 06:39 UTC) is void. The owner's `autoCompactWindow: 300000` (stage
-B's setting) applies to headless `claude -p` too, so the 411k B1 build auto-compacted to 2k after its first
-message, and B1, B3 and B4 all ran on a ~30k session. B5 also compacted once. Details and the per-block table are
-in `AB-TASK.md` under "Opus 5.5 recalibration, first run". No weights come from it; stage B stays at 3 of 8.
+The recalibration (2026-09-23 18:44 to 2026-09-24 06:39 UTC) is void. The owner's `autoCompactWindow: 300000`
+(stage B's setting) applies to headless `claude -p` too. The 411k B1 build auto-compacted to 2k after its first
+message, so B1, B3 and B4 ran on a ~30k session, and B5 compacted once as well. `scripts/calibrate.mjs` now
+passes `--autocompact auto` and stops with `VOID:` on any compaction a block did not ask for.
 
-`scripts/calibrate.mjs` now passes `--autocompact auto` and stops with `VOID:` on any compaction a block did not
-ask for. The rerun is the runbook above, unchanged, from a **new** directory (the old `calib.jsonl` must not mix
-in):
-
-```powershell
-mkdir C:\Users\Q\calibration-opus-5-5-r2; cd C:\Users\Q\calibration-opus-5-5-r2
-```
-
-then the same six commands. The check that it worked: the B1 rows after the build read ~411k each, not ~17k.
+**No rerun (owner's decision).** In the void run's clean spans the meter moved about 15-25% less than the Opus 5
+weights predict (26 points against 31), so those weights overstate Opus 5.5, and the pass rule is a ratio.
+The amendment in `AB-TASK.md` ("Opus 5.5 is priced with the Opus 5 weights") makes it official: Opus 5.5
+automatic compactions count from 2026-09-24, and `compactionWhy` implements that. Stage B stays at **3 of 8**
+and needs 5 more automatic compactions.
