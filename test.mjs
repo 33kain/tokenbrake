@@ -4253,8 +4253,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     TR.compactionWhy({ ...row, trigger: 'manual' }, '/w') === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, '/w'))
     && TR.compactionWhy(row, '/x/tokenbrake-bench') === 'benchmark/calibration' && TR.compactionWhy(row, '/tmp/calibration') === 'benchmark/calibration');
   t('stage 2: Opus 5.5 is not Opus 5, though its id starts the same; a dated Opus 5 id still is',
-    TR.compactionWhy({ ...row, model: 'claude-opus-5-5' }, '/w') === 'model claude-opus-5-5'
+    TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: Date.parse('2026-09-22T23:52:00Z') }, '/w') === 'model claude-opus-5-5 before 2026-09-24'
     && TR.compactionWhy({ ...row, model: 'claude-opus-5-20260301' }, '/w') === '');
+  t('stage 2: Opus 5.5 counts from 2026-09-24 (the amendment), and a later model id does not ride along',
+    TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: Date.parse('2026-09-24T00:00:00Z') }, '/w') === ''
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5-20261001', at: Date.parse('2026-10-02T00:00:00Z') }, '/w') === ''
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-6', at: Date.parse('2026-10-02T00:00:00Z') }, '/w') === 'model claude-opus-5-6'
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: null }, '/w') === 'model claude-opus-5-5 before 2026-09-24');
   const rowsOf = (saving, rec) => Array.from({ length: TR.STAGE2.n }, () => ({ saving, recovery: { pts: rec } }));
   t('stage 2: no verdict before 8 are counted', TR.compactionVerdict(rowsOf(10, 0).slice(1)).verdict === null);
   t('stage 2: PASS when recovery plus the 1.6 charge stays under half the saving', TR.compactionVerdict(rowsOf(10, 1)).verdict === 'PASS');

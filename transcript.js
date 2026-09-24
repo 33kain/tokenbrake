@@ -647,11 +647,15 @@ const STAGE2 = { n: 8, share: 0.5 };
 const STAGED = [['bench', /tokenbrake-bench/i], ['calib', /calibration/i]];
 const stagedKind = (cwd) => (STAGED.find(([, re]) => re.test(cwd || '')) || [''])[0];
 const stagedCwd = (cwd) => !!stagedKind(cwd);
+/* Opus 5.5 counts too, priced with the Opus 5 weights, from the day the 2026-09-24 amendment set (AB-TASK.md: the
+   void recalibration's clean spans drew less than those weights predict). An earlier 5.5 compaction stays listed. */
+const STAGE2_ALSO = { model: 'claude-opus-5-5', from: Date.parse('2026-09-24T00:00:00Z') };
 function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
   if (stagedCwd(cwd)) return 'benchmark/calibration';
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
-  if (!calibrated(row.model, weights)) return 'model ' + (row.model || '?');
-  return '';
+  if (calibrated(row.model, weights)) return '';
+  if (calibrated(row.model, STAGE2_ALSO)) return row.at >= STAGE2_ALSO.from ? '' : 'model ' + row.model + ' before 2026-09-24';
+  return 'model ' + (row.model || '?');
 }
 function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
   const saving = counted.reduce((s, r) => s + r.saving, 0);
