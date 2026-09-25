@@ -7,6 +7,8 @@
 //   node scripts/write-reach.cjs [--min=N]
 const path = require('path'), os = require('os');
 const T = require(path.join(__dirname, '..', 'transcript.js'));
+// A headless `claude -p` session (entrypoint sdk-cli) is scripted work wherever it ran, not the owner's.
+const headless = (file) => /"entrypoint":"sdk-cli"/.test(require('fs').readFileSync(file, 'utf8'));
 const CFG = path.join(os.homedir(), '.claude');
 const MIN = +(process.argv.find(a => a.startsWith('--min='))?.slice(6) || 5000);
 const HOUR = 3600e3;
@@ -19,7 +21,7 @@ const topSessions = new Map();
 
 for (const f of T.findTranscripts(CFG)) {
   let p; try { p = T.parseTranscript(f.file); } catch { continue; }
-  if (T.stagedCwd(p.cwd) || T.formatWarning(p) || p.requests.length < 10) continue;
+  if (T.stagedCwd(p.cwd) || headless(f.file) || T.formatWarning(p) || p.requests.length < 10) continue;
   pool++;
   const d = T.limitDraw(p); drawPts += d.read + d.write + d.output; readPts += d.read; writePts += d.write; outPts += d.output;
   resultTok += p.results.reduce((a, r) => a + r.tokens, 0);

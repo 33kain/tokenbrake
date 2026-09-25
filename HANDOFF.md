@@ -1642,3 +1642,26 @@ content and a re-write of context that was already cached. Each re-write of 5k+ 
   act on. Keeping 500k warm costs one read, about 0.08 points, against a ~3.8-point rebuild. This would ask the
   user, which the 2026-09-18 discussion left to the report, so it reopens that decision with this number. It needs
   pre-registration in `AB-TASK.md`, and nothing that changes what enters context while stage B runs.
+
+## Correction: three headless calibration sessions were in the pool; unexplained misses — 2026-09-25
+
+Three sessions from the 2026-09-18 Opus 5 limit calibration ran from the root of a scratchpad whose path has no
+"calibration" in it. `stagedCwd` therefore passed them as the owner's work (`b459f9c1`, `aa6b75a4`, `8f5c8425`). All
+three are headless `claude -p` runs, and their transcripts say so (`"entrypoint":"sdk-cli"`). None of the 94 work
+sessions on this machine carries that entrypoint; theirs are `cli` or `claude-desktop`. Both analysis scripts now
+drop `sdk-cli` sessions. Stage B is unaffected: the only compaction among the three was manual.
+
+Corrected, on 57 sessions (~349 points):
+
+- **Cold re-writes after >1h idle: 16.3% of the draw** (27 events, 12 sessions, ~56.9 points, median 185k after 175
+  minutes). The entry above said 16.7%, and the coldWarn pre-registration quotes that figure. Both still hold.
+- **Subagent steering:** unchanged. Delegating still loses ~18 points.
+- **Unexplained misses: 2 events, 0.9%,** not 6 and 1.9%. Four were calibration's headless resumes. In both of the
+  remaining two, the 29,951-token system-and-tools prefix still read from cache, and one request in the message
+  history differed from its neighbours. In `122def48` (38 minutes idle), one request with 79 tokens of output
+  re-wrote 151k, and the next read the old 181k cache again. In `230261b2` (back after 16 hours), the context was
+  written twice, 199k and then 205k, 22 seconds apart. This is Claude Code's behaviour, not a brake lever at 0.9%.
+
+**Open (a bug, not an analysis):** the pooled views (`--where`, `--reads`, `--reach`, `tune`) use the same
+`stagedCwd` and so include those three sessions. Headless sessions should count as staged work. That changes the
+counting rule for those views, so it needs an `AB-TASK.md` amendment first. It does not change stage B's count.
