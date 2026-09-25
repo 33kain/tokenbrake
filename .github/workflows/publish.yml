@@ -9,7 +9,8 @@ name: Publish tokenbrake
 # Guards, in order: the tokenbrake suite must pass; the version in
 # package.json must not already be on the registry (a re-run of a published
 # version fails at npm anyway, but this says so in plain words first); then
-# publish. Nothing here touches the extension or the worker.
+# publish; then wait until that exact version is readable on the registry.
+# Nothing here touches the extension or the worker.
 
 on:
   workflow_dispatch:
@@ -51,7 +52,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # A publish can report success before the version is readable, so wait for this exact version (up to 10
+      # minutes) and fail if it never shows, instead of printing whatever the registry had before.
       - name: Verify on the registry
         run: |
-          sleep 10
-          npm view tokenbrake version dist.tarball
+          V=$(node -p "require('./package.json').version")
+          for i in $(seq 1 60); do
+            if npm view "tokenbrake@$V" version dist.tarball --prefer-online 2>/dev/null | grep -q .; then
+              npm view "tokenbrake@$V" version dist.tarball --prefer-online
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "tokenbrake@$V is not on the registry 10 minutes after npm publish reported success"
+          exit 1
