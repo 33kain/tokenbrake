@@ -3,8 +3,9 @@
 // Run it from an empty directory whose path contains "calibration", so calibrate-pool.mjs leaves these sessions out.
 // The meter reading a message returns does not include that message yet: compare readings across spans.
 // The user settings' autoCompactWindow (stage B sets 300k) compacted the 2026-09-23 run's 411k build, so every call
-// carries a wider window. `--autocompact auto` did that but broke the cache on every resumed call (the 2026-09-24 run),
-// so a preflight picks the first way to widen it that keeps a resumed message reading its session from cache.
+// carries a wider window. A preflight picks the first way to widen it under which a resumed message reads its session
+// from cache. Every build starts with its own nonce: the API caches by prefix across sessions, so two identical builds
+// within the hour would read each other's cache (the 2026-09-25 preflight passed on the settings arm's writes).
 // Any compaction a block didn't ask for, and any B1/B1R message that doesn't read the build from cache, stops the run.
 //
 // The whole Opus 5.5 recalibration in one command (AB-TASK.md, 2026-09-24 amendment), then the weights:
@@ -43,7 +44,8 @@ function filler(tokens) {
   while (out.length < tokens * 4) out += text;
   return out.slice(0, tokens * 4);
 }
-const buildPrompt = (tokens) => 'Below is a document for later reference. Reply with the single word ok. Use no tools.\n\n' + filler(tokens);
+const buildPrompt = (tokens) => `Build ${Date.now()}-${Math.random().toString(36).slice(2)}. ` +
+  'Below is a document for later reference. Reply with the single word ok. Use no tools.\n\n' + filler(tokens);
 
 /* The ways to widen the compaction window, in the order the preflight tries them. --settings takes a file: the call
    goes through a shell, which would mangle inline JSON. */
@@ -118,7 +120,8 @@ function check(row, kind) {
 }
 
 /* Before any span: a small session and two resumed messages under each window, logged to preflight.jsonl, not counted.
-   The first window whose resumed messages both read at least 90% of their context from cache is the run's. */
+   The first window whose build was written, not read from another session's cache, and whose resumed messages both
+   read at least 90% of their context from cache is the run's. */
 function preflight() {
   writeFileSync(SETTINGS, JSON.stringify({ autoCompactWindow: 1000000 }) + '\n');
   for (const w of WINDOWS) {
@@ -132,6 +135,7 @@ function preflight() {
       console.log(`${row.t.slice(11, 19)} PF   ${w.name.padEnd(8)} read=${row.cacheRead} write=${row.cacheWrite} of ${ctx}`);
       if (row.model !== MODEL) stop(`the preflight ran on ${row.model || '?'}, not ${MODEL}`);
       if (row.isError || row.compacted) stop(`the preflight under "${w.name}" returned an error or compacted`);
+      if (!i && (row.cacheWrite || 0) < 0.5 * ctx) stop(`the preflight build under "${w.name}" was read from cache, not written: it proves nothing`);
       if (i && (row.cacheRead || 0) < 0.9 * ctx) ok = false;
     }
     if (ok) { console.log(`window: ${w.name} (${w.args.join(' ')}) keeps the cache`); return; }

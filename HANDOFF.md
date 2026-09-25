@@ -1537,3 +1537,17 @@ node C:\Users\Q\projects\tokenbrake\scripts\calibrate-weights.mjs
 
 The owner holds one free reset in reserve. If the plan stops to wait for a reset before a block, that reset lets it
 go on without the wait. A span whose probes straddle a reset is void, so it is used only while the script is waiting.
+
+## The third recalibration run was void; headless resumed messages miss the cache on every version — 2026-09-25
+
+The third run stopped at B1's first resumed message: it read 17,099 from cache and wrote the whole ~394k build again.
+The preflight had passed only because both of its arms sent the same text. The second arm's new session read the
+first arm's cache, and the diagnostic behind the second run's fix had the same flaw. With a unique text per session,
+every headless session tested (2.1.277 to 2.1.282, every window, `--safe-mode`, stream-json without `--resume`)
+rewrites the whole session on each user turn after the first. Interactive sessions and tool calls inside a headless
+turn read as usual. 2.1.277 read the build on 2026-09-18 and misses today, so this is not a Claude Code version. The
+details are in `AB-TASK.md` under "Opus 5.5 recalibration, third run". Stage B stays at 3 of 8.
+
+`calibrate.mjs` now gives every build its own nonce, and a preflight build read from cache stops the run. The
+preflight now stops before any span, which is correct. Do not start a fourth run with the current plan. The read
+weight needs another way to be measured (an amendment), or headless resume has to read the cache again.

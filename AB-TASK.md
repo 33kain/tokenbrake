@@ -4043,3 +4043,38 @@ the solve, and every void rule.
 
 **One command,** as before: `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path
 contains `calibration`.
+
+### Opus 5.5 recalibration, third run — 2026-09-25 08:33 to 08:34 UTC: void at B1's first message
+
+**Why it is void.** The preflight chose `--autocompact 1000000`. The B1 build wrote 394,133 tokens of 1-hour cache,
+and the first resumed message read 17,099 from cache and wrote 394,179. The 380k read rule stopped the run there.
+One probe, one build and that one message ran. No weight is read from it.
+
+**Why the preflight passed.** Both of its arms sent the same ~10k build text. The `settings` arm wrote it, and the
+`flag` arm's new session read it (build: read 40,938, write 0). The API caches by prefix across sessions, so the
+`flag` arm read what the `settings` arm had written, and its resumed messages never had to read their own session.
+The 2026-09-25 diagnostic in `C:\Users\Q\calibration-diag-cache` has the same flaw. Its no-flag arm read everything,
+including its build (40,961 read, 0 written), from the arm before it. Its conclusion, that the flag broke the cache
+and that resumed calls without it read their session, does not hold.
+
+**What an uncounted diagnostic with a unique text per session shows** (2026-09-25, `C:\Users\Q\calibration-diag-r3`,
+a ~41k build and two "ok" messages per arm, `claude-opus-5-5` unless noted). Every message after the first in a
+headless session read only the system prompt (~17k) and wrote the whole session again:
+- 2.1.282 with no window flag, with the `--settings` file, with `--autocompact 1000000`, with `--safe-mode`, with
+  `--strict-mcp-config`, with `--disable-slash-commands`, and with `--exclude-dynamic-system-prompt-sections`;
+- 2.1.282 in one process fed two more messages over `--input-format stream-json`, with no `--resume`;
+- 2.1.280 and 2.1.281; 2.1.277 and 2.1.281 on `claude-sonnet-5` (2.1.277 and 2.1.278 do not know `claude-opus-5-5`).
+
+Tool calls inside one headless turn read the turn's prefix as usual (write ~100 per step), and so does an interactive
+session across user turns. Only the step from one user turn to the next, headless, misses. 2.1.277 is the version
+whose B1R read the build on 2026-09-18, and it misses today, so the change is not in the Claude Code version.
+The first run's 411,711 read was the request that auto-compacted the build, not an ordinary resumed message. Its
+B0, on 2.1.281, wrote ~9k a message: the whole small session each time.
+
+**Fixed in `calibrate.mjs`, with nothing measured changing:** every build starts with its own nonce, and a preflight
+build that is read from cache instead of written stops the run. With the nonce, the preflight stops before any span
+(checked 2026-09-25 08:58 UTC, `C:\Users\Q\calibration-preflight-check`). The nonce also matters for BW: its three
+builds used the same text as B1's build, within the hour, so they would have read B1's cache instead of writing.
+
+**Not rerun.** As long as headless resumed messages miss the cache, B1R cannot measure the read weight. Measuring it
+another way changes the protocol and needs an amendment before any run.
