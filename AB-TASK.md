@@ -4172,3 +4172,66 @@ nothing that is measured or counted. It fixes only where the owner's lines live,
 
 | date | compaction (UTC) | model | what felt worse, one line | lost fact |
 |---|---|---|---|---|
+
+## A warning before the cache goes cold — pre-registered 2026-09-25, before anything is built or run
+
+**Why.** On the owner's 60 sessions (HANDOFF.md, 2026-09-25, `scripts/write-reach.cjs`), re-writing context after
+an idle gap longer than the cache's 1-hour life is **16.7% of the draw** (27 events, ~64 points). 7 of them came
+within 75 minutes (~23 points), and 17 within 3 hours (~45). Nothing automatic can prevent them. A hook has no
+timer, and a headless `claude -p --resume` re-writes the whole session instead of reading it. What is left is to
+tell the owner in time. One message sent to a warm session re-reads the context (~0.08 points at 500k on Opus 5.5)
+and keeps the cache alive. After expiry, the same context costs ~3.8 points to re-write.
+
+**A decision reopened.** The 2026-09-18 discussion put asking the user in the report, not the brake. On 2026-09-25
+the owner chose to test a warning as part of the brake, because of this number. The warning is one line and
+changes nothing in context. Whether to act on it stays with the owner.
+
+**The feature, `coldWarn`, off by default.**
+- **Arm:** the `Stop` hook arms a timer when a turn ends in a session whose context is at least **100k** (a re-write
+  of at least ~0.76 points on Opus 5.5). Context is the last request's usage in the transcript.
+- **Warn:** at **50 minutes** without a new request, one desktop notification names the session's folder, its
+  context and the re-write it would cost in points, and says any message keeps it warm.
+- **Cancel:** a new prompt (`UserPromptSubmit`), or any later request in that session.
+- **Repeat:** at most every 50 minutes while the session stays idle, and never after 3 hours from the last request.
+  After that, the owner is taken to be away.
+- **Record:** every warning goes to the ledger (`ev: 'coldwarn'`, session, context, time).
+- **Fail open:** any failure (no notifier, no transcript, a timer that cannot start) warns about nothing and changes
+  nothing else.
+
+**Checks before it counts (a pilot, uncounted):**
+1. A cache read refreshes the 1-hour life. In one interactive session, a message at ~50 minutes, then another ~50
+   minutes later, must both read the context from cache. If the read does not refresh the life, the warning
+   saves nothing, and the test stops here.
+2. The notification shows on the owner's Windows machine from a timer the hook started, and the hook itself
+   returns at once.
+3. A new prompt cancels the timer. No warning fires in a session that is being worked in.
+
+**When it runs.** **Only after stage B closes.** `compactionView` counts a cold re-write after a compaction as
+part of the compaction's saving (`transcript.js`, `colds`). A warning that prevents cold re-writes would shrink
+stage B's measured saving mid-stage. Building it may start then too. The remediation scope of 2026-09-22 holds
+until then.
+
+**Measured per warning, from the ledger and the transcripts:**
+- **Kept warm:** the next request came before the cache expired (50 + 10 minutes from the last request) and read
+  at least 90% of the previous context from cache.
+- **Cost:** the points of every request whose prompt came between the warning and the expiry, counted in full.
+  This is conservative, because some of those messages were real work that would have been paid for anyway.
+- **Saving:** counted only when a chain of kept-warm messages is followed by the owner's next message **more than
+  60 minutes after the last request before the first warning**, and that message reads from cache. The saving is
+  that context times (write weight - read weight). A message that came back within the hour anyway saves nothing
+  here, even if it was prompted by the warning.
+- **Ignored:** a warning whose session went cold anyway costs nothing and saves nothing. It is counted, so the
+  share of warnings acted on is known.
+
+**It passes when:**
+- at least **20 warnings** have fired;
+- total saving is **at least twice total cost** (the margin covers the saving being an estimate);
+- the net is positive in points;
+- and the owner, asked at the end, keeps it on: the warnings did not interrupt more than they helped. Their word
+  decides this part and needs no number.
+
+Then `coldWarn` may become the default. If it fails on cost, it stays an opt-in. If it fails on the owner's word,
+it is off.
+
+**Not changed by this:** the guard's other features, stage B's rules, the weights, and the counting rules for
+compactions.
