@@ -1551,3 +1551,14 @@ details are in `AB-TASK.md` under "Opus 5.5 recalibration, third run". Stage B s
 `calibrate.mjs` now gives every build its own nonce, and a preflight build read from cache stops the run. The
 preflight now stops before any span, which is correct. Do not start a fourth run with the current plan. The read
 weight needs another way to be measured (an amendment), or headless resume has to read the cache again.
+
+**The fourth run, on the cross-session amendment** (`AB-TASK.md`, 2026-09-25). It is ready once this merges. BR
+measures the read weight from new sessions reading one build's text, B1 is dropped, and B5 runs 60 replies in new
+sessions. It is about 41 points at the Opus 5 weights. Start it right after a natural reset, with every other
+session and claude.ai chat closed:
+
+```powershell
+mkdir C:\Users\Q\calibration-opus-5-5-r4; cd C:\Users\Q\calibration-opus-5-5-r4
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate.mjs --plan
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate-weights.mjs
+```

@@ -4078,3 +4078,43 @@ builds used the same text as B1's build, within the hour, so they would have rea
 
 **Not rerun.** As long as headless resumed messages miss the cache, B1R cannot measure the read weight. Measuring it
 another way changes the protocol and needs an amendment before any run.
+
+## Amendment: the read weight comes from new sessions reading one build's text — 2026-09-25, before any of it is run
+
+**Why.** A headless message after a session's first turn rewrites the whole session (third run, above), so B1R's
+resumed messages would measure writes. A new session that sends the same text as an earlier one within the hour reads
+all of it from cache and writes nothing (the third run's preflight, 40,938 read and 0 written). That read is the
+token B1R was meant to measure, a cache read of the ~411k build, and it needs no resume.
+
+**What changes.**
+- **B1 and B1R become BR: one build (~411k, a 1-hour write, new session), then the same text in 120 new sessions,
+  one after another.** Each of the 120 reads the build from cache. The span is the build, the 120 reads and its
+  opening probe. 120 reads of ~411k are ~50M tokens, about 10 points at the Opus 5 read weight, twice the 60 of B1R.
+  Nothing is written after the build, so no subtraction is needed.
+- **B1 is dropped.** It was a check, not an input, and its 20 resumed messages would each rewrite ~411k (about 3
+  points each on the second run).
+- **B4 resumes BR's build session**, while it is warm, then `/compact` and 20 messages, as before. It stays a check,
+  and compaction's bound comes from it as before. Its 20 messages rewrite the small compacted session each time, and
+  their rows price that.
+- **B5: 60 replies, each in a new session**, the same prompt. In one session every reply would rewrite all the
+  replies before it, and B5's span would be mostly writes. In new sessions it is almost all output: 60 x ~5.5k is
+  ~0.33M, about 11 points at the Opus 5 weight. 40 would be ~7, too close to the 5-point resolution.
+- **Every build has its own nonce.** BW's three builds would otherwise read BR's cache instead of writing.
+- **The window is the settings file only** (`autoCompactWindow: 1000000`, `--settings`). The preflight no longer
+  picks a window. It sends a ~10k text in one new session and the same text in a second new session. The first must
+  write it, and the second must read at least 90% of what the first wrote. Otherwise the run stops before any span.
+- **Void rules:** a BR read under 380k of context, or one that reads less than 380k from cache, stops the run
+  (replaces the B1/B1R rules). The rest stand: a model other than `claude-opus-5-5`, an error, a compaction outside
+  B4, another session's reply inside a span, a reset inside a span, the window at 90%.
+- **The solve:** BR, BW and B5 give the three equations; B4 is the only check. `calibrate-weights.mjs --selftest`
+  recovers known weights from rows of this plan's shape.
+
+**Order and size:** BR (~14 points at the Opus 5 weights), B4 (~3), BW (~12), B5 (~12). That is ~41 in all, down
+from ~58. The waiting rules of the 2026-09-24 amendment stand.
+
+**Unchanged:** the "ok" prompt, `--model opus`, effort low, the build size, B5's prompt, the probes and the 90-second
+settle, the 5-point resolution rule, and every rule of the 2026-09-18 section and the 2026-09-22 amendment.
+
+**One command:** `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path contains
+`calibration`, then `node <repo>/scripts/calibrate-weights.mjs` in it. Checked end to end on 2026-09-25 against a
+stub `claude` that caches by prefix across sessions and rewrites on resume.

@@ -3,12 +3,13 @@
 // Run it from an empty directory whose path contains "calibration", so calibrate-pool.mjs leaves these sessions out.
 // The meter reading a message returns does not include that message yet: compare readings across spans.
 // The user settings' autoCompactWindow (stage B sets 300k) compacted the 2026-09-23 run's 411k build, so every call
-// carries a wider window. A preflight picks the first way to widen it under which a resumed message reads its session
-// from cache. Every build starts with its own nonce: the API caches by prefix across sessions, so two identical builds
-// within the hour would read each other's cache (the 2026-09-25 preflight passed on the settings arm's writes).
-// Any compaction a block didn't ask for, and any B1/B1R message that doesn't read the build from cache, stops the run.
+// carries a wider window, from a settings file. Every build starts with its own nonce: the API caches by prefix
+// across sessions, so two identical builds within the hour would read each other's cache. The read weight is measured
+// on exactly that: a headless resumed message rewrites its whole session (AB-TASK.md, third run), so BR sends one
+// build's text again in new sessions, each of which reads it from cache. A preflight checks that this works.
+// Any compaction a block didn't ask for, and any BR read that doesn't read the build from cache, stops the run.
 //
-// The whole Opus 5.5 recalibration in one command (AB-TASK.md, 2026-09-24 amendment), then the weights:
+// The whole Opus 5.5 recalibration in one command (AB-TASK.md, 2026-09-25 cross-session amendment), then the weights:
 //   node <repo>/scripts/calibrate.mjs --plan
 //   node <repo>/scripts/calibrate-weights.mjs
 //
@@ -47,18 +48,12 @@ function filler(tokens) {
 const buildPrompt = (tokens) => `Build ${Date.now()}-${Math.random().toString(36).slice(2)}. ` +
   'Below is a document for later reference. Reply with the single word ok. Use no tools.\n\n' + filler(tokens);
 
-/* The ways to widen the compaction window, in the order the preflight tries them. --settings takes a file: the call
-   goes through a shell, which would mangle inline JSON. */
+/* The compaction window, wide enough that no build compacts. --settings takes a file: the call goes through a shell,
+   which would mangle inline JSON. */
 const SETTINGS = join(process.cwd(), 'calib-settings.json');
-const WINDOWS = [
-  { name: 'settings', args: ['--settings', `"${SETTINGS}"`] },
-  { name: 'flag', args: ['--autocompact', '1000000'] },
-];
-let WINDOW = null;
 
 function send(input, block, session) {
-  if (!WINDOW) throw new Error('no compaction window chosen: run the preflight first');
-  const args = ['-p', '--model', 'opus', '--effort', 'low', '--output-format', 'stream-json', '--verbose', ...WINDOW.args];
+  const args = ['-p', '--model', 'opus', '--effort', 'low', '--output-format', 'stream-json', '--verbose', '--settings', `"${SETTINGS}"`];
   if (session) args.push('--resume', session);
   const r = spawnSync('claude', args, { input, encoding: 'utf8', shell: true, maxBuffer: 1 << 28, cwd: process.cwd() });
   let meter = null, result = null, compacted = false;
@@ -92,55 +87,51 @@ const log = (row, kind) => {
   if (row.five !== null && row.five >= STOP_AT) stop('five-hour window at ' + row.five);
 };
 
-/* ---- The plan: the 2026-09-24 amendment, every block in one run, each span between two probes. ---- */
+/* ---- The plan: the 2026-09-25 cross-session amendment, every block in one run, each span between two probes. ---- */
 
 const MODEL = 'claude-opus-5-5';
 const BUILD = 250000;           // chars/4, as on 2026-09-18: ~411k tokens of repo text
-const AT_BUILD = 380000;        // a B1 message below this context is not re-reading the build
+const AT_BUILD = 380000;        // a BR read below this from cache is not reading the build
 const SETTLE_MS = Number(process.env.CALIBRATE_SETTLE_MS ?? 90_000);   // the meter lags a message; wait before the probe that closes a span (env: dry runs only)
 const START_UNDER = 0.6, ROOM = 0.85;
 const WAIT_POLL_MS = Number(process.env.CALIBRATE_WAIT_POLL_MS ?? 600_000);   // env: dry runs only
 /* est: the block's draw in points at the Opus 5 weights, which the void run showed overstate Opus 5.5. */
 const PLAN = [
-  { block: 'B1', build: 1, n: 20, est: 12 },                  // new session at ~411k, then 20 messages: consistency check
-  { block: 'B1R', resume: 'B1', n: 60, est: 11 },             // the read weight
-  { block: 'B4', resume: 'B1', compact: true, n: 20, est: 3 },  // compaction's bound
+  { block: 'BR', build: 1, reads: 120, est: 14 },             // one build, then its text in 120 new sessions: the read weight
+  { block: 'B4', resume: 'BR', compact: true, n: 20, est: 3 },  // compaction's bound
   { block: 'BW', build: 3, est: 12 },                         // three builds, each a new session: the write weight
-  { block: 'B5', n: 40, prompt: 'Write about 4,000 words on any topic. Use no tools.', est: 20 },  // the output weight
+  { block: 'B5', n: 60, fresh: true, prompt: 'Write about 4,000 words on any topic. Use no tools.', est: 12 },  // the output weight, each reply in a new session
 ];
 
 function check(row, kind) {
   if (row.model !== MODEL) stop(`VOID: ${row.block} ran on ${row.model || '?'}, not ${MODEL}`);
   if (row.isError) stop(`VOID: ${row.block} ${kind} returned an error`);
   const ctx = (row.cacheRead || 0) + (row.cacheWrite || 0) + (row.input || 0);
-  if ((row.block === 'B1' || row.block === 'B1R') && kind === 'msg' && ctx < AT_BUILD)
-    stop(`VOID: ${row.block} message at ${ctx} tokens of context, not the ~411k build`);
-  if ((row.block === 'B1' || row.block === 'B1R') && kind === 'msg' && (row.cacheRead || 0) < AT_BUILD)
-    stop(`VOID: ${row.block} message read ${row.cacheRead} tokens from cache and wrote ${row.cacheWrite}: the build is not being read`);
+  if (kind === 'read' && ctx < AT_BUILD) stop(`VOID: ${row.block} read at ${ctx} tokens of context, not the ~411k build`);
+  if (kind === 'read' && (row.cacheRead || 0) < AT_BUILD)
+    stop(`VOID: ${row.block} read ${row.cacheRead} tokens from cache and wrote ${row.cacheWrite}: the build is not being read`);
 }
 
-/* Before any span: a small session and two resumed messages under each window, logged to preflight.jsonl, not counted.
-   The first window whose build was written, not read from another session's cache, and whose resumed messages both
-   read at least 90% of their context from cache is the run's. */
+/* Before any span, logged to preflight.jsonl and not counted: a small build in a new session, then its text again
+   in a second new session. The first must write the text (~10k), and the second must read from cache at least 90%
+   of what the first wrote, which is what BR measures the read weight with. */
 function preflight() {
   writeFileSync(SETTINGS, JSON.stringify({ autoCompactWindow: 1000000 }) + '\n');
-  for (const w of WINDOWS) {
-    WINDOW = w;
-    let session = null, ok = true;
-    for (let i = 0; i < 3; i++) {
-      const row = send(i ? OK : buildPrompt(10000), 'PF', session);
-      session = row.session;
-      appendFileSync(join(process.cwd(), 'preflight.jsonl'), JSON.stringify({ ...row, window: w.name, kind: i ? 'msg' : 'build' }) + '\n');
-      const ctx = (row.cacheRead || 0) + (row.cacheWrite || 0) + (row.input || 0);
-      console.log(`${row.t.slice(11, 19)} PF   ${w.name.padEnd(8)} read=${row.cacheRead} write=${row.cacheWrite} of ${ctx}`);
-      if (row.model !== MODEL) stop(`the preflight ran on ${row.model || '?'}, not ${MODEL}`);
-      if (row.isError || row.compacted) stop(`the preflight under "${w.name}" returned an error or compacted`);
-      if (!i && (row.cacheWrite || 0) < 0.5 * ctx) stop(`the preflight build under "${w.name}" was read from cache, not written: it proves nothing`);
-      if (i && (row.cacheRead || 0) < 0.9 * ctx) ok = false;
-    }
-    if (ok) { console.log(`window: ${w.name} (${w.args.join(' ')}) keeps the cache`); return; }
+  const text = buildPrompt(10000);
+  let built = null;
+  for (const kind of ['build', 'read']) {
+    const row = send(text, 'PF', null);
+    appendFileSync(join(process.cwd(), 'preflight.jsonl'), JSON.stringify({ ...row, kind }) + '\n');
+    const ctx = (row.cacheRead || 0) + (row.cacheWrite || 0) + (row.input || 0);
+    console.log(`${row.t.slice(11, 19)} PF   ${kind.padEnd(7)} read=${row.cacheRead} write=${row.cacheWrite} of ${ctx}`);
+    if (row.model !== MODEL) stop(`the preflight ran on ${row.model || '?'}, not ${MODEL}`);
+    if (row.isError || row.compacted) stop('the preflight returned an error or compacted');
+    if (kind === 'build' && (row.cacheWrite || 0) < 5000) stop('the preflight build was read from cache, not written: it proves nothing');
+    if (kind === 'read' && (row.cacheRead || 0) < built.cacheRead + 0.9 * built.cacheWrite)
+      stop('a new session did not read the same text from cache: nothing to measure the read weight with');
+    built = row;
   }
-  stop('no window kept the cache on a resumed message: nothing to measure the read weight with');
+  console.log('preflight: a new session reads the same text from cache');
 }
 
 /* Any other Claude Code session with a model reply inside the span: the meter counted it too. The calibration's own
@@ -191,13 +182,15 @@ async function plan() {
     }
     let session = step.resume ? sessions[step.resume] : null;
     const run = (input, kind) => { const row = send(input, step.block, session); check(row, kind); log(row, kind); session = row.session; return row; };
+    let text = null;
     for (let i = 0; i < (step.build || 0); i++) {
-      if (step.block === 'BW') session = null;         // each write in a new session
-      run(buildPrompt(BUILD), 'build');
+      session = null;                                  // each build in a new session, with its own nonce
+      run(text = buildPrompt(BUILD), 'build');
     }
+    sessions[step.block] = session;                    // B4 resumes BR's build session
+    for (let i = 0; i < (step.reads || 0); i++) { session = null; run(text, 'read'); }
     if (step.compact) run('/compact', 'compact');
-    for (let i = 0; i < (step.n || 0); i++) run(step.prompt || OK, 'msg');
-    sessions[step.block] = session;
+    for (let i = 0; i < (step.n || 0); i++) { if (step.fresh) session = null; run(step.prompt || OK, 'msg'); }
     await sleep(SETTLE_MS);
     const close = probe();
     if (close.fiveResets !== open.fiveResets) stop(`VOID: the five-hour window reset inside ${step.block}`);

@@ -1,12 +1,13 @@
-// The weights from a `calibrate.mjs --plan` run (AB-TASK.md, 2026-09-24 amendment), fixed before the run.
+// The weights from a `calibrate.mjs --plan` run (AB-TASK.md, 2026-09-24 amendment and 2026-09-25 cross-session
+// amendment), fixed before the run.
 //   node <repo>/scripts/calibrate-weights.mjs [path/to/calib.jsonl]   # default ./calib.jsonl
 //   node <repo>/scripts/calibrate-weights.mjs --selftest              # recovers known weights from synthetic rows
 //
 // A span runs from one probe (included) to the next (excluded): the meter lags a message, so the closing probe's
 // reading holds everything before it and nothing of itself. Each span gives one equation in points of the
 // five-hour window: reads x a + writes x w + output x o = the meter's move, tokens in millions, writes counting
-// cache writes plus uncached input. B1R, BW and B5 give three equations in three unknowns. The ranges take every
-// combination of each move +-1 point (the meter's whole-point resolution). B1 and B4 are checks, not inputs.
+// cache writes plus uncached input. BR, BW and B5 give three equations in three unknowns. The ranges take every
+// combination of each move +-1 point (the meter's whole-point resolution). B4 is a check, not an input.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -45,7 +46,7 @@ function solve3(A, b) {   // Cramer's rule
 
 export function weights(list) {
   const by = Object.fromEntries(list.map(s => [s.block, s]));
-  const eq = ['B1R', 'BW', 'B5'].map(b => { if (!by[b]) throw new Error('no ' + b + ' span'); return by[b]; });
+  const eq = ['BR', 'BW', 'B5'].map(b => { if (!by[b]) throw new Error('no ' + b + ' span'); return by[b]; });
   const A = eq.map(s => [s.R, s.W, s.O]);
   const [read, write, output] = solve3(A, eq.map(s => s.move));
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
@@ -59,7 +60,7 @@ export function weights(list) {
   return {
     w, range: { read: [lo[0], hi[0]], write: [lo[1], hi[1]], output: [lo[2], hi[2]] },
     belowResolution: eq.filter(s => s.move < RESOLUTION).map(s => s.block),
-    checks: ['B1', 'B4'].filter(b => by[b]).map(b => ({ block: b, move: by[b].move, predicted: pred(by[b]) })),
+    checks: ['B4'].filter(b => by[b]).map(b => ({ block: b, move: by[b].move, predicted: pred(by[b]) })),
     // Compaction's own request is in no usage: its bound is the span's move at the top of its resolution, less the rest.
     compactBound: c ? c.move + 1 - pred(c) : null,
   };
@@ -93,11 +94,10 @@ function selftest() {
     exact += (read * truth.read + (write + 2) * truth.write + output * truth.output) / 1e6;
   };
   const probe = () => push('P', 'probe', 17096, 9000, 4);
-  probe(); push('B1', 'build', 17096, 394615, 4); for (let i = 0; i < 20; i++) push('B1', 'msg', 411000, 9000, 4);
-  probe(); for (let i = 0; i < 60; i++) push('B1R', 'msg', 425000, 9000, 4);
-  probe(); push('B4', 'compact', 0, 0, 0); for (let i = 0; i < 20; i++) push('B4', 'msg', 30000, 9000, 4);
+  probe(); push('BR', 'build', 17096, 394615, 4); for (let i = 0; i < 120; i++) push('BR', 'read', 411700, 0, 4);
+  probe(); push('B4', 'compact', 0, 0, 0); for (let i = 0; i < 20; i++) push('B4', 'msg', 17096, 9000, 4);
   probe(); for (let i = 0; i < 3; i++) push('BW', 'build', 17096, 394615, 4);
-  probe(); for (let i = 0; i < 40; i++) push('B5', 'msg', 20000 + i * 10000, 10000, 9900);
+  probe(); for (let i = 0; i < 60; i++) push('B5', 'msg', 17096, 60, 5500);
   probe();
   const r = weights(spans(rows));
   const ok = ['read', 'write', 'output'].every(k => truth[k] >= r.range[k][0] && truth[k] <= r.range[k][1]);
