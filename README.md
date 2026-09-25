@@ -49,7 +49,7 @@ could reach, and it leaves the decision to that. The whole record, losses includ
 
 ## Install
 
-As a Claude Code plugin (0.4.0):
+As a Claude Code plugin (0.5.0):
 
 ```
 claude plugin marketplace add 33kain/tokenbrake
@@ -95,7 +95,7 @@ To have it in every cloud session, install it from the environment's **Setup scr
 
 ```bash
 #!/bin/bash
-npm i -g tokenbrake@0.4.0 || true
+npm i -g tokenbrake@0.5.0 || true
 tokenbrake init || true
 tokenbrake status || true
 ```
@@ -165,11 +165,12 @@ session transcript (every tool result exactly as the model saw it, and the API's
 ranks results by **size × the requests they were carried through** — which is the number that says which
 single `cat`, `Read` or test run to have trimmed, capped or never run. It also shows what the session
 processed in total, how much of that came from cache, what the context holds right now, and which of the
-results tokenbrake trimmed and what that kept out. On Opus 5 the same usage is also given in **points of the
-five-hour window**, split into cache reads, writes and output, and so is the trim's saving. It uses the
-weights calibrated on the author's machine (per million tokens: cache read 0.20, write 8.9, output 34; see
-AB-TASK.md, "Calibration results"). Token counts alone hide where the window went, because a cache write weighs
-about 45 cache reads. Other models are not calibrated, so they are not priced. Sizes are chars/4 estimates; the
+results tokenbrake trimmed and what that kept out. On Opus 5.5 and Opus 5 the same usage is also given in
+**points of the five-hour window**, split into cache reads, writes and output, and so is the trim's saving. It
+uses the weights calibrated on the author's machine, per million tokens: Opus 5.5 cache read 0.16, write 7.62,
+output 29.44; Opus 5 0.20, 8.9 and 34 (AB-TASK.md, "Calibration results" and "Opus 5.5 recalibration, fourth
+run"). Token counts alone hide where the window went, because a cache write weighs about 45 cache reads. Other
+models are not calibrated, so they are not priced. Sizes are chars/4 estimates; the
 usage line is what the API reported. `--ledger` shows the guard's own record alone, which is also the fallback when no transcript
 can be found.
 

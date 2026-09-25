@@ -1,7 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-25
 
+Opus 5.5 is priced. Opus 5 has left Claude Code's model picker, so 0.4.0 gives today's sessions no points of the
+five-hour window at all. 0.5.0 carries weights calibrated on Opus 5.5 and prices each request with its own model's.
+It also refuses to overwrite a settings file it cannot merge, and warns when a transcript stops reading as a session.
+
+**Breaking:** transcript.js no longer exports `LIMIT_WEIGHTS`; `weightsOf(model)` returns a model's weights or
+null. `compactionView` no longer takes a `weights` option, and `compactionWhy` no longer takes a `weights`
+argument; both use each compaction's own model.
+
+- **Opus 5.5 is priced in points of the five-hour window**, with its own weights (per million tokens: cache read
+  0.16, write 7.62, output 29.44; AB-TASK.md, "Opus 5.5 recalibration, fourth run"). Opus 5 keeps 0.20 / 8.9 / 34.
+  A session that spans both prices each request with its own model's weights, and the report names both.
+  `report --compactions` counts Opus 5.5 compactions from 2026-09-25 and gives the verdict per model once both
+  are counted.
 - **`init`, `uninstall` and `preset` refuse a settings file they cannot merge, instead of replacing it.** `init`
   and `preset` read the file through a parse-error fallback of `{}` and wrote the merge back; one trailing comma
   in `~/.claude/settings.json` cost the person's `model` and `permissions` keys, exit 0, no warning. All three
