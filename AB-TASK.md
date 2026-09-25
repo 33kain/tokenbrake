@@ -4235,3 +4235,34 @@ it is off.
 
 **Not changed by this:** the guard's other features, stage B's rules, the weights, and the counting rules for
 compactions.
+
+## Amendment: headless sessions are staged work, wherever they ran — 2026-09-25, before any number is read under it
+
+The staged rule (2026-09-20 amendment) skips a session by its cwd: under `tokenbrake-bench` or a calibration
+directory. Three sessions of the 2026-09-18 limit calibration ran from the root of a scratchpad with neither in its
+path, and passed as ordinary work. They were found while measuring cache misses (HANDOFF.md, 2026-09-25). Every
+headless `claude -p` session marks itself in its transcript (`"entrypoint":"sdk-cli"`). No work session on this
+machine does: those are `cli` or `claude-desktop`.
+
+**What is on disk today** (a classification, not a result): of **393** sessions, **290** are staged by cwd. Of the
+other 103, **8** are headless and **95** are ordinary work. The 8 hold **no tool results at all**, because the
+calibration sent "ok" without tools. They carry context and draw only.
+
+**The amendment, from this date:** a session is staged if its cwd is staged, **or** if any of its entries has
+`entrypoint: "sdk-cli"`. That covers every view that uses the staged rule:
+- the pooled views (`--where`, `--reads`, `--reach`, `tune`);
+- `report --saved`, which lists them apart as `headless`;
+- stage 2 / stage B's population.
+
+`--cwd=<substring>` still brings any of them back on purpose.
+
+**What moves, and what does not.**
+- **Result-based figures do not move.** The reach shares, the read and cap figures, and `tune`'s per-feature counts
+  are computed over tool results, and the 8 hold none.
+- **Session counts and context totals in the pooled views drop by at most 8 sessions.**
+- **Stage B:** nothing it has recorded changes. The only compaction in the 8 was manual (`b459f9c1`, 2026-09-19
+  01:42), which was never counted. From here, an automatic compaction in a headless session does not count either.
+  Stage B is the owner's own work, and a script's session is not.
+- **Unchanged:** no weight, no `compactionView` figure, no trim accounting, and no threshold.
+
+This is written before the change is made and before any figure is read under it.
