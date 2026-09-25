@@ -1594,3 +1594,51 @@ Cut in PR #121 and published by the `Publish` workflow (run 36139035316). `lates
 13:10 UTC. It prices Opus 5.5 with its own weights, which 0.4.0 could not do once Opus 5 left the picker. The run's
 verify step printed 0.4.0 and still passed, because the registry lags the publish by about two minutes and the step
 compared nothing. It now waits for the exact version, and fails if the version has not appeared within 10 minutes.
+
+## Steering exploration into subagents costs window on the owner's work — 2026-09-25
+
+This is the last of the brake's three directions from 2026-09-18 ("steering the model waits for measurement"). It was
+measured read-only with `scripts/explore-reach.cjs`, over 60 of the owner's sessions (832M tokens of context
+processed, ~385 points priced). Nothing was built, and stage B is untouched.
+
+- **Exploration** is 3+ read-only results in a row within one user turn. There were 85 such phases, in 35 sessions.
+  As run, they cost 43.5M tokens of context processed (5.2% of all), ~7.0 points.
+- **Delegated,** the same phases cost 25.3M tokens, 18M fewer, but **~24.9 points: 18 points more**. Each subagent
+  writes its own base on its first request (median 32k written, 0 read, over 128 real subagent transcripts), and a
+  write weighs ~48 reads on Opus 5.5. Its report back is small (median 378 tokens).
+- **No rule rescues it.** Delegating only phases of 5+, 8+ or 12+ results still loses (-5.4, -0.8, -0.1 points). An
+  oracle that picks only the winning phases finds 2, for +0.4 points (0.1% of the draw). A free subagent base would
+  give ~+2.7 points, under 1%.
+
+**So the lever is dropped.** What counts against the window is what gets *written*, not what is carried. The next
+analysis looks there: cache misses and cold rebuilds, where one avoided event is worth hundreds of thousands of
+reads.
+
+## Where the writes go: cold rebuilds after an hour's idle are 16.7% of the owner's draw — 2026-09-25
+
+Measured read-only with `scripts/write-reach.cjs` over the same 60 sessions (~385 points: reads 38%, writes 35%,
+output 27%). Every write in them is 1-hour cache, with no 5-minute writes. Each request's write is split into new
+content and a re-write of context that was already cached. Each re-write of 5k+ is then attributed to a cause:
+
+| cause | events | sessions | re-written | points | share of draw |
+|---|---|---|---|---|---|
+| new content (not a re-write) | | | 5.7M | ~49.4 | 12.8% |
+| **idle > 1h (cache expired)** | **27** | **11** | **7.3M** | **~64.3** | **16.7%** |
+| session start | 43 | 42 | 1.2M | ~10.7 | 2.8% |
+| unexplained miss (gap ~0) | 6 | 4 | 803k | ~7.1 | 1.9% |
+| model switch | 3 | 3 | 261k | ~2.1 | 0.5% |
+| compaction | 5 | 4 | 144k | ~1.2 | 0.3% |
+
+- **Cold rebuilds are one lever as big as the 300k window.** The replay put the window at ~16%, and this is ~16.7%, from
+  only 27 events. The median event re-writes 198k after a 133-minute gap. The largest re-write 510-594k (~4 points
+  each).
+- **Many just miss the cache's life.** 7 events came within 75 minutes (~23 points), 13 within 2 hours (~35), and 17
+  within 3 hours (~45). Only 4 followed a gap over 8 hours. Most were followed by real work (22 of 28 by 6+
+  requests), so the context was still wanted.
+- **What cannot fix it.** A hook has no timer. A headless `claude -p --resume` ping re-writes the whole session
+  instead of reading it (the third recalibration run found this), so an automatic keep-alive would make it worse.
+  Stage B's 300k window already caps the 9 events over 300k, and the replay counted that.
+- **Open, for discussion before anything is built:** a warning shortly before the cache expires, left to the owner to
+  act on. Keeping 500k warm costs one read, about 0.08 points, against a ~3.8-point rebuild. This would ask the
+  user, which the 2026-09-18 discussion left to the report, so it reopens that decision with this number. It needs
+  pre-registration in `AB-TASK.md`, and nothing that changes what enters context while stage B runs.
