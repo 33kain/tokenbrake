@@ -1484,3 +1484,56 @@ node $cal --block=B4 --n=20 --resume=<B1 id> --compact       # compaction bound
 - **After it:** weights from `calib.jsonl` the same way as the Opus 5 table. Record them in `AB-TASK.md` under
   their own heading before any Opus 5.5 compaction is priced. Then `LIMIT_WEIGHTS` becomes per model (today it
   holds one), and Opus 5.5 compactions count from the day that merges.
+
+## The Opus 5.5 recalibration ran void; the daylight rerun is one command — 2026-09-24
+
+The first run (2026-09-23 18:44 to 2026-09-24 06:39 UTC) is void. The owner's `autoCompactWindow: 300000` (stage
+B's setting) applies to headless `claude -p` too. The 411k B1 build auto-compacted to 2k after its first message,
+so B1, B3 and B4 ran on a ~30k session, and B5 compacted once as well. Details are in `AB-TASK.md` under "Opus 5.5
+recalibration, first run". Stage B stays at 3 of 8.
+
+**The rerun** is the amendment "the Opus 5.5 recalibration reruns in daylight". B3's overnight idles are replaced
+by three builds. The whole run is one command that checks its own conditions and stops within minutes if any
+fails. About 85 minutes, and about 45-60 points of the five-hour window. It is best started right after a reset,
+so it finishes in one window instead of waiting for the next.
+
+```powershell
+mkdir C:\Users\Q\calibration-opus-5-5-r2; cd C:\Users\Q\calibration-opus-5-5-r2
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate.mjs --plan
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate-weights.mjs
+```
+
+- **Before:** close every other Claude Code session (this one too), claude.ai chat, and any scheduled task or
+  loop. The script voids a span if another session on this machine makes a request inside it, but claude.ai chat
+  leaves no trace here.
+- **It stops by itself** on a model other than `claude-opus-5-5`, an error, an unrequested compaction, a B1
+  message not at ~411k, a window reset inside a span, another session's request, or the window at 90%.
+- **After:** `calibrate-weights.mjs` prints the weights with their ranges, marks where Opus 5's fall inside or
+  outside them, and prints the B1/B4 checks and compaction's bound. They go into `AB-TASK.md` under their own
+  heading. Then `LIMIT_WEIGHTS` becomes per model, and Opus 5.5 compactions count from the day that merges.
+
+## The second recalibration run was void too; the third starts with a cache preflight — 2026-09-25
+
+The daylight rerun stopped at 90% inside B1R. `--autocompact auto`, added after the first run to keep the 411k
+build from compacting, broke the cache on every resumed call. Each "ok" message rewrote the whole ~395k session
+instead of reading it, so B1R measured writes, not the read weight, and drew about 3 points a message. An uncounted
+diagnostic confirmed it: without the flag, resumed messages read their whole session from cache. Details and the
+amendment are in `AB-TASK.md` under "Opus 5.5 recalibration, second run" and the amendment dated 2026-09-25.
+Stage B stays at 3 of 8.
+
+**What changed in `calibrate.mjs`:** a preflight (two small sessions, uncounted, in `preflight.jsonl`) picks a way
+to widen the compaction window that keeps the cache: a `--settings` file first, then `--autocompact 1000000`. A B1
+or B1R message that doesn't read the build from cache now stops the run at once. Both were checked in a dry run
+against a stub `claude`: cache kept, the run goes through; cache lost at 411k, it stops at B1's first message; cache
+lost in the preflight, it stops before any span.
+
+**The third run,** right after a natural reset, with every other session and claude.ai chat closed:
+
+```powershell
+mkdir C:\Users\Q\calibration-opus-5-5-r3; cd C:\Users\Q\calibration-opus-5-5-r3
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate.mjs --plan
+node C:\Users\Q\projects\tokenbrake\scripts\calibrate-weights.mjs
+```
+
+The owner holds one free reset in reserve. If the plan stops to wait for a reset before a block, that reset lets it
+go on without the wait. A span whose probes straddle a reset is void, so it is used only while the script is waiting.
