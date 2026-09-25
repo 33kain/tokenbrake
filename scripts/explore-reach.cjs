@@ -6,6 +6,8 @@
 //   node scripts/explore-reach.cjs [--min=N] [--summary=N]
 const fs = require('fs'), path = require('path'), os = require('os');
 const T = require(path.join(__dirname, '..', 'transcript.js'));
+// A headless `claude -p` session (entrypoint sdk-cli) is scripted work wherever it ran, not the owner's.
+const headless = (file) => /"entrypoint":"sdk-cli"/.test(require('fs').readFileSync(file, 'utf8'));
 const CFG = path.join(os.homedir(), '.claude');
 const MIN_RUN = +(process.argv.find(a => a.startsWith('--min='))?.slice(6) || 3);
 
@@ -70,7 +72,7 @@ const phases = [];
 const perSession = [];
 for (const f of T.findTranscripts(CFG)) {
   let p; try { p = T.parseTranscript(f.file); } catch { skipped++; continue; }
-  if (T.stagedCwd(p.cwd) || T.formatWarning(p) || p.requests.length < 10) { skipped++; continue; }
+  if (T.stagedCwd(p.cwd) || headless(f.file) || T.formatWarning(p) || p.requests.length < 10) { skipped++; continue; }
   T.carry(p); pool++;
   const reqCtx = p.requests.map(q => ctx(q.usage));
   const sessCtx = reqCtx.reduce((a, b) => a + b, 0); totalCtx += sessCtx;
@@ -106,7 +108,7 @@ for (const f of T.findTranscripts(CFG)) {
 
 const B = med(subBase), S = +(process.argv.find(a => a.startsWith('--summary='))?.slice(10) || med(subBack));
 let poolPts = 0; for (const f of T.findTranscripts(CFG)) { let p; try { p = T.parseTranscript(f.file); } catch { continue; }
-  if (T.stagedCwd(p.cwd) || T.formatWarning(p) || p.requests.length < 10) continue;
+  if (T.stagedCwd(p.cwd) || headless(f.file) || T.formatWarning(p) || p.requests.length < 10) continue;
   const d = T.limitDraw(p); poolPts += d.read + d.write + d.output; }
 // Counterfactual per phase: the subagent makes as many requests as the phase did, starting from B and accumulating the
 // phase's results; the main session makes one spawn request (its context at the phase's start) and then carries S instead
