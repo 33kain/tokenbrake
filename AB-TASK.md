@@ -4118,3 +4118,41 @@ settle, the 5-point resolution rule, and every rule of the 2026-09-18 section an
 **One command:** `node <repo>/scripts/calibrate.mjs --plan` from a new, empty directory whose path contains
 `calibration`, then `node <repo>/scripts/calibrate-weights.mjs` in it. Checked end to end on 2026-09-25 against a
 stub `claude` that caches by prefix across sessions and rewrites on resume.
+
+### Opus 5.5 recalibration, fourth run — 2026-09-25 09:11 to 11:29 UTC: the Opus 5.5 weights
+
+Run on the cross-session amendment above, as written, in `C:\Users\Q\calibration-opus-5-5-r4`. No void rule fired.
+All 210 rows ran on `claude-opus-5-5`, with no error, in one five-hour window (reset 13:30 UTC). The only compaction
+was B4's requested `/compact`, and the window peaked at 54%. The preflight passed: the first session wrote 25,530,
+and the second read 40,958 from cache and wrote nothing. The build wrote 393,315, and every one of the 120 BR reads
+read at least 410,414 from cache and wrote nothing.
+
+| span | rows | reads M | writes M | output M | five-hour | move |
+|---|---|---|---|---|---|---|
+| BR | probe + build + 120 | 49.28 | 0.402 | 0.002 | 15 → 26 | 11 |
+| B4 | probe + compact + 20 | 0.37 | 0.215 | 0.000 | 26 → 27 | 1 (check) |
+| BW | probe + 3 builds | 0.08 | 1.180 | 0.000 | 27 → 36 | 9 |
+| B5 | probe + 60 | 1.58 | 0.009 | 0.601 | 36 → 54 | 18 |
+
+**The weights,** from `calibrate-weights.mjs`, in points of the five-hour window per million tokens. The ranges
+take every combination of each move ±1 point.
+
+| weight | Opus 5.5 | range | Opus 5 | Opus 5 in the range |
+|---|---|---|---|---|
+| cache read | 0.16 | 0.13 – 0.19 | 0.20 | no |
+| cache write (1-hour) + uncached input | 7.62 | 6.77 – 8.47 | 8.9 | no |
+| output | 29.44 | 27.71 – 31.16 | 34 | no |
+
+- **Per token, relative to a cache read:** a write weighs 48 reads (Opus 5: ~45; the API says 20), and output 184
+  (Opus 5: ~170; the API says 50). Every weight is about 0.8 to 0.87 of Opus 5's, so the ratios are nearly the
+  same. The same tokens draw less of the window on Opus 5.5.
+- **Check B4:** it moved 1 point, and the weights predict 1.7. That agrees, but the move is below the 5-point
+  resolution, so the check confirms little.
+- **Compaction's own draw, bound:** 0.3 points (Opus 5: 1.6). Under the 2026-09-22 amendment, the verdict uses the
+  larger bound, so 1.6 stays.
+- **The weights differ from Opus 5's by more than the calibration's resolution** (none of Opus 5's falls inside the
+  Opus 5.5 range). Under the 2026-09-22 amendment, stage B's verdict is therefore also given for each model
+  separately, and both are quoted.
+
+**Not yet in effect.** Opus 5.5 compactions count from the day these weights are merged into `LIMIT_WEIGHTS`
+(`transcript.js`, which today holds Opus 5's only), and not from this record.

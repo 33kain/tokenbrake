@@ -1562,3 +1562,20 @@ mkdir C:\Users\Q\calibration-opus-5-5-r4; cd C:\Users\Q\calibration-opus-5-5-r4
 node C:\Users\Q\projects\tokenbrake\scripts\calibrate.mjs --plan
 node C:\Users\Q\projects\tokenbrake\scripts\calibrate-weights.mjs
 ```
+
+## The fourth recalibration run gave the Opus 5.5 weights — 2026-09-25
+
+The fourth run (09:11 to 11:29 UTC) is clean: no void rule fired, and it stayed in one window and peaked at 54%. The
+details are in `AB-TASK.md` under "Opus 5.5 recalibration, fourth run".
+
+- **Opus 5.5 weights, in points of the five-hour window per million tokens:** cache read 0.16 (0.13 – 0.19), cache
+  write 7.62 (6.77 – 8.47), output 29.44 (27.71 – 31.16). Opus 5's 0.20 / 8.9 / 34 fall outside all three ranges.
+  The ratios barely move (a write is 48 reads, output 184), but the same tokens draw about 15-20% less of the window.
+- **Compaction's bound** is 0.3 points, and the verdict keeps the larger bound, 1.6. Because the weights differ
+  beyond resolution, stage B's verdict is also given for each model separately.
+- **B4's check** agrees (1 point moved, 1.7 predicted), but it is below the 5-point resolution.
+
+**Next:** `LIMIT_WEIGHTS` in `transcript.js` becomes per model, with Opus 5.5 at 0.16 / 7.62 / 29.44, and
+`calibrated()` accepts `claude-opus-5-5`. That change runs the `/simplify` → `/code-review` → `/security-review`
+loop. Opus 5.5 automatic compactions count toward stage B from the day it merges. Stage B stays at 3 of 8 until
+then.
