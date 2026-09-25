@@ -296,9 +296,11 @@ const fmt = (n) => n.toLocaleString();
    for a staged set and you get it; otherwise staged work is skipped and the reason says how to bring it back.
    The rule was written out at each call site, so widening it (AB-TASK.md 2026-09-20) meant four coordinated
    edits and the four messages had already drifted -- one of them never mentioned --cwd. */
-const poolSkip = (cwd, only, why) => only
-  ? (cwd.toLowerCase().includes(only.toLowerCase()) ? '' : 'cwd does not contain "' + only + '"')
-  : (transcript.stagedCwd(cwd) ? 'staged session -- ' + why + '; --cwd to include' : '');
+const poolSkip = (p, only, why) => {
+  if (only) return (p.cwd || '').toLowerCase().includes(only.toLowerCase()) ? '' : 'cwd does not contain "' + only + '"';
+  const st = transcript.stagedRow(p);
+  return st ? 'staged session -- ' + (st.skip || why) + '; --cwd to include' : '';
+};
 
 /* The parse every pooled view starts with: the transcript, or why it stays out of the pool. One copy for the
    same reason poolSkip is one copy -- the four views must name a skipped session the same way. */
@@ -312,8 +314,8 @@ function pooledParse(file) {
 /* One copy of the A/B-arm caveat. --saved and --all both have to state it, and stating it in their own words
    is how they drifted: one said "outside a calibration directory" and the other did not. */
 const AB_ARM_NOTE = '  An A/B arm run outside a calibration directory is ordinary work by its cwd and is not ordinary\n'
-  + '  work, and no transcript says it was an arm. Those come off by hand before a number here is read as a\n'
-  + '  number about ordinary work -- HANDOFF.md lists the ones on record.';
+  + '  work, and unless it ran headless (claude -p), no transcript says it was an arm. Those come off by\n'
+  + '  hand before a number here is read as a number about ordinary work -- HANDOFF.md lists the ones on record.';
 
 /* Brake 4 -- what's eating your tokens. Transcript-first: the Claude Code session transcript holds every
    tool result exactly as the model saw it and the API's usage per request, so the ranking comes from there;
@@ -353,7 +355,7 @@ function guardCfg() {
    The workload filter. Run over four of this repo's own benchmark sessions the per-session line read 48% of
    targets past line 300, against 24% on an ordinary working session -- because the benchmark's fixtures are
    BUILT with the evidence past line 300. The same holds for a calibration arm, whose tool use was chosen by
-   the script driving it. Staged sessions -- benchmark or calibration -- are skipped by default, every skip is
+   the script driving it. Staged sessions -- benchmark, calibration or headless -- are skipped by default, every skip is
    printed with its reason, and --cwd=<substring> restricts the pool explicitly when that is wanted.
 
    The confound filter, which is the same mistake from the other direction. A capped Read delivers lines
@@ -379,7 +381,7 @@ function whereReport() {
     const { p, unread } = pooledParse(f.file);
     if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
-    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, evidence placed past line 300 by design');
+    const skip = poolSkip(p, only, 'benchmark or calibration fixtures, evidence placed past line 300 by design');
     if (skip) { skipped.push([id, skip]); continue; }
     const cls = transcript.classifyRangedReads(p, ledger, { sessionId: p.sessionId || f.session });
     if (!cls.all.length) { skipped.push([id, 'no ranged reads']); continue; }
@@ -568,7 +570,7 @@ function reachReport() {
     const { p, unread } = pooledParse(f.file);
     if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
-    const skip = poolSkip(cwd, only, 'a benchmark or calibration workload, which is the thing this view exists to check against');
+    const skip = poolSkip(p, only, 'a benchmark or calibration workload, which is the thing this view exists to check against');
     if (skip) { skipped.push([id, skip]); continue; }
     transcript.carry(p);
     const trimmed = transcript.trimmedResults(p, ledger);
@@ -749,7 +751,7 @@ function readsReport() {
     const { p, unread } = pooledParse(f.file);
     if (unread) { skipped.push([id, unread]); continue; }
     const cwd = p.cwd || '';
-    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, sizes chosen by design');
+    const skip = poolSkip(p, only, 'benchmark or calibration fixtures, sizes chosen by design');
     if (skip) { skipped.push([id, skip]); continue; }
     const sessionId = p.sessionId || f.session;
     const u = transcript.unboundedReads(p, ledger, { sessionId, readMaxBytes: cfg.readMaxBytes });
@@ -950,7 +952,7 @@ function readsReport() {
    stage 2 of "An earlier compaction window" (AB-TASK.md). Per compaction: the saving the drop in context buys
    until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
    stage counts automatic compactions on a calibrated model (Opus 5.5 from the day its weights merged), outside
-   benchmark and calibration sessions, from --since. When the counted ones span models, each model's verdict is
+   staged work (benchmark, calibration and headless sessions), from --since. When the counted ones span models, each model's verdict is
    given too (AB-TASK.md, 2026-09-22 amendment). */
 function compactionsReport() {
   const sinceArg = opt('--since');
@@ -967,7 +969,7 @@ function compactionsReport() {
     } catch { continue; }
     for (const r of transcript.compactionView(p)) {
       if (since && (r.at || 0) < since) continue;
-      r.why = transcript.compactionWhy(r, p.cwd);
+      r.why = transcript.compactionWhy(r, p);
       rows.push(r);
     }
   }
@@ -1057,7 +1059,7 @@ function report(plain) {
         const g = transcript.guardRan(p, ledger, String(p.sessionId));
         let sv = null;
         if (onlySaved && p.results.some((r) => r.marker)) { transcript.carry(p); sv = transcript.trimSavings(p, posts); }
-        return { f, p, cwd, tag: transcript.stagedKind(cwd), guard: g.ran, via: g.via, sv };
+        return { f, p, cwd, tag: transcript.stagedKind(p), guard: g.ran, via: g.via, sv };
       });
       const unreadable = rows.filter((x) => x.err).length, readable = rows.length - unreadable;
       if (onlySaved) {
@@ -1100,7 +1102,7 @@ function report(plain) {
           ' ordinary of ' + readable + ' readable on disk');
         if (staged.length) {
           console.log('');
-          group('Staged work -- benchmark fixtures and calibration arms, not a claim about ordinary work', staged);
+          group('Staged work -- benchmark fixtures, calibration arms and headless runs, not a claim about ordinary work', staged);
         }
         const tot = (rs) => rs.reduce((t, x) => { for (const k in t) t[k] += x.sv[k]; return t; },
           { saved: 0, savedCarried: 0, unpriced: 0, count: 0, pts: 0 });
@@ -1137,6 +1139,7 @@ function report(plain) {
       const ok = rows.filter((x) => !x.err);
       const bench = ok.filter((x) => x.tag === 'bench').length;
       const calib = ok.filter((x) => x.tag === 'calib').length;
+      const hl = ok.filter((x) => x.tag === 'headless').length;
       const guarded = ok.filter((x) => x.guard).length;
       /* Outside STAGED work, not outside the benchmark: a calibration arm's tool use was chosen by the script
          driving it, and the views that pool sessions skip it for the same reason they skip a fixture. */
@@ -1146,11 +1149,12 @@ function report(plain) {
       console.log('  ledger has none (a transcript read away from the machine it ran on carries no ledger), from a');
       console.log('  trim marker in the transcript itself. A blank means it was not running there, which is a');
       console.log('  different conclusion from running and leaving everything alone, and the two look identical in');
-      console.log('  every other column. bench = a cwd under tokenbrake-bench, calib = a calibration directory.');
-      console.log('  Both are staged work, which --where, --reads, --reach and tune skip by default.');
+      console.log('  every other column. bench = a cwd under tokenbrake-bench, calib = a calibration directory,');
+      console.log('  headless = a claude -p session (entrypoint sdk-cli), scripted wherever it ran.');
+      console.log('  All three are staged work, which --where, --reads, --reach and tune skip by default.');
       if (byMarkerAll) console.log('  ' + byMarkerAll + ' session(s) here rest on the marker alone, which is a LOWER BOUND: one the guard'
         + '\n  ran in and never trimmed carries no marker and reads as a blank.');
-      console.log('  Of ' + readable + ' readable session(s): ' + bench + ' benchmark, ' + calib + ' calibration, '
+      console.log('  Of ' + readable + ' readable session(s): ' + bench + ' benchmark, ' + calib + ' calibration, ' + hl + ' headless, '
         + guarded + ' with guard records, ' + outside + ' with guard records outside staged work.');
       console.log('  That last number is the population a claim about ordinary work has to come from. It is still');
       console.log('  not a count of eligible sessions:');
@@ -1521,8 +1525,7 @@ function tuneReport() {
     if (want && !String(f.session).startsWith(want)) continue;
     const { p, unread } = pooledParse(f.file);
     if (unread) { skipped.push([id, unread]); continue; }
-    const cwd = p.cwd || '';
-    const skip = poolSkip(cwd, only, 'benchmark or calibration fixtures, not your work');
+    const skip = poolSkip(p, only, 'benchmark or calibration fixtures, not your work');
     if (skip) { skipped.push([id, skip]); continue; }
     if (!p.results.length) { skipped.push([id, 'no tool results']); continue; }
     parsed.push(p);   // autotune backfills a missing p.sessionId from the transcript filename itself

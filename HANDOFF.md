@@ -1665,3 +1665,16 @@ Corrected, on 57 sessions (~349 points):
 **Open (a bug, not an analysis):** the pooled views (`--where`, `--reads`, `--reach`, `tune`) use the same
 `stagedCwd` and so include those three sessions. Headless sessions should count as staged work. That changes the
 counting rule for those views, so it needs an `AB-TASK.md` amendment first. It does not change stage B's count.
+
+## Headless sessions are staged work — 2026-09-25
+
+This closes the bug the entry above left open. The amendment went into `AB-TASK.md` first, as its own commit.
+- **Parser:** `parseTranscript` marks a session `headless` when any of its entries, sidechains included, has
+  `entrypoint: "sdk-cli"`.
+- **One rule:** `STAGED` in `transcript.js` is now a table of rows over the parsed session: `bench`, `calib` and
+  `headless`. The first row that matches wins. The pooled views (via `poolSkip`), the `--saved`/`--all` tag, stage 2's
+  `compactionWhy` and the two analysis scripts all read it.
+- **Renamed:** `stagedCwd` is now `staged(session)`. The scripts drop their private whole-file regex and use it.
+
+Nothing counted moved: the scripts' pools are the same (`write-reach`: 57 sessions). Stage B has no headless
+automatic compaction.

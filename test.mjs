@@ -578,6 +578,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   /* A calibration arm is staged for the same reason a fixture is -- a script chose its tool use -- and since
      AB-TASK.md's 2026-09-20 amendment the pooled views skip it on the same rule. */
   mkSession('-c-work-calibration-stage1', 'calibsess', [900, 910, 920], 'C:\\work\\calibration-stage1\\fixture-OFF-1');
+  /* A headless `claude -p` session is staged wherever it ran (AB-TASK.md, 2026-09-25): this cwd matches neither
+     pattern, and only the transcript's entrypoint says a script drove it. */
+  mkSession('-c-scratch', 'headsess', [900, 910], 'C:\\scratch');
+  {
+    const hf = join(cfg, 'projects', '-c-scratch', 'headsess.jsonl');
+    writeFileSync(hf, readFileSync(hf, 'utf8').trim().split('\n').map(l => JSON.stringify({ ...JSON.parse(l), entrypoint: 'sdk-cli' })).join('\n') + '\n');
+  }
   mkdirSync(join(cfg, 'tokenbrake'), { recursive: true });
   const capRow = { t: T0 + 2500, ev: 'read-cap', session: 'realsess', tool: 'Read', what: '/x.js', bytes: 80000, lines: 1900, limit: 300, persisted: false };
   /* The calibration arm ran WITH the guard recording. Without this row it reads as unguarded, and then "with
@@ -599,6 +606,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --where skips a calibration arm on the same rule as the benchmark',
     /calibses\s+staged session/.test(r.stdout) && !/calibses \(/.test(r.stdout),
     (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
+  t('cli: --where skips a headless session outside any staged cwd, and names it headless',
+    /headsess\s+staged session -- a headless claude -p run/.test(r.stdout) && !/headsess \(/.test(r.stdout),
+    (r.stdout.match(/[^\n]*headsess[^\n]*/) || [])[0]);
+  t('cli: --cwd brings a headless session back on purpose', /headsess \(2\)/.test(run(['--where', '--cwd=scratch']).stdout));
   t('cli: --where pools the real session and not the benchmark', /All ranged reads: 5/.test(r.stdout) && !/benchses \(/.test(r.stdout),
     (r.stdout.match(/All ranged reads:[^\n]*/) || [])[0]);
   t('cli: --where marks the configured cap', /<- your current readLimitLines/.test(r.stdout));
@@ -767,17 +778,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('cli: --all tags a calibration arm too, not just the benchmark',
     /calib\s+C:.work.calibration-stage1/.test(r.stdout),
     (r.stdout.match(/[^\n]*calibses[^\n]*/) || [])[0]);
+  t('cli: --all tags a headless session by its entrypoint, whatever its cwd',
+    /headless\s+C:.scratch/.test(r.stdout), (r.stdout.match(/[^\n]*headsess[^\n]*/) || [])[0]);
   r = run(['--all', '--top=1']);
   t('cli: --all stops truncating silently and says how to see the rest',
-    /Sessions, newest first \(4, newest 1 shown\)/.test(r.stdout)
-    && /3 older session\(s\) not listed -- add --top=4 for every one/.test(r.stdout),
+    /Sessions, newest first \(5, newest 1 shown\)/.test(r.stdout)
+    && /4 older session\(s\) not listed -- add --top=5 for every one/.test(r.stdout),
     (r.stdout.match(/[^\n]*not listed[^\n]*/) || [])[0]);
   /* The counts are the point of the block and they are taken over every session, not the printed ones: a
      count whose population is smaller than the header says is the defect one line above. */
   t('cli: --all counts over every session, not the ones it printed',
     /* 3 guarded, 2 outside staged work: the calibration arm has a ledger row, so the last number only comes
        out at 2 if it subtracts staged work rather than the benchmark alone. */
-    /Of 4 readable session\(s\): 1 benchmark, 1 calibration, 3 with guard records, 2 with guard records outside staged work/.test(r.stdout),
+    /Of 5 readable session\(s\): 1 benchmark, 1 calibration, 1 headless, 3 with guard records, 2 with guard records outside staged work/.test(r.stdout),
     (r.stdout.match(/[^\n]*readable session[^\n]*/) || [])[0]);
   t('cli: --all says the count is still not eligibility, because an A/B arm looks like ordinary work',
     /not a count of eligible sessions/.test(r.stdout) && /A.B arm run outside a calibration directory is ordinary/.test(r.stdout));
@@ -4256,19 +4269,31 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rmSync(join(dir, 'grep.jsonl'));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
-  t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, '/w') === '');
+  t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, { cwd: '/w' }) === '');
+  /* AB-TASK.md, 2026-09-25: a headless session is staged wherever it ran, and the cwd kind wins when both apply. */
+  t('stage 2: an automatic compaction in a headless session does not count',
+    TR.compactionWhy(row, { cwd: '/w', headless: true }) === 'headless session' && TR.compactionWhy(row, { cwd: '/x/calibration', headless: true }) === 'benchmark/calibration'
+    && TR.stagedKind({ cwd: '/w', headless: true }) === 'headless' && TR.stagedKind({ cwd: '/x/tokenbrake-bench', headless: true }) === 'bench' && TR.stagedKind({ cwd: '/w', headless: false }) === '');
+  writeFileSync(join(dir, 'hl.jsonl'), [{ type: 'user', cwd: '/w', message: { content: 'hi' } },
+    { type: 'assistant', requestId: 'h1', cwd: '/w', entrypoint: 'sdk-cli', message: { content: [] } }].map(x => JSON.stringify(x)).join('\n') + '\n');
+  writeFileSync(join(dir, 'hl-side.jsonl'), [{ type: 'assistant', requestId: 'h1', cwd: '/w', entrypoint: 'cli', message: { content: [] } },
+    { type: 'assistant', requestId: 'h2', cwd: '/w', isSidechain: true, entrypoint: 'sdk-cli', message: { content: [] } }].map(x => JSON.stringify(x)).join('\n') + '\n');
+  t('parse: any entry with entrypoint sdk-cli marks the session headless, a sidechain one included',
+    TR.parseTranscript(join(dir, 'hl.jsonl')).headless === true && TR.parseTranscript(join(dir, 'hl-side.jsonl')).headless === true
+    && p.headless === false);
+  rmSync(join(dir, 'hl.jsonl')); rmSync(join(dir, 'hl-side.jsonl'));
   t('stage 2: manual, other models and bench or calibration sessions do not',
-    TR.compactionWhy({ ...row, trigger: 'manual' }, '/w') === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, '/w'))
-    && TR.compactionWhy(row, '/x/tokenbrake-bench') === 'benchmark/calibration' && TR.compactionWhy(row, '/tmp/calibration') === 'benchmark/calibration');
+    TR.compactionWhy({ ...row, trigger: 'manual' }, { cwd: '/w' }) === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, { cwd: '/w' }))
+    && TR.compactionWhy(row, { cwd: '/x/tokenbrake-bench' }) === 'benchmark/calibration' && TR.compactionWhy(row, { cwd: '/tmp/calibration' }) === 'benchmark/calibration');
   t('weights: Opus 5.5 has its own, though its id starts like Opus 5; a dated id is its model; others have none',
     TR.weightsOf('claude-opus-5-5').read === 0.16 && TR.weightsOf('claude-opus-5-5-20260920').label === 'Opus 5.5'
     && TR.weightsOf('claude-opus-5-20260301').read === 0.20 && TR.weightsOf('claude-opus-5-55') === null && TR.weightsOf(null) === null);
   const since55 = Date.parse(TR.weightsOf('claude-opus-5-5').countsFrom);
   t('stage 2: Opus 5.5 counts from the day its weights merged, not before; a dated Opus 5 id still counts',
-    TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 }, '/w') === ''
-    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 - 1 }, '/w') === 'Opus 5.5 before 2026-09-25'
-    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: null }, '/w') === 'Opus 5.5 before 2026-09-25'
-    && TR.compactionWhy({ ...row, model: 'claude-opus-5-20260301' }, '/w') === '');
+    TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 }, { cwd: '/w' }) === ''
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 - 1 }, { cwd: '/w' }) === 'Opus 5.5 before 2026-09-25'
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: null }, { cwd: '/w' }) === 'Opus 5.5 before 2026-09-25'
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-20260301' }, { cwd: '/w' }) === '');
   const p55 = TR.parseTranscript(join(dir, 'auto1.jsonl'));
   p55.requests.forEach(q => { q.model = 'claude-opus-5-5'; });
   const [row55] = TR.compactionView(p55);
@@ -4389,7 +4414,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     rs.stdout.indexOf('bigsess') < rs.stdout.indexOf('savesess') && /60k not carried/.test(rs.stdout),
     (rs.stdout.match(/[^\n]*bigsess[^\n]*/) || [''])[0]);
   t('a calibration cwd is listed under staged work, not among ordinary sessions',
-    /Staged work -- benchmark fixtures and calibration arms/.test(rs.stdout)
+    /Staged work -- benchmark fixtures, calibration arms and headless runs/.test(rs.stdout)
     && rs.stdout.indexOf('calibses') > rs.stdout.indexOf('Staged work')
     && /calibses[^\n]*guard\s+calib\s/.test(rs.stdout));
   t('the totals keep staged work out of the ordinary-work figure',
@@ -4413,13 +4438,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     /* The four pooled views must drop staged work on ONE rule (AB-TASK.md, 2026-09-20). --where, --reads and
        --reach are asserted on a calibration fixture above; tune's arms are a separate config, so the fourth
        is held structurally: nowhere in cli.js does a view test a cwd for staged-ness on its own. */
-    const pools = (src.match(/poolSkip\(cwd, only,/g) || []).length;
+    const pools = (src.match(/poolSkip\(p, only,/g) || []).length;
     t('all four pooled views drop staged work through the one filter', pools === 4, pools + ' call site(s)');
     const own = { regex: (src.match(/\/tokenbrake-bench/g) || []).length,
-      cwdTest: (src.match(/transcript\.stagedCwd\(/g) || []).length,
+      row: (src.match(/transcript\.stagedRow\(/g) || []).length,
       kind: (src.match(/transcript\.stagedKind\(/g) || []).length };
     t('cli.js does not spell the staged rule itself: one predicate, one kind, no regex of its own',
-      own.regex === 0 && own.cwdTest === 1 && own.kind === 1, JSON.stringify(own));
+      own.regex === 0 && own.row === 1 && own.kind === 1, JSON.stringify(own));
   }
   rmSync(cfgS, { recursive: true, force: true });
 }

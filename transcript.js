@@ -395,10 +395,13 @@ function parseTranscript(file) {
   const compactions = [];            // request indices at which context was reset
   const boundaries = [];             // { atReq, trigger, preTokens, at } from each compact_boundary: what compacted it, from what size
   let cwd = null, sessionId = null, version = null;
+  let headless = false;              // a `claude -p` session (entrypoint sdk-cli): scripted work, wherever it ran
   let userTurns = 0;                 // typed prompts (isPrompt): the input formatWarning weighs requests against
 
   for (const e of entries) {
-    if (!e || typeof e !== 'object' || e.isSidechain) continue;
+    if (!e || typeof e !== 'object') continue;
+    if (e.entrypoint === 'sdk-cli') headless = true;   // ANY entry, sidechains included (AB-TASK.md, 2026-09-25)
+    if (e.isSidechain) continue;
     if (isPrompt(e)) userTurns++;
     if (!cwd && e.cwd) cwd = e.cwd;
     if (!sessionId && e.sessionId) sessionId = e.sessionId;
@@ -495,7 +498,7 @@ function parseTranscript(file) {
     for (const r of results) if (r.compactedAt == null) r.compactedAt = atReq;
   }
 
-  return { file, cwd, sessionId, version, userTurns, requests, results, compactions, boundaries };
+  return { file, cwd, sessionId, version, headless, userTurns, requests, results, compactions, boundaries };
 }
 
 /* A user entry the person typed as a prompt, which a model request answers. Not the ones Claude Code writes
@@ -643,19 +646,28 @@ function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recove
 
 /* Stage 2's rules (AB-TASK.md, "An earlier compaction window"), in one pure place: which compactions count, and
    the verdict once enough have. A compaction counts when it was automatic, on a calibrated model (from its
-   countsFrom day, if it has one), and outside benchmark and calibration sessions. The stage passes when recovery
+   countsFrom day, if it has one), and outside staged work (STAGED: benchmark, calibration, headless). The stage passes when recovery
    plus compaction's own charge, at the bound, stays under half the saving across STAGE2.n counted compactions. */
 const STAGE2 = { n: 8, share: 0.5 };
-/* Staged work: a benchmark fixture or a calibration arm, driven by a script over a prepared repo. Stage 2
-   pre-registered this rule (AB-TASK.md, "sessions under tokenbrake-bench or a calibration directory don't
-   count"); the saving listing separates the same set, and since the 2026-09-20 amendment --where, --reads,
-   --reach and tune skip it. The KIND is the primitive and the predicate derives from it, so the label a
-   listing prints and the population a view drops can never come from two regexes that merely agree. */
-const STAGED = [['bench', /tokenbrake-bench/i], ['calib', /calibration/i]];
-const stagedKind = (cwd) => (STAGED.find(([, re]) => re.test(cwd || '')) || [''])[0];
-const stagedCwd = (cwd) => !!stagedKind(cwd);
-function compactionWhy(row, cwd) {
-  if (stagedCwd(cwd)) return 'benchmark/calibration';
+/* Staged work: a benchmark fixture, a calibration arm, or a headless `claude -p` run -- driven by a script, not
+   by the owner. Stage 2 pre-registered the cwd rows (AB-TASK.md, "sessions under tokenbrake-bench or a calibration
+   directory don't count"); the headless row joined on 2026-09-25, after three calibration sessions ran from a
+   scratchpad whose path matched neither pattern. The saving listing separates the same set, and since the
+   2026-09-20 amendment --where, --reads, --reach and tune skip it. Every answer derives from the one row that
+   matched, so the label a listing prints and the population a view drops can never come from two rules that
+   merely agree. First match wins: a headless run in a calibration directory is calib. */
+const STAGED = [
+  { kind: 'bench', label: 'benchmark/calibration', test: (s) => /tokenbrake-bench/i.test(s.cwd || '') },
+  { kind: 'calib', label: 'benchmark/calibration', test: (s) => /calibration/i.test(s.cwd || '') },
+  { kind: 'headless', label: 'headless session', skip: 'a headless claude -p run, scripted rather than your work',
+    test: (s) => !!s.headless },
+];
+const stagedRow = (session) => STAGED.find((r) => r.test(session || {})) || null;
+const stagedKind = (session) => (stagedRow(session) || { kind: '' }).kind;
+const staged = (session) => !!stagedRow(session);
+function compactionWhy(row, session) {
+  const st = stagedRow(session);
+  if (st) return st.label;
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
   const w = weightsOf(row.model);
   if (!w) return 'model ' + (row.model || '?');
@@ -2502,7 +2514,7 @@ function renderSummaryLine(parsed, marks) {
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
   const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8);
   const m = marks || {};
-  const cols = m.guard == null ? '' : '  ' + (m.guard ? 'guard' : '     ') + '  ' + String(m.tag || '').padEnd(5);
+  const cols = m.guard == null ? '' : '  ' + (m.guard ? 'guard' : '     ') + '  ' + String(m.tag || '').padEnd(8);
   /* The saving listing is this listing under a filter, so the brake's own three figures join this row
      rather than getting a second row format that can drift from it. */
   const sv = m.saved ? '  ' + String(m.saved.count).padStart(3) + (m.saved.count === 1 ? ' trim ' : ' trims')
@@ -2514,6 +2526,6 @@ function renderSummaryLine(parsed, marks) {
 module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
-  reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd, stagedKind,
+  reachPooled, commandTool, trimmedResults, trimSavings, pfmt, staged, stagedKind, stagedRow,
   GUARD_DEFAULTS: GUARD.DEFAULTS, offlineShadow, OFFLINE, isOnIn, sweepOffline, SWEEP_KNOBS, shadowRecord, SHADOWED, inTrimWindow, trimClass, shellGrid, readGrid, thresholdAdvice, recordAbove, READ_MAX_STEPS, capFrontier, frontierVerdict, HOST_READ_CEILING, HOST_READ_LINES, readKey, readCaps, reach, smallResults, TRIM_CHARS, usageTotals, sessionFacts, renderCompare, ledgerIndex, findTranscripts, renderReport, renderSummaryLine, resultText, describe, CHARS_PER_TOKEN,
   autotune, blobOpportunity, mcpOpportunity, gitOpportunity, TUNE_DEFAULTS, GIT_CMD };

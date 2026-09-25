@@ -478,7 +478,7 @@ strictly apart:
   behavioural and costs a session to learn (the same rule the Read-cap trigger has always lived under).
 
 ```
-npx tokenbrake tune                 # pool your recent real sessions (benchmark and calibration sessions skipped)
+npx tokenbrake tune                 # pool your recent real sessions (benchmark, calibration and headless sessions skipped)
 npx tokenbrake tune --cwd=<text>    # restrict the pool to one project; --session=<prefix> for one session
 npx tokenbrake tune --sweep         # the stateful features replayed at several values of each knob (data only)
 npx tokenbrake tune --write         # apply the MEASURED recommendation to tokenbrake.json (see below)
