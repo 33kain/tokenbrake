@@ -493,15 +493,23 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('the savings line carries the trim through the turns it would have been re-read', /~ 700 tokens kept out, ~ 2k token-reads not carried/.test(out), out.split('\n').find(l => /kept out/.test(l)));
   t('a session on an uncalibrated model is not priced in points', !/points/.test(out) && T.limitDraw(p).unpriced === 4 && !T.limitDraw(p).priced);
   {
-    /* The same session on the calibrated model: every figure priced with LIMIT_WEIGHTS, uncached input as a write. */
+    /* The same session on the calibrated model: every figure priced with its weights, uncached input as a write. */
     const fileO = join(mkdtempSync(join(tmpdir(), 'tokenbrake-b4o-')), 'sess-opus.jsonl');   // its own dir: the fixture dir's session count is tested below
     writeFileSync(fileO, lines.join('\n').replace(/"model":"m"/g, '"model":"claude-opus-5"') + '\n');
-    const po = T.carry(T.parseTranscript(fileO)), W = T.LIMIT_WEIGHTS, d = T.limitDraw(po);
+    const po = T.carry(T.parseTranscript(fileO)), W = T.weightsOf('claude-opus-5'), d = T.limitDraw(po), near = (a, b) => Math.abs(a - b) < 1e-12;
     t('the draw prices reads, writes (cache writes plus uncached input) and output with the calibrated weights',
-      d.priced === 4 && !d.unpriced && d.read === 10000 * W.read / 1e6 && d.write === 1100 * W.write / 1e6
-        && d.output === 200 * W.output / 1e6, JSON.stringify(d));
+      d.priced === 4 && !d.unpriced && near(d.read, 10000 * W.read / 1e6) && near(d.write, 1100 * W.write / 1e6)
+        && near(d.output, 200 * W.output / 1e6) && d.models.join() === 'Opus 5', JSON.stringify(d));
     const outO = T.renderReport(po, ledger, { top: 5 });
     t('the report prints the draw in points of the five-hour window', /Five-hour window: ~ 0\.02 points drawn -- cache reads < 0\.01, writes 0\.01, output 0\.01 \(weights calibrated on Opus 5\)/.test(outO), outO.split('\n').find(l => /Five-hour/.test(l)));
+    /* A session that moved to Opus 5.5 halfway: each request priced with its own model's weights, both named. */
+    const pm = T.carry(T.parseTranscript(fileO)), W55 = T.weightsOf('claude-opus-5-5');
+    pm.requests.slice(2).forEach(q => { q.model = 'claude-opus-5-5'; });
+    const dm = T.limitDraw(pm), um = pm.requests.filter(q => q.usage).map(q => q.usage);
+    const wOf = (i) => i < 2 ? W : W55;
+    t('the draw prices each request with its own model\'s weights, and names both models',
+      near(dm.output, um.reduce((s, u, i) => s + (u.output_tokens || 0) * wOf(i).output / 1e6, 0)) && dm.priced === 4
+        && /\(weights calibrated on Opus 5 and Opus 5\.5\)/.test(T.renderReport(pm, ledger, { top: 5 })), JSON.stringify(dm));
     t('the trim saving is priced as one write plus its re-reads', /token-reads not carried, ~ 0\.01 points of the five-hour window/.test(outO), outO.split('\n').find(l => /kept out/.test(l)));
     t('context now is priced per request', /what the next request re-reads, ~ < 0\.01 points/.test(outO));
     const syn = line({ type: 'assistant', requestId: 'req5', uuid: 'req5-a', sessionId: 'sess-abc', cwd: '/w', message: { model: '<synthetic>', usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, content: [{ type: 'text', text: 'No response requested.' }] } });
@@ -4204,7 +4212,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const [row] = TR.compactionView(p);
   t('compactions: the drop is pre minus the next request\'s context', row && row.pre === 300000 && row.post === 50000 && row.drop === 250000);
   t('compactions: the saving is the drop re-read less on every later request, at the calibrated read weight',
-    row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.LIMIT_WEIGHTS.read / 1e6) < 1e-9 && row.requestsCounted === 4);
+    row && Math.abs(row.saving - 250000 * row.requestsCounted * TR.weightsOf('claude-opus-5').read / 1e6) < 1e-9 && row.requestsCounted === 4);
   t('compactions: a file read before and again after is recovery', row && row.recovery.files.length === 1 && row.recovery.files[0] === '/w/app.js' && row.recovery.pts > 0);
   /* Two compactions close together: a read after the second is recovery for the second only. */
   n = 0;
@@ -4232,7 +4240,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('compactions (fixture): the piped multi-file grep is not a single-file read, so only the lookup path can catch it',
     pg.results.find(r => r.id === 'g').file == null && pg.results.find(r => r.id === 'G').lookIn === '/w/app.js');
   const [g] = TR.compactionView(pg);
-  const one = 4000 * (TR.LIMIT_WEIGHTS.write) / 4 / 1e6;   // one 4,000-char result's write, before its re-reads
+  const one = 4000 * TR.weightsOf('claude-opus-5').write / 4 / 1e6;   // one 4,000-char result's write, before its re-reads
   t('compactions: a shell grep and a Grep naming a file read before are recovery; a file never read is not',
     g.recovery.files.length === 1 && g.recovery.files[0] === '/w/app.js' && g.recovery.pts > 2 * one && g.recovery.pts < 3 * one + 0.01);
   /* lookupOf, the matcher itself: case (Windows drive paths are lowercased), programs that are not lookups, name
@@ -4252,11 +4260,26 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('stage 2: manual, other models and bench or calibration sessions do not',
     TR.compactionWhy({ ...row, trigger: 'manual' }, '/w') === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, '/w'))
     && TR.compactionWhy(row, '/x/tokenbrake-bench') === 'benchmark/calibration' && TR.compactionWhy(row, '/tmp/calibration') === 'benchmark/calibration');
-  t('stage 2: Opus 5.5 is not Opus 5, though its id starts the same; a dated Opus 5 id still is',
-    TR.compactionWhy({ ...row, model: 'claude-opus-5-5' }, '/w') === 'model claude-opus-5-5'
+  t('weights: Opus 5.5 has its own, though its id starts like Opus 5; a dated id is its model; others have none',
+    TR.weightsOf('claude-opus-5-5').read === 0.16 && TR.weightsOf('claude-opus-5-5-20260920').label === 'Opus 5.5'
+    && TR.weightsOf('claude-opus-5-20260301').read === 0.20 && TR.weightsOf('claude-opus-5-55') === null && TR.weightsOf(null) === null);
+  const since55 = Date.parse(TR.weightsOf('claude-opus-5-5').countsFrom);
+  t('stage 2: Opus 5.5 counts from the day its weights merged, not before; a dated Opus 5 id still counts',
+    TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 }, '/w') === ''
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: since55 - 1 }, '/w') === 'Opus 5.5 before 2026-09-25'
+    && TR.compactionWhy({ ...row, model: 'claude-opus-5-5', at: null }, '/w') === 'Opus 5.5 before 2026-09-25'
     && TR.compactionWhy({ ...row, model: 'claude-opus-5-20260301' }, '/w') === '');
+  const p55 = TR.parseTranscript(join(dir, 'auto1.jsonl'));
+  p55.requests.forEach(q => { q.model = 'claude-opus-5-5'; });
+  const [row55] = TR.compactionView(p55);
+  t('compactions: an Opus 5.5 compaction is priced with the Opus 5.5 weights',
+    Math.abs(row55.saving - row55.drop * row55.requestsCounted * 0.16 / 1e6) < 1e-9 && row55.recovery.pts < row.recovery.pts);
   const rowsOf = (saving, rec) => Array.from({ length: TR.STAGE2.n }, () => ({ saving, recovery: { pts: rec } }));
   t('stage 2: no verdict before 8 are counted', TR.compactionVerdict(rowsOf(10, 0).slice(1)).verdict === null);
+  const mixed = rowsOf(10, 1).map((r, i) => ({ ...r, model: i < 3 ? 'claude-opus-5' : 'claude-opus-5-5-20260920' }));
+  const pm = TR.compactionVerdictByModel(mixed);
+  t('stage 2: the verdict per model groups each model\'s compactions, dated ids with their model',
+    pm.map(m => m.label + ':' + m.n).join() === 'Opus 5:3,Opus 5.5:5' && pm[0].saving === 30 && pm[1].recovery === 5, JSON.stringify(pm));
   t('stage 2: PASS when recovery plus the 1.6 charge stays under half the saving', TR.compactionVerdict(rowsOf(10, 1)).verdict === 'PASS');
   t('stage 2: NOT YET when only the 0.5 estimate passes', TR.compactionVerdict(rowsOf(3, 0.5)).verdict === 'NOT YET');
   t('stage 2: FAIL when even the estimate does not', TR.compactionVerdict(rowsOf(1, 1)).verdict === 'FAIL');

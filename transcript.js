@@ -527,19 +527,24 @@ function formatWarning(p) {
     + 'so the figures below may be empty or wrong. Please report it: https://github.com/33kain/tokenbrake/issues';
 }
 
-/* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, as
-   calibrated on Opus 5 (AB-TASK.md, "Calibration results", 2026-09-18). Other models are not calibrated. */
-const LIMIT_WEIGHTS = { model: 'claude-opus-5', read: 0.20, write: 8.9, output: 34 };
+/* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, per
+   calibrated model: Opus 5 (AB-TASK.md, "Calibration results", 2026-09-18) and Opus 5.5 ("Opus 5.5 recalibration,
+   fourth run", 2026-09-25). Other models are not calibrated. `countsFrom` is the day a model's automatic
+   compactions start counting toward stage 2 (AB-TASK.md, 2026-09-22 amendment: the day its weights merged). */
+const LIMIT_WEIGHTS = [
+  { model: 'claude-opus-5', label: 'Opus 5', read: 0.20, write: 8.9, output: 34 },
+  { model: 'claude-opus-5-5', label: 'Opus 5.5', read: 0.16, write: 7.62, output: 29.44, countsFrom: '2026-09-25' },
+];
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
-/* The calibrated model itself, or it with a date suffix -- not a later model whose id merely starts the same
-   (claude-opus-5-5 starts with claude-opus-5 and is not calibrated; AB-TASK.md, 2026-09-22 amendment). */
-const calibrated = (model, weights = LIMIT_WEIGHTS) => {
+/* A model's weights: the calibrated model itself, or it with a date suffix -- not a later model whose id merely
+   starts the same (claude-opus-5-5 starts with claude-opus-5 and has weights of its own). Null when uncalibrated. */
+const weightsOf = (model) => {
   const m = String(model || '');
-  return m.startsWith(weights.model) && /^(-\d{8})?$/.test(m.slice(weights.model.length));
+  return LIMIT_WEIGHTS.find(w => m.startsWith(w.model) && /^(-\d{8})?$/.test(m.slice(w.model.length))) || null;
 };
 /* A result's price: written once, then re-read on each request that carries it. */
-const resultPts = (tokens, carriedTurns, weights = LIMIT_WEIGHTS) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
+const resultPts = (tokens, carriedTurns, weights) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
 
 function usageCtx(u) {
   return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
@@ -583,7 +588,7 @@ function lookupOf(r, byName) {
   return null;
 }
 
-function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
+function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
   carry(parsed);
   const reqs = parsed.requests;
   const times = reqs.map(q => Date.parse(q.at) || 0);
@@ -596,6 +601,8 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
   parsed.boundaries.forEach((b, bi) => {
     const k = b.atReq;
     if (k >= reqs.length) return;   // no request after it yet
+    // An uncalibrated model is priced at Opus 5's weights for the listing only; compactionWhy never counts it.
+    const weights = weightsOf(reqs[k].model) || weightsOf('claude-opus-5');
     const end = bi + 1 < parsed.boundaries.length ? parsed.boundaries[bi + 1].atReq : reqs.length;
     const post = usageCtx(reqs[k].usage);
     const pre = b.preTokens != null ? b.preTokens : (k ? usageCtx(reqs[k - 1].usage) : 0);
@@ -635,9 +642,9 @@ function compactionView(parsed, { weights = LIMIT_WEIGHTS, defaultWindow = DEFAU
 }
 
 /* Stage 2's rules (AB-TASK.md, "An earlier compaction window"), in one pure place: which compactions count, and
-   the verdict once enough have. A compaction counts when it was automatic, on the calibrated model, and outside
-   benchmark and calibration sessions. The stage passes when recovery plus compaction's own charge, at the bound,
-   stays under half the saving across STAGE2.n counted compactions. */
+   the verdict once enough have. A compaction counts when it was automatic, on a calibrated model (from its
+   countsFrom day, if it has one), and outside benchmark and calibration sessions. The stage passes when recovery
+   plus compaction's own charge, at the bound, stays under half the saving across STAGE2.n counted compactions. */
 const STAGE2 = { n: 8, share: 0.5 };
 /* Staged work: a benchmark fixture or a calibration arm, driven by a script over a prepared repo. Stage 2
    pre-registered this rule (AB-TASK.md, "sessions under tokenbrake-bench or a calibration directory don't
@@ -647,10 +654,12 @@ const STAGE2 = { n: 8, share: 0.5 };
 const STAGED = [['bench', /tokenbrake-bench/i], ['calib', /calibration/i]];
 const stagedKind = (cwd) => (STAGED.find(([, re]) => re.test(cwd || '')) || [''])[0];
 const stagedCwd = (cwd) => !!stagedKind(cwd);
-function compactionWhy(row, cwd, weights = LIMIT_WEIGHTS) {
+function compactionWhy(row, cwd) {
   if (stagedCwd(cwd)) return 'benchmark/calibration';
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
-  if (!calibrated(row.model, weights)) return 'model ' + (row.model || '?');
+  const w = weightsOf(row.model);
+  if (!w) return 'model ' + (row.model || '?');
+  if (w.countsFrom && !(row.at >= Date.parse(w.countsFrom))) return w.label + ' before ' + w.countsFrom;
   return '';
 }
 function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
@@ -661,6 +670,17 @@ function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
     : saving > 0 && costHigh < saving * STAGE2.share ? 'PASS'
     : saving > 0 && costLow < saving * STAGE2.share ? 'NOT YET' : 'FAIL';
   return { n: counted.length, saving, recovery, costLow, costHigh, verdict };
+}
+/* The same, for each model among the counted: their weights differ beyond the calibration's resolution, so the
+   verdict is also given per model (AB-TASK.md, 2026-09-22 amendment). */
+function compactionVerdictByModel(counted) {
+  const by = new Map();
+  for (const r of counted) {
+    const label = (weightsOf(r.model) || { label: r.model }).label;
+    if (!by.has(label)) by.set(label, []);
+    by.get(label).push(r);
+  }
+  return [...by].map(([label, rs]) => ({ label, ...compactionVerdict(rs) }));
 }
 
 /* The carried cost of each result: size x the number of later requests that re-read it, stopping at
@@ -842,7 +862,8 @@ function trimSavings(parsed, ledgerRecs) {
     saved += tok;
     savedCarried += tok * (r.carriedTurns + 1);
     const q = parsed.requests[r.afterReq];
-    if (calibrated(q && q.model)) pts += resultPts(tok, r.carriedTurns); else unpriced++;
+    const w = weightsOf(q && q.model);
+    if (w) pts += resultPts(tok, r.carriedTurns, w); else unpriced++;
   }
   return { count: trimmed.length, saved, savedCarried, pts, unpriced };
 }
@@ -1148,23 +1169,25 @@ function usageTotals(parsed) {
   return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last, lastModel };
 }
 
-/* The session's draw on the five-hour limit, in points of the window, priced with LIMIT_WEIGHTS: cache reads,
-   writes (cache writes plus uncached input, as the calibration and the replay count them) and output. Only
-   requests on the calibrated model are priced; the rest are counted and never guessed at. A request whose
-   usage is all zero (Claude Code's own synthetic replies) is neither. Pure. */
+/* The session's draw on the five-hour limit, in points of the window, each request priced with its model's
+   LIMIT_WEIGHTS: cache reads, writes (cache writes plus uncached input, as the calibration and the replay count
+   them) and output. Only requests on a calibrated model are priced; the rest are counted and never guessed at.
+   A request whose usage is all zero (Claude Code's own synthetic replies) is neither. Pure. */
 function limitDraw(parsed) {
   let read = 0, write = 0, output = 0, priced = 0, unpriced = 0;
+  const models = new Set();
   for (const q of parsed.requests) {
     const u = q.usage;
     if (!u || !(usageCtx(u) + (u.output_tokens || 0))) continue;
-    if (!calibrated(q.model)) { unpriced++; continue; }
+    const W = weightsOf(q.model);
+    if (!W) { unpriced++; continue; }
     priced++;
-    read += u.cache_read_input_tokens || 0;
-    write += (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0);
-    output += u.output_tokens || 0;
+    models.add(W.label);
+    read += (u.cache_read_input_tokens || 0) * W.read / 1e6;
+    write += ((u.cache_creation_input_tokens || 0) + (u.input_tokens || 0)) * W.write / 1e6;
+    output += (u.output_tokens || 0) * W.output / 1e6;
   }
-  const W = LIMIT_WEIGHTS;
-  return { read: read * W.read / 1e6, write: write * W.write / 1e6, output: output * W.output / 1e6, priced, unpriced };
+  return { read, write, output, priced, unpriced, models: [...models] };
 }
 
 /* Which results the guard trimmed, from the ledger: keyed by tool_use_id where the ledger has one (0.1.0
@@ -2225,13 +2248,15 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   if (u.requestsWithUsage) {
     const pct = u.processed ? Math.round(100 * u.cacheRead / u.processed) : 0;
     lines.push(`  Context processed: ${kfmt(u.processed)} tokens across ${fmt(u.requestsWithUsage)} requests (${pct}% read from cache); output ${kfmt(u.out)}`);
+    const lastW = weightsOf(u.lastModel);
     lines.push(`  Context now: ~ ${kfmt(u.contextNow)} tokens -- what the next request re-reads`
-      + (calibrated(u.lastModel) ? `, ~ ${pfmt(u.contextNow * LIMIT_WEIGHTS.read / 1e6)} points of the five-hour window each time` : ''));
+      + (lastW ? `, ~ ${pfmt(u.contextNow * lastW.read / 1e6)} points of the five-hour window each time` : ''));
     /* The same usage in the unit the limit is spent in (AB-TASK.md, "Calibration results"): a cache write weighs
-       ~45 cache reads, and output ~170, so the token count above hides where the window actually went. */
+       ~45 cache reads, and output ~170 (Opus 5; every calibrated model so far is alike), so the token count above
+       hides where the window actually went. */
     if (draw.priced) {
       lines.push(`  Five-hour window: ~ ${pfmt(draw.read + draw.write + draw.output)} points drawn -- cache reads ${pfmt(draw.read)}, writes ${pfmt(draw.write)}, output ${pfmt(draw.output)}`
-        + ` (weights calibrated on Opus 5${draw.unpriced ? `; ${fmt(draw.unpriced)} requests on other models not priced` : ''})`);
+        + ` (weights calibrated on ${draw.models.join(' and ')}${draw.unpriced ? `; ${fmt(draw.unpriced)} requests on other models not priced` : ''})`);
     }
   }
   const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
@@ -2486,7 +2511,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, STAGE2, LIMIT_WEIGHTS, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, stagedCwd, stagedKind,
