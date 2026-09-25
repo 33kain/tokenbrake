@@ -1587,3 +1587,10 @@ then.
 compactions count toward stage B from 2026-09-25, and the 2026-09-22 one is listed as "Opus 5.5 before 2026-09-25".
 `report --compactions` gives the verdict per model once the counted ones span both. The three Opus 5 compactions
 keep their numbers. Stage B is at 3 of 8.
+
+## 0.5.0 is on the registry — 2026-09-25
+
+Cut in PR #121 and published by the `Publish` workflow (run 36139035316). `latest` is 0.5.0 on the registry since
+13:10 UTC. It prices Opus 5.5 with its own weights, which 0.4.0 could not do once Opus 5 left the picker. The run's
+verify step printed 0.4.0 and still passed, because the registry lags the publish by about two minutes and the step
+compared nothing. It now waits for the exact version, and fails if the version has not appeared within 10 minutes.
