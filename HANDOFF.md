@@ -1613,3 +1613,32 @@ processed, ~385 points priced). Nothing was built, and stage B is untouched.
 **So the lever is dropped.** What counts against the window is what gets *written*, not what is carried. The next
 analysis looks there: cache misses and cold rebuilds, where one avoided event is worth hundreds of thousands of
 reads.
+
+## Where the writes go: cold rebuilds after an hour's idle are 16.7% of the owner's draw — 2026-09-25
+
+Measured read-only with `scripts/write-reach.cjs` over the same 60 sessions (~385 points: reads 38%, writes 35%,
+output 27%). Every write in them is 1-hour cache, with no 5-minute writes. Each request's write is split into new
+content and a re-write of context that was already cached. Each re-write of 5k+ is then attributed to a cause:
+
+| cause | events | sessions | re-written | points | share of draw |
+|---|---|---|---|---|---|
+| new content (not a re-write) | | | 5.7M | ~49.4 | 12.8% |
+| **idle > 1h (cache expired)** | **27** | **11** | **7.3M** | **~64.3** | **16.7%** |
+| session start | 43 | 42 | 1.2M | ~10.7 | 2.8% |
+| unexplained miss (gap ~0) | 6 | 4 | 803k | ~7.1 | 1.9% |
+| model switch | 3 | 3 | 261k | ~2.1 | 0.5% |
+| compaction | 5 | 4 | 144k | ~1.2 | 0.3% |
+
+- **Cold rebuilds are one lever as big as the 300k window.** The replay put the window at ~16%, and this is ~16.7%, from
+  only 27 events. The median event re-writes 198k after a 133-minute gap. The largest re-write 510-594k (~4 points
+  each).
+- **Many just miss the cache's life.** 7 events came within 75 minutes (~23 points), 13 within 2 hours (~35), and 17
+  within 3 hours (~45). Only 4 followed a gap over 8 hours. Most were followed by real work (22 of 28 by 6+
+  requests), so the context was still wanted.
+- **What cannot fix it.** A hook has no timer. A headless `claude -p --resume` ping re-writes the whole session
+  instead of reading it (the third recalibration run found this), so an automatic keep-alive would make it worse.
+  Stage B's 300k window already caps the 9 events over 300k, and the replay counted that.
+- **Open, for discussion before anything is built:** a warning shortly before the cache expires, left to the owner to
+  act on. Keeping 500k warm costs one read, about 0.08 points, against a ~3.8-point rebuild. This would ask the
+  user, which the 2026-09-18 discussion left to the report, so it reopens that decision with this number. It needs
+  pre-registration in `AB-TASK.md`, and nothing that changes what enters context while stage B runs.
