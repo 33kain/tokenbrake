@@ -187,7 +187,8 @@ const fresh = ['Q11', 'Q12', 'Q13', 'Q14', 'Q15'].filter(q => score[q]).length;
 
 const parsed = TR.parseTranscript(tf.file);
 const u = parsed.requests.reduce((s, q) => { const x = q.usage || {}; s.read += x.cache_read_input_tokens || 0; s.write += (x.cache_creation_input_tokens || 0) + (x.input_tokens || 0); s.out += x.output_tokens || 0; return s; }, { read: 0, write: 0, out: 0 });
-const W = TR.LIMIT_WEIGHTS;
+// The session's own model's weights; an uncalibrated one falls back to Opus 5's, as before, and the row says which.
+const W = parsed.requests.map(q => TR.weightsOf(q.model)).findLast(Boolean) || TR.weightsOf('claude-opus-5');
 const draw = (u.read * W.read + u.write * W.write + u.out * W.output) / 1e6;
 const recov = TR.compactionView(parsed).map(r => ({ files: r.recovery.files.length, pts: +r.recovery.pts.toFixed(2) }));
 
@@ -203,7 +204,7 @@ const tailScore = { read: TQ.filter((q, k) => q.read && tailRight(q, tail[k]?.te
 const head = (() => { try { return spawnSync('git', ['-C', REPO, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).stdout.trim(); } catch { return null; } })();
 
 const row = { t: new Date().toISOString(), arm: ARM, run: RUN, head, session: m1.session, placement, chose, answers, score, recall, details, fresh,
-  compactions: where, requests: parsed.requests.length, tokens: u, draw: +draw.toFixed(2), recovery: recov, meter: [m1.meter, m2.meter, tail.length ? tail[tail.length - 1].meter : null],
+  compactions: where, requests: parsed.requests.length, tokens: u, weights: W.label, draw: +draw.toFixed(2), recovery: recov, meter: [m1.meter, m2.meter, tail.length ? tail[tail.length - 1].meter : null],
   msg1: m1.text, turns: [m1.turns, m2.turns],
   ...(TQ.length ? { tail: TQ.map((q, k) => ({ ...q, answer: tail[k]?.text, right: tailRight(q, tail[k]?.text) })), tailScore, charges,
     charge: +charge.toFixed(3), total: +(draw + charge).toFixed(2) } : {}) };

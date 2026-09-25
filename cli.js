@@ -949,7 +949,9 @@ function readsReport() {
 /* `--compactions`: every compaction on this machine, priced with the calibrated weights -- the measurement for
    stage 2 of "An earlier compaction window" (AB-TASK.md). Per compaction: the saving the drop in context buys
    until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
-   stage counts automatic compactions on Opus 5 only, outside benchmark and calibration sessions, from --since. */
+   stage counts automatic compactions on a calibrated model (Opus 5.5 from the day its weights merged), outside
+   benchmark and calibration sessions, from --since. When the counted ones span models, each model's verdict is
+   given too (AB-TASK.md, 2026-09-22 amendment). */
 function compactionsReport() {
   const sinceArg = opt('--since');
   const since = sinceArg ? Date.parse(sinceArg) : null;
@@ -971,7 +973,7 @@ function compactionsReport() {
   }
   const k = transcript.kfmt;
   console.log('Compactions -- ' + rows.length + ' found' + (since ? ' since ' + sinceArg : '')
-    + '. Points of the five-hour window, calibrated on Opus 5 (AB-TASK.md, "Calibration results").');
+    + '. Points of the five-hour window, each priced with its model\'s calibrated weights (AB-TASK.md).');
   if (!rows.length) { console.log('\n  None yet. A compaction is recorded in the transcript when Claude Code compacts a session.'); return; }
   console.log('\n  when              trigger  context       later  saving  recovery (files re-read)   counts');
   for (const r of rows.sort((a, b) => (a.at || 0) - (b.at || 0))) {
@@ -980,9 +982,10 @@ function compactionsReport() {
       + ' ' + String(r.later).padStart(5) + '  ' + r.saving.toFixed(2).padStart(6) + '  '
       + (r.recovery.pts.toFixed(2) + ' (' + r.recovery.files.length + ')').padEnd(25) + '  ' + (r.why ? 'no -- ' + r.why : 'yes'));
   }
-  const v = transcript.compactionVerdict(rows.filter(r => !r.why));
+  const counted = rows.filter(r => !r.why);
+  const v = transcript.compactionVerdict(counted), perModel = transcript.compactionVerdictByModel(counted);
   const { n: need, share: bar } = transcript.STAGE2;
-  const share = (c) => v.saving > 0 ? Math.round(100 * c / v.saving) + '%' : 'n/a';
+  const share = (c, of = v) => of.saving > 0 ? Math.round(100 * c / of.saving) + '%' : 'n/a';
   console.log('\n  Counted: ' + v.n + ' of the ' + need + ' automatic compactions stage 2 needs.'
     + '  Saving ' + v.saving.toFixed(1) + ' points; recovery ' + v.recovery.toFixed(1)
     + '; compaction charged at ' + chargeLow + ' and ' + chargeHigh + ' points each.');
@@ -990,6 +993,10 @@ function compactionsReport() {
     + ' Stage 2 passes under ' + Math.round(bar * 100) + '% at the bound, with ' + need + ' counted.');
   if (v.verdict) console.log('  Verdict: ' + (v.verdict === 'NOT YET' ? 'NOT YET -- passes at the estimate, not at the bound; the default stays off' : v.verdict)
     + ' (and only with no more than one "felt worse" logged).');
+  if (perModel.length > 1) for (const m of perModel) {
+    console.log('  ' + m.label + ': ' + m.n + ' counted, saving ' + m.saving.toFixed(1) + ', recovery ' + m.recovery.toFixed(1)
+      + ', cost ' + share(m.costHigh, m) + ' of the saving at the bound.');
+  }
   console.log('\n  Recovery is inferred: a file read again after a compaction may be one the next step needed anyway.');
 }
 

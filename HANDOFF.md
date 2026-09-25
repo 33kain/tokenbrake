@@ -1579,3 +1579,11 @@ details are in `AB-TASK.md` under "Opus 5.5 recalibration, fourth run".
 `calibrated()` accepts `claude-opus-5-5`. That change runs the `/simplify` → `/code-review` → `/security-review`
 loop. Opus 5.5 automatic compactions count toward stage B from the day it merges. Stage B stays at 3 of 8 until
 then.
+
+## `LIMIT_WEIGHTS` is per model; Opus 5.5 compactions count from 2026-09-25
+
+`transcript.js` now holds Opus 5 (0.20 / 8.9 / 34) and Opus 5.5 (0.16 / 7.62 / 29.44). `weightsOf(model)` replaces
+`calibrated()`. Each request, trim and compaction is priced with its own model's weights. Opus 5.5 automatic
+compactions count toward stage B from 2026-09-25, and the 2026-09-22 one is listed as "Opus 5.5 before 2026-09-25".
+`report --compactions` gives the verdict per model once the counted ones span both. The three Opus 5 compactions
+keep their numbers. Stage B is at 3 of 8.
