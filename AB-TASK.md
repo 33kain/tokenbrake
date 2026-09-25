@@ -4156,3 +4156,19 @@ take every combination of each move ±1 point.
 
 **Not yet in effect.** Opus 5.5 compactions count from the day these weights are merged into `LIMIT_WEIGHTS`
 (`transcript.js`, which today holds Opus 5's only), and not from this record.
+
+## Where stage B's "felt worse" is logged — 2026-09-25, before any is logged
+
+Stage 2 (and stage B, which keeps it) says a compaction after which the work felt worse is written down the same
+day, in one line, but not where. It is written here, in the table below, one row per compaction. This changes
+nothing that is measured or counted. It fixes only where the owner's lines live, so the verdict can count them.
+
+- **When:** the same day as the compaction. A row added later is still counted, and says how late it was added.
+- **Which compaction:** the `when` column of `report --compactions` (UTC), so the row matches one listed compaction.
+- **Lost fact:** `yes` if the worse work came from a fact the preparation step (`compactPrep`) should have carried,
+  `no` if not, `?` if unclear. The verdict decides every `?` before it is given.
+- **Counts toward the verdict** only if it follows a compaction the stage counts (automatic, calibrated model, not
+  staged work). A row after any other compaction is kept for the record.
+
+| date | compaction (UTC) | model | what felt worse, one line | lost fact |
+|---|---|---|---|---|
