@@ -1594,3 +1594,22 @@ Cut in PR #121 and published by the `Publish` workflow (run 36139035316). `lates
 13:10 UTC. It prices Opus 5.5 with its own weights, which 0.4.0 could not do once Opus 5 left the picker. The run's
 verify step printed 0.4.0 and still passed, because the registry lags the publish by about two minutes and the step
 compared nothing. It now waits for the exact version, and fails if the version has not appeared within 10 minutes.
+
+## Steering exploration into subagents costs window on the owner's work — 2026-09-25
+
+This is the last of the brake's three directions from 2026-09-18 ("steering the model waits for measurement"). It was
+measured read-only with `scripts/explore-reach.cjs`, over 60 of the owner's sessions (832M tokens of context
+processed, ~385 points priced). Nothing was built, and stage B is untouched.
+
+- **Exploration** is 3+ read-only results in a row within one user turn. There were 85 such phases, in 35 sessions.
+  As run, they cost 43.5M tokens of context processed (5.2% of all), ~7.0 points.
+- **Delegated,** the same phases cost 25.3M tokens, 18M fewer, but **~24.9 points: 18 points more**. Each subagent
+  writes its own base on its first request (median 32k written, 0 read, over 128 real subagent transcripts), and a
+  write weighs ~48 reads on Opus 5.5. Its report back is small (median 378 tokens).
+- **No rule rescues it.** Delegating only phases of 5+, 8+ or 12+ results still loses (-5.4, -0.8, -0.1 points). An
+  oracle that picks only the winning phases finds 2, for +0.4 points (0.1% of the draw). A free subagent base would
+  give ~+2.7 points, under 1%.
+
+**So the lever is dropped.** What counts against the window is what gets *written*, not what is carried. The next
+analysis looks there: cache misses and cold rebuilds, where one avoided event is worth hundreds of thousands of
+reads.
