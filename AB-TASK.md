@@ -4173,6 +4173,9 @@ nothing that is measured or counted. It fixes only where the owner's lines live,
 | date | compaction (UTC) | model | what felt worse, one line | lost fact |
 |---|---|---|---|---|
 
+Asked on 2026-09-26: the owner saw no difference after the two counted compactions of 2026-09-25 20:53 and
+2026-09-26 08:46 (stage B at 5 of 8). No row.
+
 ## A warning before the cache goes cold — pre-registered 2026-09-25, before anything is built or run
 
 **Why.** On the owner's 60 sessions (HANDOFF.md, 2026-09-25, `scripts/write-reach.cjs`), re-writing context after
