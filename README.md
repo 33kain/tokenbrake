@@ -1,18 +1,31 @@
 # tokenbrake
 
-Find out what ate your Claude Code context, then brake it if your report says there is anything to brake.
+[![npm](https://img.shields.io/npm/v/tokenbrake?color=10B981&label=npm)](https://www.npmjs.com/package/tokenbrake)
+[![downloads](https://img.shields.io/npm/dm/tokenbrake?color=10B981)](https://www.npmjs.com/package/tokenbrake)
+[![CI](https://github.com/33kain/tokenbrake/actions/workflows/ci.yml/badge.svg)](https://github.com/33kain/tokenbrake/actions/workflows/ci.yml)
+[![node](https://img.shields.io/badge/node-%E2%89%A518-52525B)](https://github.com/33kain/tokenbrake/blob/main/package.json)
+[![dependencies](https://img.shields.io/badge/dependencies-0-10B981)](https://github.com/33kain/tokenbrake/blob/main/package.json)
+[![license](https://img.shields.io/badge/license-MIT-52525B)](https://github.com/33kain/tokenbrake/blob/main/LICENSE)
+
+**Find out what ate your Claude Code context, then brake it if your report says there is anything to brake.**
 
 ```
 npx tokenbrake report
 ```
 
-No install, no hooks, no config, nothing written anywhere: it reads the session transcripts Claude Code already
-keeps under `~/.claude/projects/` and ranks every tool result by the tokens it actually took. That isn't its size.
-It's **carried**: its size times the number of later requests that re-read it, because a tool result is re-sent as
-context on every request until the session compacts. A 4k-token file read at request 3 of 100 is about 400k
-token-reads, and the ranking puts results like that at the top where you can see them. Then it tells you how much of
-that the brake could act on at all, and, when tokenbrake was not running, whether installing it is worth it for
-work like yours. Often it is not, and the report says so.
+![tokenbrake report on a real session: what ate the context, ranked by tokens carried](https://raw.githubusercontent.com/33kain/tokenbrake/main/site/report.svg)
+
+No install, no hooks, nothing written: the report reads the transcripts Claude Code already keeps and ranks every
+tool result by the tokens it was **carried** through, not by its size. The brake (`npx tokenbrake init`) is
+optional, and the report tells you whether it has anything to act on in work like yours. Often it does not.
+
+## How it works
+
+A tool result's size is not what it cost. It is re-sent as context on every request until the session compacts,
+so what it took is its size times the number of later requests that re-read it: its **carried** tokens. A 4k-token
+file read at request 3 of 100 is about 400k token-reads, and the ranking puts results like that at the top where
+you can see them. Then the report tells you how much of that the brake could act on at all, and, when tokenbrake
+was not running, whether installing it is worth it for work like yours. Often it is not, and the report says so.
 
 The brake is step two: Claude Code hooks (`npx tokenbrake init`) that trim oversized shell output and cap
 unbounded reads of large files before they enter context. Its measured record, losses included, is in
