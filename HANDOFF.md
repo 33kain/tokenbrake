@@ -1678,3 +1678,27 @@ This closes the bug the entry above left open. The amendment went into `AB-TASK.
 
 Nothing counted moved: the scripts' pools are the same (`write-reach`: 57 sessions). Stage B has no headless
 automatic compaction.
+
+## `tune` calls a feature backfired on a single pull-back — 2026-09-27, parked until stage B closes
+
+`tuneAdvice` in `transcript.js` (line ~2081) sets a feature that is on to `review` as soon as `measured.backfired > 0`.
+`review` prints "[!!] it backfired; reconsider leaving it on". On the owner's machine that verdict comes from very
+few events:
+
+| feature | fired | pulled back | ~token-reads saved |
+|---|---|---|---|
+| `blobElide` | 6 | 1 | 522,556 |
+| `readAfterEdit` | 2 | 1 (sent the model back) | — |
+| `dedup` | 1 | 1 | 37,360 |
+
+The same function already has a "too few firings to be sure" state for a clean record (`try`). A backfire gets no
+such floor, so one pull-back turns a feature `[!!]` even when it saved more than it cost (`blobElide`).
+
+**Proposal, not agreed:** a minimum number of firings before `review`. Or weigh the pull-back's token-reads against
+what was saved, so the advice is net rather than any-event. This changes what `tune` recommends, not what enters
+context. It goes through the review loop, and it waits for stage B's 8 compactions (remediation scope,
+2026-09-22). Until then the owner keeps all seven features on: one event is not a reason to turn one off.
+
+Also noted: shadow mode records nothing here because every off-by-default feature is on in
+`~/.claude/tokenbrake.json`. The only shadow rows (24) are `compactPrep`'s from 2026-09-19, before it was turned on.
+That is expected, not a bug.
