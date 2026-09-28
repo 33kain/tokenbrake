@@ -1722,3 +1722,11 @@ leaves out the results `trimmedResults` names (marker AND ledger row). Guarded s
 
 Unicode glyphs (bars, scissors, arrows) only where the console is known to render them: not Windows, or Windows
 Terminal, or VS Code. Everywhere else, and whenever the output is piped, the report stays ASCII.
+
+## 0.6.0 is on the registry — 2026-09-28
+
+Cut in PR #131 and published by the `Publish` workflow (run 36477971365). `latest` is 0.6.0 on the registry since
+20:21 UTC. It ships the brief default `report` with the net savings table (#130; the old report is `report
+--detail`) and headless sessions as staged work (#125, #126). The verify step waited about five minutes for the
+exact version to appear and passed; the publish itself took three seconds. The owner installed it globally
+(replacing a stale 0.3.0) and confirmed the new report runs.
