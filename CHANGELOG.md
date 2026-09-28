@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.0 — 2026-09-28
+
+`report` opens on a verdict. The default is now about twenty lines: what the context holds, what the session
+processed, where the tool output went, what ate it, and -- when the guard ran -- what it lowered, net of what the
+model pulled back, against the whole session. The full report is `report --detail`, unchanged.
+
+- **The default `report` is a brief view.** Three headline figures (context now; processed, with the cache share
+  and points of the five-hour window; tool output entered and carried), the share of carried tool output by tool,
+  and the five heaviest results with the trimmed ones marked. When the guard ran, a table of what it lowered --
+  tool output carried, all context processed, the five-hour window -- each without (an estimate: it assumes the
+  model would have worked the same way without the guard), with, and lowered; then the pull-backs subtracted, and
+  a Net against the whole session in tokens and in points. A Net below zero is printed as one and says so. Without
+  the guard there is no table, only what the brake could have reached and whether installing it is worth it.
+  One `Next:` line says where to look. `--top` defaults to 5 here, 10 with `--detail`.
+- **Color and glyphs only where they render.** Color on a terminal, off under `NO_COLOR` or when piped. Bars,
+  scissors and arrows only on a console known to render them (not Windows, Windows Terminal, VS Code); everywhere
+  else the report stays ASCII.
+- **`report --detail`'s "small shell output" share no longer counts the guard's own trims.** A trimmed result sat
+  under the threshold only because the guard cut it, so the share read higher than the output no trim touches.
+- **Headless sessions are staged work.** A session any of whose entries came from `claude -p` (`sdk-cli`,
+  sidechains included) is skipped by the pooled views (`--where`, `--caps`, `--reads`, `--reach`) and listed apart
+  in `--all` and `--saved`, like benchmark and calibration sessions; `--cwd` includes them explicitly.
+- `backfireAudit` also returns `recoveredPts`, the pull-backs in points of the five-hour window.
+
 ## 0.5.0 — 2026-09-25
 
 Opus 5.5 is priced. Opus 5 has left Claude Code's model picker, so 0.4.0 gives today's sessions no points of the

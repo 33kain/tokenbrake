@@ -62,7 +62,7 @@ could reach, and it leaves the decision to that. The whole record, losses includ
 
 ## Install
 
-As a Claude Code plugin (0.5.0):
+As a Claude Code plugin (0.6.0):
 
 ```
 claude plugin marketplace add 33kain/tokenbrake
@@ -108,7 +108,7 @@ To have it in every cloud session, install it from the environment's **Setup scr
 
 ```bash
 #!/bin/bash
-npm i -g tokenbrake@0.5.0 || true
+npm i -g tokenbrake@0.6.0 || true
 tokenbrake init || true
 tokenbrake status || true
 ```
