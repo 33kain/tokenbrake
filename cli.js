@@ -1013,7 +1013,7 @@ function report(plain) {
   if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
   if (flag('--compactions')) return compactionsReport();
-  const top = count('--top', 10, 1);
+  const top = count('--top', flag('--detail') ? 10 : 5, 1);
   const ledger = loadLedger();
   let file = opt('--transcript');
   const found = transcript.findTranscripts(CFG_DIR);
@@ -1186,6 +1186,14 @@ function report(plain) {
   const { readLimitLines, maxChars, toolMaxChars, raw } = guardCfg();
   const formatNote = transcript.formatWarning(parsed);
   if (formatNote) console.log(formatNote + '\n');
+  if (!flag('--detail')) {
+    /* Unicode glyphs only where the console is known to render them: a Windows console that is not Windows
+       Terminal or VS Code's showed the report's typographic characters as mojibake (the ASCII test below it). */
+    const tty = !!process.stdout.isTTY;
+    const unicode = tty && (process.platform !== 'win32' || !!process.env.WT_SESSION || process.env.TERM_PROGRAM === 'vscode');
+    console.log(transcript.renderBrief(parsed, ledger, { top, maxChars, toolMaxChars, color: tty && !process.env.NO_COLOR, unicode }));
+    return;
+  }
   console.log(transcript.renderReport(parsed, ledger, { top, readLimitLines, maxChars, toolMaxChars, userCfg: raw }));
   console.log('\n' + (found.length > 1 ? found.length + ' sessions on disk; --all lists them. ' : '') + 'Sizes are chars/4 estimates; the usage line is what the API reported.');
 }
@@ -1774,9 +1782,13 @@ function help() {
 
 STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code already keeps.
 
-  npx tokenbrake report               what ate your tokens last session: every tool result ranked by
-                                      the context it was carried through (size x later requests), from
-                                      the Claude Code transcript, with what tokenbrake trimmed
+  npx tokenbrake report               what ate your tokens last session, in about twenty lines: context,
+                                      where the tool output went, the heaviest results, and -- when the
+                                      guard ran -- what it lowered, net of pull-backs, against the whole
+                                      session. Color on a terminal; NO_COLOR turns it off
+      --detail                        the full report: every tool result ranked by the context it was
+                                      carried through (size x later requests), reach, recovery reads,
+                                      where you read, and the shadow replay
       --all                           one line per session on disk, newest first
       --saved                         the same rows, only the sessions the guard kept something out of,
                                       ranked by what was then not carried and split from staged work; each
@@ -1784,7 +1796,7 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       the points -- with the totals under it. Sessions it saved nothing in
                                       are left out; --all lists every one, newest first
       --session=<prefix>              a particular session;  --transcript=<path> a particular file
-      --top=N                         widen the ranking (default 10);  --ledger  the guard's own record only
+      --top=N                         widen the ranking (default 5, 10 with --detail);  --ledger  the guard's own record only
       --where                         every session pooled: where the model's ranged reads land, and what a
                                       Read cap at each size would have hidden. The evidence for
                                       readLimitLines. Reads a cap on the same file provoked are separated
@@ -1857,7 +1869,7 @@ const SPEC = {
   doctor:    { flags: ['--project', '--fix'] },
   /* --cost and its --model are retired (2026-09-18, tokens never money) and stay listed so the refusal
      report() prints is what a script that still passes them reads, instead of an unknown-argument error. */
-  report:    { flags: ['--all', '--saved', '--ledger', '--where', '--caps', '--reach', '--reads', '--backfire', '--compactions', '--compare', '--cost'],
+  report:    { flags: ['--detail', '--all', '--saved', '--ledger', '--where', '--caps', '--reach', '--reads', '--backfire', '--compactions', '--compare', '--cost'],
                opts: ['--session', '--transcript', '--top', '--since', '--cwd', '--model'], plainWith: { '--compare': 2 } },
   tune:      { flags: ['--sweep', '--write'], opts: ['--cwd', '--session'] },
   preset:    { plain: 1 },

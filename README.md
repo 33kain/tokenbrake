@@ -159,7 +159,8 @@ leaves your machine.
 ## What ate your tokens
 
 ```
-npx tokenbrake report                     # last session
+npx tokenbrake report                     # last session, in about twenty lines -- and what the brake lowered, net
+npx tokenbrake report --detail            # the full report: every result ranked, reach, recovery reads, the replay
 npx tokenbrake report --all               # one line per session on disk, and which had the guard running
 npx tokenbrake report --session=<prefix>  # a particular one; --transcript=<path> for a file
 npx tokenbrake report --top=25            # widen the ranking
@@ -171,6 +172,12 @@ npx tokenbrake report --backfire          # what the guard withheld vs. what the
 npx tokenbrake report --compactions       # every compaction priced: what the drop saves, what re-reading cost
 npx tokenbrake tune                       # read your recent sessions and recommend which off-by-default features to turn on
 ```
+
+`report` opens on a short view: what the context holds now, what the session processed and how much came from
+cache, where the tool output went, the five heaviest results, and -- when the guard ran -- a table of what it
+lowered: tool output carried, all context processed and the five-hour window, each without (an estimate) and
+with, then the pull-backs subtracted and a **Net against the whole session**, which can go below zero and then
+says so. `report --detail` is everything below.
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
 compacts, so a 30k-token test dump at request 3 of 60 is read 57 times. `report` reads the Claude Code

@@ -528,11 +528,11 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const envB4 = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
   const run = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', ...a], { encoding: 'utf8', env: envB4 });
   let r = run([]);
-  t('cli: report with no ledger picks the newest transcript', r.status === 0 && /Session sess-abc/.test(r.stdout), r.stdout.slice(0, 80));
+  t('cli: report with no ledger picks the newest transcript', r.status === 0 && /^tokenbrake report - sess-abc -/.test(r.stdout), r.stdout.slice(0, 80));
   r = run(['--all']);
   t('cli: --all lists sessions', /Sessions, newest first \(1\)/.test(r.stdout) && /sess-abc\.\.\./.test(r.stdout));
   r = run(['--session=sess-a']);
-  t('cli: --session picks by prefix', /Session sess-abc/.test(r.stdout));
+  t('cli: --session picks by prefix', /report - sess-abc -/.test(r.stdout));
   /* --where pools ranged reads across sessions, and must keep the benchmark's synthetic workload out of
      that pool by default: its fixtures place the evidence past line 300 on purpose, so pooling them with
      real work would set readLimitLines from a fixture design. */
@@ -809,11 +809,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
   r = run(['--session=nope']);
   t('cli: an unknown session says so', /No transcript whose session id starts with nope/.test(r.stdout));
-  r = run(['--transcript=' + file, '--top=2']);
+  r = run(['--transcript=' + file, '--top=2', '--detail']);
   t('cli: --transcript and --top', /top 2:/.test(r.stdout) && !/Grep/.test(r.stdout.split('What ate it')[1].split('By tool')[0]));
   writeLedger([]);
   r = run([]);
-  t('cli: with a ledger, the last row\'s transcript path wins', /Session sess-abc/.test(r.stdout) && /\[trimmed from 1k\]/.test(r.stdout));
+  t('cli: with a ledger, the last row\'s transcript path wins', /report - sess-abc -/.test(r.stdout) && /trimmed from 1k/.test(r.stdout));
+  writeFileSync(join(tmpdir(), 'tb-brief.txt'), r.stdout);
   r = run(['--ledger']);
   t('cli: --ledger is the guard\'s own record alone', /Trimmed by tokenbrake/.test(r.stdout) && !/carried/.test(r.stdout));
   /* The report is a console surface, and a Windows console renders the typographic characters it used to
@@ -822,7 +823,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      Nothing pinned the conversion, so this does. The guard's own ellipsis inside a trimmed result is exempt:
      that text goes to the model as JSON, not to a terminal. */
   const nonAscii = (out) => out.split('\n').filter(l => !/^[\x20-\x7e]*$/.test(l));
-  for (const argv of [[], ['--where'], ['--caps'], ['--reads'], ['--reach'], ['--ledger'], ['--all']]) {
+  for (const argv of [[], ['--detail'], ['--where'], ['--caps'], ['--reads'], ['--reach'], ['--ledger'], ['--all']]) {
     const o = run(argv);
     t('cli: report ' + (argv.join(' ') || '(default)') + ' prints ASCII only', nonAscii(o.stdout).length === 0,
       nonAscii(o.stdout).slice(0, 2).join(' | '));
@@ -1997,6 +1998,42 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     a.backfired === 1 && a.withholds.find(w => w.id === B).recovered && !a.withholds.find(w => w.id === A).recovered,
     JSON.stringify(a.withholds.map(w => [w.id.slice(-4), w.recovered])));
   t('a saved-output read is one recovery event with a positive footprint', a.recoveredEvents === 1 && a.recoveredCarried > 0, JSON.stringify({ e: a.recoveredEvents, c: a.recoveredCarried }));
+
+  /* The brief report (the default `report`): the savings table subtracts the pull-back, and Net can go below
+     zero, in which case it says so instead of printing a saving. */
+  {
+    const briefOf = (readTokens, led, opts) => {
+      const b = JSON.parse(JSON.stringify(base)); b.results[3].tokens = readTokens;
+      return T.renderBrief(b, led, opts);
+    };
+    const num = (s) => { const m = /^(-?[\d.]+)([kM]?)$/.exec(s); return m ? +m[1] * ({ k: 1e3, M: 1e6 }[m[2]] || 1) : NaN; };
+    const cells = (out, label) => (out.split('\n').find((l) => l.trim().startsWith(label)) || '').trim().slice(label.length).trim().split(/\s+/);
+    const pos = briefOf(3000, ledger);
+    const [wo, wi, lo] = cells(pos, 'Tool output carried').map(num);
+    t('brief: without = with + lowered, in the tool-output row', Math.abs(wo - (wi + lo)) <= 1000, JSON.stringify([wo, wi, lo]));
+    const pulledCell = cells(pos, 'Pulled back (model re-read a trim)')[0];
+    const netCell = cells(pos, 'Net, tool output (entered + carried)')[0];
+    const b3 = JSON.parse(JSON.stringify(base)); b3.results[3].tokens = 3000; T.carry(b3);
+    const sv3 = T.trimSavings(b3, ledger), want = sv3.savedCarried - T.backfireAudit(b3, ledger).recoveredCarried;
+    t('brief: Net is what the trims kept out of context minus what the pull-backs put back', /^-/.test(pulledCell) && want > 0 && Math.abs(num(netCell) - want) <= 1000, JSON.stringify([want, pulledCell, netCell]));
+    t('brief: the carried row lowers only the later re-reads, not the tokens kept out on entry', Math.abs(lo - (sv3.savedCarried - sv3.saved)) <= 1000, String(lo));
+    t('brief: with no usage reported, Net is not called "whole session"', !/whole session/.test(pos), pos.split('\n').filter((l) => /Net/.test(l)).join(' | '));
+    const neg = briefOf(60000, ledger, { color: true });
+    t('brief: a pull-back bigger than the saving makes Net negative, in red, and says so',
+      /\x1b\[31m\s+Net, tool output \(entered \+ carried\)\s+-/.test(neg) && /the pull-backs cost more than the trims saved/.test(neg), neg.split('\n').filter((l) => /Net/.test(l)).join(' | '));
+    t('brief: no color unless asked, and ASCII unless the terminal is known to take Unicode',
+      !/\x1b\[/.test(pos) && /^[\x0a\x20-\x7e]*$/.test(pos), (pos.match(/[^\x0a\x20-\x7e]/) || [''])[0]);
+    const uni = briefOf(3000, ledger, { unicode: true });
+    t('brief: on a terminal, the trimmed rows carry the scissors and the bars are blocks', /✂ npm test/.test(uni) && /█/.test(uni));
+    const unguarded = briefOf(3000, [], {});
+    const noGuard = T.renderBrief({ ...JSON.parse(JSON.stringify(base)), results: base.results.map((r) => ({ ...r, marker: false })) }, [], {});
+    t('brief: a session the guard never ran in has no table, only what the brake could have reached',
+      !/What tokenbrake lowered/.test(noGuard) && /No sign of tokenbrake in this session\. The brake could have acted on \d+ of 4 tool results/.test(noGuard), noGuard.split('\n').slice(-3).join(' | '));
+    const cutR = { name: 'Bash', marker: true, chars: 10, tokens: 3, carried: 9 }, mention = { name: 'Bash', marker: true, chars: 10, tokens: 3, carried: 9 };
+    const sm = T.smallResults({ results: [cutR, mention, { name: 'Bash', chars: 10, tokens: 3, carried: 9 }] }, undefined, [cutR]);
+    t('small shell output leaves out a result the guard trimmed, not one that only mentions the guard', sm.shell === 3 && sm.n === 2 && sm.carried === 18, JSON.stringify(sm));
+    t('brief: Next never points at a result the guard already marked', !/Next: "npm test"/.test(unguarded), unguarded.split('\n').pop());
+  }
   t('net is gross saved-carried minus what was pulled back', a.net === a.savedCarried - a.recoveredCarried, JSON.stringify({ net: a.net, s: a.savedCarried, r: a.recoveredCarried }));
   t('a pull-back with a positive net verdicts net positive', a.verdict === 'net positive', a.verdict + ' net=' + a.net);
 
