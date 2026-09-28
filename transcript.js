@@ -739,14 +739,17 @@ const TRIM_CHARS = GUARD.DEFAULTS.maxChars;   // the guard's own default maxChar
 const BRAKE_WORTH_PCT = 10;
 /* Shell results the guard leaves alone: Bash and PowerShell results at or under maxChars (TRIM_CHARS, the
    guard's default, when not given). Counted with their carried cost so the untouched share of a session is a
-   number, not a guess. */
-function smallResults(parsed, maxChars) {
+   number, not a guess. A result carrying the trim marker is left out: it sits under the threshold only because
+   the guard already cut it -- `trimmed`, the caller's trimmedResults, since the marker text alone also matches
+   output that merely mentions the guard. */
+function smallResults(parsed, maxChars, trimmed = []) {
+  const cut = new Set(trimmed);
   const limit = limitOf(maxChars);
   const out = { shell: 0, n: 0, tokens: 0, carried: 0 };
   for (const r of parsed.results) {
     if (r.name !== 'Bash' && r.name !== 'PowerShell') continue;
     out.shell++;
-    if (r.chars > (typeof limit === 'function' ? limit(r) : limit)) continue;
+    if (cut.has(r) || r.chars > (typeof limit === 'function' ? limit(r) : limit)) continue;
     out.n++; out.tokens += r.tokens; out.carried += r.carried || 0;
   }
   return out;
@@ -1064,7 +1067,9 @@ function backfireAudit(parsed, ledgerRecs, opts) {
     if (m) { ref = m[1]; kind = 'out-file'; }
     else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]); kind = 'show'; } }
     if (!kind) continue;
-    recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false });
+    const q = parsed.requests[r.afterReq], w = weightsOf(q && q.model);
+    recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false,
+      pts: w ? resultPts(r.tokens || 0, r.carriedTurns, w) : 0 });
   }
 
   /* Match a pull-back to the withhold whose saved output it read, setting both flags in one pass. An out/
@@ -1089,6 +1094,8 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const matched = recoveries.filter((x) => x.matched);
   const recoveredTokens = matched.reduce((s, x) => s + x.tokens, 0);
   const recoveredCarried = matched.reduce((s, x) => s + x.foot, 0);
+  // The same pull-backs in five-hour-window points, priced like trimSavings prices a withhold (0 on an uncalibrated model).
+  const recoveredPts = matched.reduce((s, x) => s + x.pts, 0);
   const unmatched = recoveries.filter((x) => !x.matched);
   const unmatchedCarried = unmatched.reduce((s, x) => s + x.foot, 0);
   const backfired = withholds.filter((w) => w.recovered).length;
@@ -1103,7 +1110,7 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const reReads = readReReads(ledger, parsed);
 
   return { withholds, byKind, saved, savedCarried, recoveredEvents: matched.length,
-    recoveredTokens, recoveredCarried, unmatchedEvents: unmatched.length, unmatchedCarried,
+    recoveredTokens, recoveredCarried, recoveredPts, unmatchedEvents: unmatched.length, unmatchedCarried,
     backfired, net, verdict, caps: { fired: caps.n, induced: cls.induced.length }, deltas, reReads };
 }
 
@@ -2313,7 +2320,7 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   /* What the trim does not touch: shell results under the threshold. Small excerpts carried through a long
      session were 79% of one real audit session's carried context (LANDSCAPE.md); this line says what they
      are here, so a week of real sessions can say whether shape filters for small output are worth building. */
-  const small = smallResults(parsed, maxChars);
+  const small = smallResults(parsed, maxChars, trimmed);
   if (small.shell) {
     lines.push(`  Small shell output, at or under the threshold (excerpts and failures included): ${small.n} of ${small.shell} shell results (~ ${kfmt(small.tokens)} tokens entered, ~ ${kfmt(small.carried)} token-reads carried, ${carried ? Math.round(100 * small.carried / carried) : 0}% of all carried)`);
   }
@@ -2425,6 +2432,136 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   return lines.join('\n');
 }
 
+/* The default report: verdict first, about twenty lines (design agreed 2026-09-22, mockup approved 2026-09-28).
+   Three headline numbers, where the carried tokens went, what ate them, and -- when the guard ran -- what it
+   lowered, as a table whose headline is Net against the WHOLE session: a trim that kept out 18% of tool output
+   is a few percent of what the session processed, and saying "18%" alone would read as "cut my usage 18%".
+   Pull-backs are subtracted in tokens and in points. "without" is an estimate: it assumes the model would have
+   worked the same way without the guard, which only an A/B can measure. Everything else renderReport says is
+   behind `report --detail`, unchanged. Nothing here measures anything new: every figure comes from the same
+   functions renderReport and report --backfire use. `color` wraps figures in ANSI codes; the caller decides it. */
+const homeTilde = (p) => {
+  const h = require('os').homedir();
+  const at = h && (process.platform === 'win32' ? p.toLowerCase().startsWith(h.toLowerCase()) : p.startsWith(h));
+  return at && (p.length === h.length || /[\\/]/.test(p[h.length])) ? '~' + p.slice(h.length).replace(/\\/g, '/') : p;
+};
+function renderBrief(parsed, ledger, { top = 5, maxChars: maxCharsOpt, toolMaxChars, color = false, unicode = false } = {}) {
+  const G = unicode ? { bar: '█', cut: '✂', dot: '·', to: '→', x: '×', minus: '−', rule: '─', ell: '…' }
+    : { bar: '#', cut: '*', dot: '-', to: '->', x: 'x', minus: '-', rule: '-', ell: '..' };
+  const maxChars = limitOf(maxCharsOpt, toolMaxChars);
+  const paint = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : s);
+  const green = paint('32'), amber = paint('33'), red = paint('31'), dim = paint('2'), bold = paint('1');
+  const ran = guardRan(parsed, ledger, parsed.sessionId).ran;
+  carry(parsed);
+  const u = usageTotals(parsed);
+  const draw = limitDraw(parsed);
+  const drawn = draw.priced ? draw.read + draw.write + draw.output : null;
+  const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
+  const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
+  const pctOf = (x, of) => (of ? 100 * x / of : 0);
+  const pct = (x, of) => { const p = pctOf(x, of); return (Math.abs(p) >= 10 || p === 0 ? Math.round(p) : p.toFixed(1)) + '%'; };
+  const lines = [];
+
+  const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8);
+  lines.push(bold(`tokenbrake report ${G.dot} ${sid} ${G.dot} ${homeTilde(parsed.cwd || '')} ${G.dot} ${fmt(parsed.requests.length)} requests`
+    + (parsed.compactions.length ? ` ${G.dot} ${parsed.compactions.length} compaction${parsed.compactions.length === 1 ? '' : 's'}` : '')));
+  lines.push('');
+  if (u.requestsWithUsage) {
+    lines.push(`  Context now    ${kfmt(u.contextNow).padStart(6)} tokens    re-read by every next request`);
+    lines.push(`  Processed      ${kfmt(u.processed).padStart(6)} tokens    ${Math.round(pctOf(u.cacheRead, u.processed))}% from cache`
+      + (drawn != null ? ` ${G.dot} ~ ${pfmt(drawn)} points of the five-hour window` : ''));
+  }
+  lines.push(`  Tool output    ${kfmt(entered).padStart(6)} entered  ${G.to}  ${amber(kfmt(carried) + ' carried')}   (size ${G.x} the requests that re-read it)`);
+
+  /* Where it went: the top three tools as bars, the rest as one row, so the shape reads at a glance. */
+  const mid = (s, n) => { s = String(s || '').replace(/\s+/g, ' '); return s.length <= n ? s : s.slice(0, Math.ceil((n - G.ell.length) * 0.65)) + G.ell + s.slice(s.length - Math.floor((n - G.ell.length) * 0.35)); };
+  const toolName = (n) => String(n || '').replace(/^mcp__.*?__/, '');
+  const byTool = {};
+  for (const r of parsed.results) { const k = toolName(r.name), t = byTool[k] = byTool[k] || { n: 0, carried: 0 }; t.n++; t.carried += r.carried; }
+  const tools = Object.entries(byTool).sort((a, b) => b[1].carried - a[1].carried);
+  if (carried && tools.length) {
+    const rows = tools.slice(0, 3);
+    const rest = tools.slice(3).reduce((o, [, v]) => ({ n: o.n + v.n, carried: o.carried + v.carried }), { n: 0, carried: 0 });
+    if (rest.n) rows.push(['other', rest]);
+    lines.push('');
+    lines.push(`Where it went${' '.repeat(34)}share of tool output carried`);
+    const BAR = 36;
+    for (const [name, v] of rows) {
+      const share = pctOf(v.carried, carried);
+      lines.push(`  ${mid(name, 9).padEnd(10)}${G.bar.repeat(Math.max(share > 0 ? 1 : 0, Math.round(share / 100 * BAR))).padEnd(BAR + 1)}${String(Math.round(share) + '%').padStart(4)}   ${fmt(v.n)} call${v.n === 1 ? '' : 's'}`);
+    }
+  }
+
+  /* What ate it: the heaviest results, the command shortened from the middle so both ends stay readable. */
+  const offered = offeredOf(parsed, ledger);
+  const trimmedOf = (r) => (r.marker ? offered(r) : null);
+  const byCarried = [...parsed.results].sort((a, b) => b.carried - a.carried || b.tokens - a.tokens);
+  const ranked = byCarried.slice(0, top);
+  if (ranked.length) {
+    lines.push('');
+    lines.push(`What ate it${' '.repeat(40)}carried   turns`);
+    for (const r of ranked) {
+      const l = trimmedOf(r);
+      const tag = l ? green(`trimmed from ${kfmt(l.chars / CHARS_PER_TOKEN)}`) : (r.isError ? dim('error') : '');
+      lines.push(`  ${l ? green(G.cut) : ' '} ${mid((r.name === 'Bash' || r.name === 'PowerShell' ? '' : toolName(r.name) + ' ') + r.what, 46).padEnd(46)}  ${amber(kfmt(r.carried).padStart(6))}   ${String(r.carriedTurns).padStart(5)}   ${tag}`.trimEnd());
+    }
+  }
+
+  const cutList = trimmedResults(parsed, ledger);
+  const rc = reach(parsed, cutList, { maxChars });
+  if (!ran) {
+    /* No guard here: no table to fill, only the question a person asks before installing anything. */
+    lines.push('');
+    lines.push(`  No sign of tokenbrake in this session. The brake could have acted on ${rc.window.n} of ${parsed.results.length} tool results, ${pct(rc.window.carried, carried)} of what they carried.`);
+    lines.push('');
+    lines.push(pctOf(rc.window.carried, carried) >= BRAKE_WORTH_PCT
+      ? `Next: \`npx tokenbrake init\` installs the brake. report --detail shows what it would reach.`
+      : `Next: nothing to brake in work like this. report --detail shows where the rest went.`);
+    return lines.join('\n');
+  }
+
+  const sv = trimSavings(parsed, ledger);
+  const audit = backfireAudit(parsed, ledger);
+  const pulled = audit.recoveredCarried, pulledPts = audit.recoveredPts;
+  const priced = drawn != null && sv.count > sv.unpriced;
+  const netTok = sv.savedCarried - pulled, netPts = sv.pts - pulledPts;
+  const withoutProc = u.processed + sv.savedCarried, withoutPts = priced ? drawn + sv.pts : null;
+  const col = (s, n) => String(s).padStart(n);
+  const row = (label, without, withv, lowered, share, indent = '  ') => `${indent}${label.padEnd(35)}${col(without, 14)}  ${col(withv, 10)}  ${col(lowered, 10)}   ${share}`.trimEnd();
+  const netRow = (label, x, f, of) => { const s = x < 0 ? G.minus : ''; return (x < 0 ? red : green)(row(label, '', '', s + f(Math.abs(x)), s + pct(Math.abs(x), of))); };
+  lines.push('');
+  lines.push(row('What tokenbrake lowered', 'without (est.)', 'with', 'lowered', '', ''));
+  // savedCarried counts a kept-out token on entry and on every later request; `carried` counts only the later ones.
+  const savedLater = sv.savedCarried - sv.saved;
+  lines.push(row('Tool output carried', kfmt(carried + savedLater), kfmt(carried), kfmt(savedLater), pct(savedLater, carried + savedLater)));
+  if (u.requestsWithUsage) lines.push(row('All context processed', kfmt(withoutProc), kfmt(u.processed), kfmt(sv.savedCarried), pct(sv.savedCarried, withoutProc)));
+  if (priced) lines.push(row('Five-hour window', pfmt(withoutPts) + ' pts', pfmt(drawn) + ' pts', pfmt(sv.pts) + ' pts', pct(sv.pts, withoutPts)));
+  lines.push(row('Pulled back (model re-read a trim)', '', '', pulled ? G.minus + kfmt(pulled) : '0', pulled && priced ? G.minus + pfmt(pulledPts) + ' pts' : ''));
+  lines.push('  ' + G.rule.repeat(78));
+  // Against the whole session when the API reported usage; without it, only the tool output is known.
+  const netOf = u.requestsWithUsage ? withoutProc : carried + sv.savedCarried;
+  lines.push(netRow(u.requestsWithUsage ? 'Net, whole session' : 'Net, tool output (entered + carried)', netTok, kfmt, netOf));
+  if (priced) lines.push(netRow('Net, five-hour window', netPts, (x) => pfmt(x) + ' pts', withoutPts));
+  lines.push('');
+  const facts = [`${sv.count} trimmed (${rc.acted.n} of the ${rc.window.n} within reach)`,
+    audit.backfired ? `${audit.backfired} pulled back` : 'none pulled back'];
+  const ignored = parsed.results.filter((r) => offered(r) && !r.marker).length;
+  if (ignored) facts.push(`${ignored} offered and not applied`);
+  if (netTok < 0) facts.push('the pull-backs cost more than the trims saved');
+  lines.push(`  ${facts.join(', ')}.`);
+  lines.push(dim('  "without" assumes the model would have worked the same way without the guard.'));
+
+  /* One next step, derived from this session: the heaviest result the brake could still reach, else where the
+     rest went. */
+  const untrimmed = byCarried.find((r) => !r.marker && inTrimWindow(r, maxChars));
+  let smallShare;
+  lines.push('');
+  if (untrimmed && carried > 0 && untrimmed.carried >= 0.05 * carried) lines.push(`Next: "${mid(untrimmed.what, 50)}" was in the brake's reach and not trimmed (~ ${kfmt(untrimmed.carried)} carried). report --detail says why.`);
+  else if ((smallShare = pctOf(smallResults(parsed, maxChars, cutList).carried, carried)) >= 50) lines.push(`Next: ${Math.round(smallShare)}% of what was carried is small shell output, which no trim touches. Details: report --detail`);
+  else lines.push('Next: report --detail for reach, recovery reads and where you read; report --backfire for the pull-backs.');
+  return lines.join('\n');
+}
+
 /* The measurement protocol of AB-TASK.md as one table: two sessions, the same rows, a change column. The rows
    are the ones the A/B rounds compared by hand -- cost, requests, cache reads, output, what tool results
    entered and carried, what the guard trimmed, repeat reads. Nothing here says which arm is which or why
@@ -2523,7 +2660,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, staged, stagedKind, stagedRow,

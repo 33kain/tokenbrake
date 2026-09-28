@@ -1702,3 +1702,23 @@ context. It goes through the review loop, and it waits for stage B's 8 compactio
 Also noted: shadow mode records nothing here because every off-by-default feature is on in
 `~/.claude/tokenbrake.json`. The only shadow rows (24) are `compactPrep`'s from 2026-09-19, before it was turned on.
 That is expected, not a bug.
+
+## The default `report` is the brief view; the old one is `report --detail` — 2026-09-28
+
+The redesign agreed on 2026-09-22 and parked, unparked by the owner on 2026-09-28 with the mockup approved.
+`report` now prints about twenty lines: context now, processed and cache share, tool output entered and carried,
+the share by tool, the five heaviest results, and -- when the guard ran -- a table of what it lowered (tool output
+carried, all context processed, the five-hour window: without as an estimate, with, lowered), the pull-backs
+subtracted, and a Net against the whole session in tokens and in points. Net can go below zero and then says so.
+Without the guard there is no table, only what the brake could have reached. The owner's three answers: the
+pull-backs count in Net too; color on a terminal (NO_COLOR off); the old report stays behind `--detail`.
+
+Nothing stage B measures changed: `compactionView`, `limitDraw`, the weights and the counting rules are untouched.
+`backfireAudit` gained `recoveredPts` (the pull-backs in points, priced like `trimSavings` prices a withhold).
+
+One figure in `--detail` moves: `smallResults` measured a trimmed result at its trimmed size, which is small by
+construction, so the "small shell output" share counted the guard's own trims as output no trim touches. It now
+leaves out the results `trimmedResults` names (marker AND ledger row). Guarded sessions read lower on that line.
+
+Unicode glyphs (bars, scissors, arrows) only where the console is known to render them: not Windows, or Windows
+Terminal, or VS Code. Everywhere else, and whenever the output is piped, the report stays ASCII.
