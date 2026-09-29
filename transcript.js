@@ -502,18 +502,9 @@ function parseTranscript(file) {
   return { file, cwd, sessionId, version, headless, userTurns, requests, results, compactions, boundaries };
 }
 
-/* A user entry the person typed as a prompt, which a model request answers. Not the ones Claude Code writes
-   itself and answers locally: a slash command and its output (/model, /exit), the isMeta caveat beside them,
-   an interrupt marker, or a turn of tool results. Counting those let a session of slash commands alone read
-   as three prompts with no reply. */
-const LOCAL_ENTRY = /^\s*(<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>|\[Request interrupted)/;
-function isPrompt(e) {
-  if (e.type !== 'user' || !e.message || e.isMeta) return false;
-  const c = e.message.content;
-  const text = typeof c === 'string' ? c
-    : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text || '').join('') : '';
-  return !!text && !LOCAL_ENTRY.test(text);
-}
+/* A user entry the person typed as a prompt, not one Claude Code writes and answers itself: the guard's, which
+   coldWarn reads the same way. */
+const isPrompt = GUARD.isPrompt;
 
 /* The transcript is Claude Code's internal format, not a versioned API. When it changes, the parser above
    does not throw: it just recognizes nothing, and the report would print an empty or zeroed session as if
@@ -531,28 +522,14 @@ function formatWarning(p) {
     + 'so the figures below may be empty or wrong. Please report it: https://github.com/33kain/tokenbrake/issues';
 }
 
-/* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, per
-   calibrated model: Opus 5 (AB-TASK.md, "Calibration results", 2026-09-18) and Opus 5.5 ("Opus 5.5 recalibration,
-   fourth run", 2026-09-25). Other models are not calibrated. `countsFrom` is the day a model's automatic
-   compactions start counting toward stage 2 (AB-TASK.md, 2026-09-22 amendment: the day its weights merged). */
-const LIMIT_WEIGHTS = [
-  { model: 'claude-opus-5', label: 'Opus 5', read: 0.20, write: 8.9, output: 34 },
-  { model: 'claude-opus-5-5', label: 'Opus 5.5', read: 0.16, write: 7.62, output: 29.44, countsFrom: '2026-09-25' },
-];
+/* What each kind of token weighs against the five-hour limit, per model, a request's context, and how points and
+   token counts are written: the guard's, because coldWarn's notification prices a re-write with them. */
+const { weightsOf, usageCtx, pfmt, kfmt } = GUARD;
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
-/* A model's weights: the calibrated model itself, or it with a date suffix -- not a later model whose id merely
-   starts the same (claude-opus-5-5 starts with claude-opus-5 and has weights of its own). Null when uncalibrated. */
-const weightsOf = (model) => {
-  const m = String(model || '');
-  return LIMIT_WEIGHTS.find(w => m.startsWith(w.model) && /^(-\d{8})?$/.test(m.slice(w.model.length))) || null;
-};
 /* A result's price: written once, then re-read on each request that carries it. */
 const resultPts = (tokens, carriedTurns, weights) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
 
-function usageCtx(u) {
-  return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
-}
 /* Whether a request reached the API: Claude Code's own synthetic replies carry all-zero usage, and some entries none. */
 const reachedApi = (u) => !!u && usageCtx(u) + (u.output_tokens || 0) > 0;
 
@@ -1219,7 +1196,7 @@ function usageTotals(parsed) {
 }
 
 /* The session's draw on the five-hour limit, in points of the window, each request priced with its model's
-   LIMIT_WEIGHTS: cache reads, writes (cache writes plus uncached input, as the calibration and the replay count
+   weights (the guard's LIMIT_WEIGHTS, through weightsOf): cache reads, writes (cache writes plus uncached input, as the calibration and the replay count
    them) and output. Only requests on a calibrated model are priced; the rest are counted and never guessed at.
    A request whose usage is all zero (Claude Code's own synthetic replies) is neither. Pure. */
 function limitDraw(parsed) {
@@ -2289,8 +2266,6 @@ function findTranscripts(cfgDir) {
 }
 
 const fmt = (n) => Math.round(n).toLocaleString('en-US');
-const pfmt = (n) => n >= 10 ? String(Math.round(n)) : n >= 1 ? n.toFixed(1) : n >= 0.005 ? n.toFixed(2) : '< 0.01';
-const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(Math.round(n));
 
 /* The report, as lines. Pure: takes parsed data, returns text, so the test can read it without a
    console. `top` is how many results to name. */

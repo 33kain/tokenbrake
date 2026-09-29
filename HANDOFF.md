@@ -1885,3 +1885,56 @@ only then the run.
 
 Next: the `coldWarn` prototype, off by default, for checks 2 (the notification shows from a timer the hook started,
 and the hook returns at once) and 3 (a new prompt cancels it).
+
+## coldWarn prototype, off by default, for pilot checks 2 and 3 — 2026-09-30
+
+Branch `claude/coldwarn-pilot`. The reading of the pre-registration went into `AB-TASK.md` first ("Amendment: how the
+coldWarn prototype reads the pre-registration"), in its own commit.
+
+- **`guard.js`, modes `stop`, `session-end` and `coldwarn-timer`.** When a turn ends with at least
+  `coldWarnMinContext` (100,000) in context, the Stop hook starts one detached timer per session and returns. The
+  timer reads the transcript each time it wakes (at most every 5 minutes). While a turn runs (a prompt or a request
+  newer than the last Stop, until an interrupt or an API error ends it without one) it warns nothing. At
+  `coldWarnAfterMin` (50) idle minutes, counted from when the last request was sent, it shows a Windows toast through
+  Windows PowerShell: the folder, the context, and the re-write in points. Then it writes `ev: 'coldwarn'` with
+  `shown` to the ledger. A request that wrote 5-minute cache, or a compaction, leaves nothing to warn about.
+  SessionEnd, `coldWarn: false` or a removed guard file ends the timer at its next wake.
+- **Where it runs.** Windows only: elsewhere there is no notifier and nothing is armed. `TOKENBRAKE_NO_NOTIFY` stands
+  in a notifier that shows nothing (and reports it shown when set to `shown`), so `test.mjs` runs the whole lifecycle
+  on every CI leg.
+- **After `/code-review`.** Fixed: the 5-minute cache; the chain (an answer must begin while the warned cache is
+  warm, and only a shown warning can be answered); interrupts, API errors and local commands no longer hold a timer
+  until the cache expires; the idle clock starts when the request was sent; a Stop landing while the timer decides
+  or shows the toast is looked at again, not dropped; two Stop hooks at once (a second install) leave one timer; the
+  test races. The state file is `coldwarn/<session>.json` (one record, not a log). A second `/simplify` pass then
+  recorded a warning by its request's send time (with `shown`) instead of the time it showed, let the Stop hook skip
+  the transcript read while a timer lives, and made one `INTERRUPTED` pattern for `isPrompt` and the scan.
+  `/security-review` found nothing.
+- **Hooks.** `Stop` and `SessionEnd` join `HOOKS` and `hooks/hooks.json`. With the feature off, the Stop hook costs
+  one node start per turn end (~70 ms, no tokens). `init` must be re-run to register them; `doctor` names them as
+  missing until then.
+- **Moved.** `LIMIT_WEIGHTS`, `weightsOf`, `usageCtx`, `pfmt` and `kfmt` now live in `guard.js`, which is installed
+  alone and prices the toast. `transcript.js` takes them from `GUARD`.
+
+**Check 2, partly seen already.** A hook spawned with piped stdio, as Claude Code spawns it, returned in ~50 ms, and
+its detached timer lived on and showed a toast: two test toasts reached the owner's screen on 2026-09-30 before the
+test seam existed (`shown: true`), plus one sent on purpose. Still to see: the same from a real Claude Code session,
+where Claude Code, not a test, is the parent.
+
+**How to run the pilot.** `node cli.js init` (registers Stop and SessionEnd), then `"coldWarn": true` in
+`~/.claude/tokenbrake.json`. For a quick look, `"coldWarnAfterMin": 2` shows the toast 2 idle minutes after a turn
+in a session over 100k. Such warnings do not count (the amendment). Check 3: keep working in a big session with pauses
+under 50 minutes; no toast should come.
+
+Follow-ups, not done:
+- One machine-wide timer instead of one per armed session: each costs ~45 MB of memory while it waits.
+- `status` builds its installed/missing lines by hand, not from `HOOKS`.
+- SessionEnd could drop every per-session state kind (`dedup`, `edits`, `reads`: ~150 files here), not only coldWarn's.
+  That changes the other features' state across a resume, so it needs its own look. A session that dies without
+  SessionEnd leaves its coldWarn state behind the same way.
+- A session killed without SessionEnd (a crash, maybe a closed terminal) still gets its warning: the timer cannot
+  tell it from an idle one. Watching Claude Code's own process would, but the hook's parent may be a shell that exits
+  with it; the pilot's ledger rows name the session, so such a warning can be spotted.
+- A timer's liveness is its PID. If a reboot kills it, the session is resumed under the same id, and another process
+  of the owner's now has that PID, that session is not warned while that process lives. A missed warning, never a
+  wrong one.

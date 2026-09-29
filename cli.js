@@ -104,12 +104,16 @@ function writeJson(p, obj) {
      guard never sees a failing test run, which is the output it exists for.
    - PreToolUse on Read: the large-read cap.
    - SessionStart on compact: compactPrep re-injects the working set when on; shadow records it when off.
-     Registered either way, like every other feature's hook. */
+     Registered either way, like every other feature's hook.
+   - Stop and SessionEnd (no matcher): coldWarn arms its timer when a turn ends and drops it when the session
+     closes. Off, the Stop hook reads its config and returns. */
 const HOOKS = [
   { event: 'PostToolUse', matcher: '*', mode: 'post' },
   { event: 'PostToolUseFailure', matcher: 'Bash|PowerShell', mode: 'post' },
   { event: 'PreToolUse', matcher: 'Read', mode: 'read-pre' },
-  { event: 'SessionStart', matcher: 'compact', mode: 'session-start' }
+  { event: 'SessionStart', matcher: 'compact', mode: 'session-start' },
+  { event: 'Stop', mode: 'stop' },
+  { event: 'SessionEnd', mode: 'session-end' }
 ];
 const HOOK_EVENTS = HOOKS.map(h => h.event);
 /* The pair stage B passed (AB-TASK.md, "Stage B results", 2026-09-29): Claude Code's `autoCompactWindow` at 300k
@@ -212,11 +216,16 @@ function uninstall() {
 const SELF_TEST_STDOUT = Array.from({ length: 200 }, (_, i) => (i === 100 ? 'ERROR: tokenbrake self-test marker' : `line ${i + 1} tokenbrake self-test filler`)).join('\n');
 const SELF_TEST_FILE = '/tokenbrake-self-test/edited.js';
 const hookOut = (stdout) => { try { const o = JSON.parse(stdout); return (o && o.hookSpecificOutput) || null; } catch { return null; } };
+const quiet = (what) => (stdout) => stdout.trim() === '' ? 'ok (spawns; ' + what + ')' : `unexpected output: ${stdout.slice(0, 80)}`;
 const SELF_TESTS = {
   'read-pre': {
     setup: () => ({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: __filename, limit: 1 } }),
-    check: (stdout) => stdout.trim() === '' ? 'ok (spawns; bounded read left untouched)' : `unexpected output: ${stdout.slice(0, 80)}`
+    check: quiet('bounded read left untouched')
   },
+  /* coldWarn is off in the throwaway config, so these prove the hook starts and returns; an armed timer would
+     outlive the throwaway directory. */
+  'stop': { setup: () => ({ hook_event_name: 'Stop', session_id: 'self-test', stop_hook_active: false }), check: quiet('returns at once') },
+  'session-end': { setup: () => ({ hook_event_name: 'SessionEnd', session_id: 'self-test', reason: 'other' }), check: quiet('returns at once') },
   'post': {
     setup: () => ({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'tokenbrake status' },
       tool_response: { stdout: SELF_TEST_STDOUT, stderr: '', interrupted: false, isImage: false } }),
@@ -278,6 +287,7 @@ function status() {
   console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
   console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
   console.log(`  SessionStart compaction prep: ${has('SessionStart') ? 'installed' : 'missing (re-run init)'}`);
+  console.log(`  Stop and SessionEnd cold-cache warning: ${has('Stop') && has('SessionEnd') ? 'installed' : 'missing (re-run init)'}`);
   /* Is the INSTALLED guard the one this checkout ships? `init` copies guard.js; nothing afterwards keeps the
      copy in step. `test.mjs` pins the project-scope copy, and the user-scope copy had nothing watching it at
      all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its

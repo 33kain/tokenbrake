@@ -55,6 +55,32 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/guard.js", "stop"],
+            "timeout": 15,
+            "statusMessage": "tokenbrake"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/guard.js", "session-end"],
+            "timeout": 15,
+            "statusMessage": "tokenbrake"
+          }
+        ]
+      }
     ]
   }
 }

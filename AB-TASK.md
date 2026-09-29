@@ -4448,3 +4448,13 @@ No warning has fired in the owner's sessions.
 
 Counting starts after checks 2 and 3 pass. Unchanged: the feature's purpose, the measurement, the pass rule and every
 counting rule.
+
+Added after the code review, the same day, still before any warning fires:
+- **A turn also ends** at an interrupt or an API error Claude Code gave up on; neither fires `Stop`. A local command
+  (`/context`, `/cost`) is not a turn.
+- **Answered** means begun while the warned request's cache was still warm, and only a shown warning can be
+  answered. A turn begun after that hour starts a new chain.
+- **The idle clock** runs from when the last request was sent (the user entry before it), when its cache was
+  refreshed, not from when its reply finished streaming.
+- **A request that wrote 5-minute cache** is not warned about: it is cold long before 50 minutes. Check 1 excluded
+  those requests for the same reason.
