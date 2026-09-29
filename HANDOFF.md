@@ -1777,3 +1777,11 @@ the install. Not fixed here.
 - `tune` calling a feature backfired on a single pull-back (2026-09-27): a floor, or a net rather than
   any-event verdict.
 - `coldWarn`, pre-registered in #124, toward the brake-to-8-10 goal.
+
+## 0.7.0 is on the registry — 2026-09-29
+
+Cut in PR #134 and published by the `Publish` workflow (run 36623156320). `latest` is 0.7.0 on the registry; the run
+finished at 20:02 UTC. It ships the stage B flip (#133): the first user-scope `init` installs the 300k window with
+`compactPrep`, recorded in `~/.claude/tokenbrake/init.json`, and `uninstall` removes only the window init wrote.
+Existing installs get the pair on their first `init` after upgrading. The plugin moves to 0.7.0 with no change in
+behavior; a plugin install does not update itself (`claude plugin update tokenbrake@tokenbrake`).
