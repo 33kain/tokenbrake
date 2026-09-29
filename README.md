@@ -91,6 +91,17 @@ Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
 npx tokenbrake status          # what is installed, plus one real spawn of each hook, as Claude Code does it
 ```
 
+The first user-scope `init` also installs a pair: Claude Code's own compaction window, `autoCompactWindow`, at
+300,000 tokens, and `compactPrep`, which puts the working set back as pointers after each compaction. On the author's
+work, 8 automatic compactions with the pair saved 47.2 points of the five-hour window. Re-reading afterwards took
+back 0.9, and compaction's own charge at most 12.8 more. The work did not feel worse
+([`AB-TASK.md`](https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md), "Stage B results"). `init` installs
+neither half beside a window you set yourself, and does not put back a window you removed. `uninstall` removes the
+window only if `init` wrote it and it is still 300,000. The window applies to headless `claude -p` too, so a script
+that builds a context past 300k compacts. `init --project` writes neither, because a project file's window would
+override each teammate's own. The plugin install does not write settings either; with it, set the window yourself
+(`/autocompact 300k`) and `compactPrep: true` in `tokenbrake.json`.
+
 The hooks are exec-form (no shell), so Claude Code starts the recorded executable directly. User-scope `init`
 records the absolute path of the node it ran under; `--project` records plain `node` so the committed file works
 on any machine, and `--node=<path>` overrides either. If `status` prints `FAILED to start`, that is the hook
@@ -447,15 +458,19 @@ dropped the content; `reReadRecency` *mitigates* that (it limits elision to stil
 compaction bound), and a re-read that has to go back for the file anyway is a **backfire** `report --backfire`
 counts (`Re-read elisions: N fired; M sent the model back`). Off until an A/B moves it.
 
-`compactPrep` (default `false`) works on how long context stays, not on what enters it. After Claude Code compacts
-a session, a `SessionStart` hook puts back the **working set** as pointers only, never file contents: the files
+`compactPrep` (default `false`; the first user-scope `init` turns it on) works on how long context stays, not on
+what enters it. After Claude Code compacts a session, a `SessionStart` hook puts back the **working set** as pointers only, never file contents: the files
 edited (with the line ranges touched), the files read (with their ranges), the last command that failed and its
 first error line, and the first words of the task. It's built from the session's own transcript and capped at
 `compactPrepMaxChars` (default 8,000, about 2,000 tokens). The point is that the model re-reads only what its
 next step needs instead of searching for its place. It pairs with an earlier compaction window
-(`/autocompact 300k`, Claude Code's own setting), and `report --compactions` prices every compaction: what the
-drop in context saves, and what re-reading afterwards costs. Off by default until the two-stage measurement in
-`AB-TASK.md` ("An earlier compaction window") passes; with it off, shadow records what it would have injected.
+(`autoCompactWindow` 300k, Claude Code's own setting), and `report --compactions` prices every compaction: what the
+drop in context saves, and what re-reading afterwards costs. The pair passed the two-stage measurement in
+`AB-TASK.md` ("The compaction window, v2" and "Stage B results", 2026-09-29), so the first user-scope `init` writes
+both: the window into `settings.json` and `compactPrep: true` into `tokenbrake.json`. It installs neither half
+beside a window or a `compactPrep: false` you set yourself, because each half was measured only with the other.
+The guard's own default stays off, so a plugin or project install gets neither. With it off, shadow records what it
+would have injected.
 
 `blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
 minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,

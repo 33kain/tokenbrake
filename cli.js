@@ -112,6 +112,22 @@ const HOOKS = [
   { event: 'SessionStart', matcher: 'compact', mode: 'session-start' }
 ];
 const HOOK_EVENTS = HOOKS.map(h => h.event);
+/* The pair stage B passed (AB-TASK.md, "Stage B results", 2026-09-29): Claude Code's `autoCompactWindow` at 300k
+   with compactPrep on. The first user-scope init installs it whole or not at all -- never beside a window the person
+   set, or a compactPrep they turned off -- and records in INIT_MARK what it did, so a later init never restores a pair
+   the person removed, and uninstall takes back only a window init wrote that still holds init's value. Project scope
+   gets neither: a project file's window would override each teammate's own. */
+const COMPACT_WINDOW = 300000;
+const INIT_MARK = path.join(TB_DIR, 'init.json');
+const envWindow = (settings) => (isObj(settings.env) && settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || null;
+const initWindow = (w, mark) => !PROJECT && !!(mark && mark.autoCompactWindow) && w === COMPACT_WINDOW;
+function windowNote(settings, mark) {
+  const w = settings.autoCompactWindow, env = envWindow(settings);
+  if (w != null) return (Number.isFinite(w) ? fmt(w) : JSON.stringify(w)) + (initWindow(w, mark) ? ' (set by init)' : ' (yours; init leaves it)');
+  if (env) return `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${env} (yours; init leaves it)`;
+  if (PROJECT) return `not set at project scope (user-scope init sets ${fmt(COMPACT_WINDOW)})`;
+  return 'Claude Code\'s own' + (mark ? ' (init decides once, and has)' : ` (init sets ${fmt(COMPACT_WINDOW)})`);
+}
 const isOurHook = (h) => String(h.command || '').includes('tokenbrake') || (h.args || []).some(a => String(a).includes('tokenbrake'));
 function isOurs(group) { return Array.isArray(group.hooks) && group.hooks.some(isOurHook); }
 /* Remove tokenbrake's entries from an event's hook groups and keep everything else. A group is a matcher
@@ -143,14 +159,23 @@ function init() {
     settings.hooks[event] = withoutOurs(settings.hooks[event] || []);
     settings.hooks[event].push({ matcher, hooks: [hook(mode)] });
   }
+  /* A tokenbrake.json that cannot be merged costs the pair, not the install; no mark, so the next init decides. */
+  const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
+  const decide = !PROJECT && !fs.existsSync(INIT_MARK) && mergeBase(cfgPath);
+  const pair = !!(decide && decide.value) && settings.autoCompactWindow == null && !envWindow(settings) && decide.value.compactPrep !== false;
+  if (pair) settings.autoCompactWindow = COMPACT_WINDOW;
 
   writeJson(settingsPath, settings);
   fs.mkdirSync(TB_DIR, { recursive: true });
+  if (pair && !('compactPrep' in decide.value)) writeJson(cfgPath, { ...decide.value, compactPrep: true });
+  if (decide && decide.value) writeJson(INIT_MARK, { autoCompactWindow: pair, at: new Date().toISOString() });
 
   console.log(`tokenbrake installed (${PROJECT ? 'project' : 'user'} scope)`);
   console.log(`  hooks:   ${settingsPath}`);
   console.log(`  guard:   ${guardFile}`);
   console.log(`  node:    ${nodeCmd}`);
+  console.log(`  compact: window ${windowNote(settings, readJson(INIT_MARK, null))}${pair ? ', with compactPrep on in tokenbrake.json' : ''}`
+    + (decide && decide.why ? ` -- not set: ${cfgPath} ${decide.why}` : ''));
   console.log(`  config:  ${path.join(CFG_DIR, 'tokenbrake.json')} (optional, see README)`);
   console.log(`  ledger:  ${LEDGER}`);
   console.log('Restart Claude Code (or /hooks to verify). Run `tokenbrake report` after a session.');
@@ -158,7 +183,8 @@ function init() {
 
 function uninstall() {
   const settings = readForWrite(settingsPath, 'uninstall');
-  if (settings.hooks) {
+  const hadHooks = !!settings.hooks;
+  if (hadHooks) {
     for (const ev of HOOK_EVENTS) {
       if (Array.isArray(settings.hooks[ev])) {
         settings.hooks[ev] = withoutOurs(settings.hooks[ev]);
@@ -166,10 +192,14 @@ function uninstall() {
       }
     }
     if (!Object.keys(settings.hooks).length) delete settings.hooks;
-    writeJson(settingsPath, settings);
   }
+  const hadWindow = initWindow(settings.autoCompactWindow, readJson(INIT_MARK, null));
+  if (hadWindow) delete settings.autoCompactWindow;
+  if (hadHooks || hadWindow) writeJson(settingsPath, settings);
   try { fs.rmSync(guardDir, { recursive: true, force: true }); } catch {}
+  if (!PROJECT) try { fs.rmSync(INIT_MARK, { force: true }); } catch {}   // a later init is a fresh install and decides again
   console.log(`tokenbrake hooks removed from ${settingsPath}`);
+  if (hadWindow) console.log(`autoCompactWindow ${fmt(COMPACT_WINDOW)} removed: Claude Code's own compaction window applies again.`);
   console.log(`Ledger and saved outputs kept at ${TB_DIR} -- delete that folder to remove them.`);
 }
 
@@ -196,7 +226,7 @@ const SELF_TESTS = {
       const u = o.updatedToolOutput;
       if (!u || typeof u !== 'object') return 'FAILED: no object-shaped updatedToolOutput (Claude Code would reject a string and keep the full output)';
       if (!String(u.stdout).includes('[tokenbrake]') || !String(u.stdout).includes('self-test marker')) return 'FAILED: trimmed output missing marker or flagged error line';
-      return `ok (${SELF_TEST_STDOUT.length.toLocaleString()} chars in -> ${u.stdout.length.toLocaleString()} out, error line kept)`;
+      return `ok (${fmt(SELF_TEST_STDOUT.length)} chars in -> ${fmt(u.stdout.length)} out, error line kept)`;
     }
   },
   /* A one-edit transcript inside the throwaway config dir, with compactPrep on there, so the spawn proves the
@@ -280,7 +310,13 @@ function status() {
   const otherScope = PROJECT ? 'user' : 'project';
   if (otherHas && thisHas) console.log(`  also installed at ${otherScope} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
   else if (otherHas) console.log(`  installed at ${otherScope} scope instead (${otherPath}): the guard runs once, from there`);
+  const mark = readJson(INIT_MARK, null);
+  console.log(`  compaction window: ${base.why ? 'unknown (the settings file ' + base.why + ')' : windowNote(settings, mark)}`);
   const cfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), null);
+  const eff = { ...transcript.GUARD_DEFAULTS, ...(isObj(cfg) ? cfg : {}) };   // merged the way the guard's loadConfig merges it
+  const prep = !!(eff.enabled && eff.compactPrep);
+  console.log(`  compaction prep: ${prep ? 'on' : 'off'} (${isObj(cfg) && ('compactPrep' in cfg || cfg.enabled === false) ? 'tokenbrake.json' : 'default'})`
+    + (!prep && initWindow(settings.autoCompactWindow, mark) ? ' -- init\'s window without it is not the pair stage B measured; uninstall removes the window' : ''));
   console.log(`  config: ${cfg ? JSON.stringify(cfg) : 'defaults'}`);
   const n = fs.existsSync(LEDGER) ? fs.readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).length : 0;
   console.log(`  ledger: ${n} records`);
@@ -291,7 +327,7 @@ function loadLedger() {
   return fs.readFileSync(LEDGER, 'utf8').split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 const tok = (c) => Math.round(c / 4); // rough: ~4 chars per token for code/logs
-const fmt = (n) => n.toLocaleString();
+const fmt = (n) => n.toLocaleString('en-US');
 /* One pool filter for the views that pool sessions across the machine. --cwd is the explicit override: ask
    for a staged set and you get it; otherwise staged work is skipped and the reason says how to bring it back.
    The rule was written out at each call site, so widening it (AB-TASK.md 2026-09-20) meant four coordinated
@@ -988,12 +1024,12 @@ function compactionsReport() {
   const v = transcript.compactionVerdict(counted), perModel = transcript.compactionVerdictByModel(counted);
   const { n: need, share: bar } = transcript.STAGE2;
   const share = (c, of = v) => of.saving > 0 ? Math.round(100 * c / of.saving) + '%' : 'n/a';
-  console.log('\n  Counted: ' + v.n + ' of the ' + need + ' automatic compactions stage 2 needs.'
+  console.log('\n  Counted: ' + v.n + ' of the ' + need + ' automatic compactions the stage 2 rule reads (it passed on the author\'s work, 2026-09-29).'
     + '  Saving ' + v.saving.toFixed(1) + ' points; recovery ' + v.recovery.toFixed(1)
     + '; compaction charged at ' + chargeLow + ' and ' + chargeHigh + ' points each.');
   console.log('  Cost as a share of the saving: ' + share(v.costLow) + ' at the estimate, ' + share(v.costHigh) + ' at the bound.'
     + ' Stage 2 passes under ' + Math.round(bar * 100) + '% at the bound, with ' + need + ' counted.');
-  if (v.verdict) console.log('  Verdict: ' + (v.verdict === 'NOT YET' ? 'NOT YET -- passes at the estimate, not at the bound; the default stays off' : v.verdict)
+  if (v.verdict) console.log('  Verdict: ' + (v.verdict === 'NOT YET' ? 'NOT YET -- passes at the estimate, not at the bound' : v.verdict)
     + ' (and only with no more than one "felt worse" logged).');
   if (perModel.length > 1) for (const m of perModel) {
     console.log('  ' + m.label + ': ' + m.n + ' counted, saving ' + m.saving.toFixed(1) + ', recovery ' + m.recovery.toFixed(1)
@@ -1827,10 +1863,13 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
 STEP TWO -- the brake, if your report says there is something in its reach.
 
   npx tokenbrake init [--project] [--node=<path>]
-                                      install hooks (user scope, or this project's .claude/);
+                                      install hooks (user scope, or this project's .claude/); the first
+                                      user-scope init also sets autoCompactWindow ${fmt(COMPACT_WINDOW)} with
+                                      compactPrep on, unless you set either yourself;
                                       --node pins the executable the hook spawns (default: this node,
                                       or plain 'node' for --project so the file stays shareable)
   npx tokenbrake uninstall [--project]
+                                      remove the hooks, and init's ${fmt(COMPACT_WINDOW)} window if it is unchanged
   npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
   npx tokenbrake doctor [--project] [--fix]
                                       a health check as a prioritized problem list, each with a remedy;

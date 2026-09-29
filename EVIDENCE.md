@@ -43,6 +43,25 @@ so far that is nothing to one unrepeated best run at best and worse than nothing
 model that survives being run twice; the report's "Tool results entered" line says which end
 a session was on. The protocol and every number, the losses included, are in [`AB-TASK.md`](AB-TASK.md).
 
+## The compaction window — the first result that passed (2026-09-29)
+
+This is a different lever from the trim. The session compacts at 300k tokens (`autoCompactWindow`, Claude Code's own
+setting) instead of growing toward the model's full window, and after each compaction `compactPrep` puts the working
+set back as pointers. It was pre-registered in two stages, after a first version failed on cost at its stage 1 and
+stayed failed.
+
+- **Stage A, controlled, Opus 5 (2026-09-19):** with the preparation step, the task drew 1.31 fewer points of the
+  five-hour window (median 4.18 against 5.49), and every recall question was still answered, 15 of 15.
+- **Stage B, the author's real work (2026-09-20 to 2026-09-29):** 8 automatic compactions, 3 on Opus 5 and 5 on Opus
+  5.5. Together they saved 47.2 points, and re-reading files afterwards took back 0.9. Compaction's own charge takes
+  back 4.0 more at the 0.5-point estimate and 12.8 at the pessimistic 1.6-point bound, so at worst 13.7 of the 47.2
+  came back. The stage allowed up to half. The work never felt worse.
+
+Both passed, so the first user-scope `init` installs the pair: the 300k window and `compactPrep`. The limits: one
+person's work, on Opus models with a 1M window. The recovery is inferred, and the saving assumes the same requests
+would have run without the earlier compaction. Headless `claude -p` compacts at 300k too, which was not measured.
+The numbers are in [`AB-TASK.md`](AB-TASK.md), "Stage B results".
+
 ## Limits, with the numbers
 
 Read this before installing. It is the part most tools in this space leave to their critics.

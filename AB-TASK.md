@@ -4176,6 +4176,10 @@ nothing that is measured or counted. It fixes only where the owner's lines live,
 Asked on 2026-09-26: the owner saw no difference after the two counted compactions of 2026-09-25 20:53 and
 2026-09-26 08:46 (stage B at 5 of 8). No row.
 
+Asked on 2026-09-29: the owner saw no difference after the three counted compactions of 2026-09-28 00:07,
+2026-09-28 22:08 and 2026-09-29 14:51 (stage B at 8 of 8). No row. The last came minutes before the question, so
+the answer covers little work after it; a row added later the same day still counts.
+
 ## A warning before the cache goes cold — pre-registered 2026-09-25, before anything is built or run
 
 **Why.** On the owner's 60 sessions (HANDOFF.md, 2026-09-25, `scripts/write-reach.cjs`), re-writing context after
@@ -4269,3 +4273,52 @@ calibration sent "ok" without tools. They carry context and draw only.
 - **Unchanged:** no weight, no `compactionView` figure, no trim accounting, and no threshold.
 
 This is written before the change is made and before any figure is read under it.
+
+## Stage B results — 8 counted, PASS — read 2026-09-29 14:57 UTC
+
+Stage B ran on the owner's real work from 2026-09-19: `autoCompactWindow: 300000` in `~/.claude/settings.json` and
+`compactPrep: true`, Opus 5 until the picker dropped it, then Opus 5.5 under the 2026-09-22 amendment. Read with
+`node cli.js report --compactions` at commit `2c5335d`, every compaction priced with its own model's weights.
+
+| compaction (UTC) | model | context | later requests | saving | recovery (files re-read) |
+|---|---|---|---|---|---|
+| 2026-09-20 14:29 | Opus 5 | 268k → 65k | 194 | 11.50 | 0.22 (2) |
+| 2026-09-20 18:27 | Opus 5 | 267k → 63k | 32 | 1.31 | 0.06 (2) |
+| 2026-09-21 11:51 | Opus 5 | 269k → 62k | 52 | 2.15 | 0.02 (2) |
+| 2026-09-25 20:53 | Opus 5.5 | 269k → 55k | 145 | 11.50 | 0.30 (4) |
+| 2026-09-26 08:46 | Opus 5.5 | 275k → 66k | 124 | 5.73 | 0.08 (9) |
+| 2026-09-28 00:07 | Opus 5.5 | 268k → 57k | 121 | 8.93 | 0.25 (4) |
+| 2026-09-28 22:08 | Opus 5.5 | 270k → 70k | 94 | 6.04 | 0.00 (1) |
+| 2026-09-29 14:51 | Opus 5.5 | 267k → 65k | 1 | 0.03 | 0.00 (0) |
+
+Points of the five-hour window. **Saving 47.2, recovery 0.9.** With compaction's own charge at 0.5 (the estimate)
+and 1.6 (the bound) points each, recovery plus charge is **4.9 points (10% of the saving) at the estimate and 13.7
+(29%) at the bound**, under the half the stage allows. Per model, as the 2026-09-22 amendment requires: Opus 5, 3
+counted, saving 15.0, recovery 0.3, 5.1 back at the bound (34%); Opus 5.5, 5 counted, saving 32.2, recovery 0.6,
+8.6 back at the bound (27%). Both pass on their own.
+
+**"Felt worse": none logged** (asked 2026-09-26 and 2026-09-29, both recorded above). The rule allows one.
+
+**The two `compactionView` edges (2026-09-22) are clear in all 8,** checked the same way as the first three: the
+first request after every boundary carries usage, no request in any counted range lacks usage or a timestamp, and
+every pre-compaction size comes from the boundary itself. A ninth automatic compaction on Opus 5.5 (2026-09-29
+15:03) came after the read and is not part of the 8.
+
+**Verdict: stage B PASSES.** With v2 stage A passed on 2026-09-19, the flip in "The flip, v2" follows: the 300k
+window with the preparation step becomes tokenbrake's default. It ships as the pair that was measured: the first
+user-scope `init` writes both halves or neither (never one beside a window or a `compactPrep: false` the person
+set), and the guard's own `compactPrep` default stays off, so no install gets the preparation step without the
+window.
+
+**Not measured, stated.**
+- Two sessions were still running at the read (the 2026-09-28 00:07 and 2026-09-29 14:51 compactions). Their
+  saving only grows with later requests; their recovery can grow too. The verdict holds unless recovery across the
+  8 grows by about 9.9 points more (half of 47.2, less 0.9 and 8 × 1.6), eleven times what all 8 recovered together.
+- One compaction was excluded, not counted: 2026-09-27 09:40, a session that ran on `claude-fable-5`, an
+  uncalibrated model (the owner's default had changed on 2026-09-26 without their noticing). It was listed and not
+  priced.
+- Recovery is inferred from files read again after a compaction, some of which the next step would have read anyway.
+  The saving assumes the session would have run the same requests without the earlier compaction.
+- Measured on one person's work, on Opus 5 and Opus 5.5 with a 1M window. `autoCompactWindow` also applies to
+  headless `claude -p` (the 2026-09-23 calibration run), which stage B did not measure: a script that builds a
+  context past 300k compacts under the new default.
