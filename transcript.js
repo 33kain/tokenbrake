@@ -1055,15 +1055,16 @@ function backfireAudit(parsed, ledgerRecs, opts) {
   const sid8 = String(parsed.sessionId || path.basename(parsed.file || '', '.jsonl') || 'session').slice(0, 8).replace(/[^\w-]/g, '_');
   const stemOf = (id) => (sid8 && id) ? sid8 + '-' + String(id).slice(-10).replace(/[^\w-]/g, '') : null;
   const withholds = [];
-  for (const r of parsed.results) {
-    if (!r.marker) continue;
+  parsed.results.forEach((r, pos) => {
+    if (!r.marker) return;
     const l = offered(r);
-    if (!l || l.excerpt) continue;
+    if (!l || l.excerpt) return;
     const savedTokens = Math.max(0, Math.round(((l.chars || 0) - (l.kept || 0)) / CHARS_PER_TOKEN));
     const kind = l.dedup ? 'dedup' : (l.mcp ? 'mcp' : (l.blob ? 'blob' : (l.gitview ? 'gitview' : 'trim')));
-    withholds.push({ id: r.id || null, kind, chars: Number(l.chars) || null, savedTokens, savedCarried: savedTokens * ((r.carriedTurns || 0) + 1),
-      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false, pulledFoot: 0 });
-  }
+    const turns = (r.carriedTurns || 0) + 1;
+    withholds.push({ id: r.id || null, pos, kind, shell: r.name === 'Bash' || r.name === 'PowerShell', chars: Number(l.chars) || null, savedTokens, turns, savedCarried: savedTokens * turns,
+      stem: kind === 'dedup' ? (l.sameAs || null) : stemOf(r.id), recovered: false, pulledFoot: 0, pulledTrip: 0 });
+  });
 
   /* A pull-back: a later result that read a saved output back into context. Three shapes, all the guard's own
      doing -- the out/ file read by the Read/Edit tool (path in `file`), the out/ file read by a SHELL command
@@ -1081,35 +1082,42 @@ function backfireAudit(parsed, ledgerRecs, opts) {
      of the path) -- an over-count, never an under-count, there. It reads the FIRST out/ path in a command, so a
      single command pulling back two withheld out/ files counts one; and a Grep TOOL call on the saved file,
      whose `path` input surfaces as neither `file` nor `what`, is still uncounted. Both are optimistic residuals,
-     so a clean result still means "none seen", not "none happened". */
+     so a clean result still means "none seen", not "none happened".
+     `trip` is the pull-back's other cost, kept apart from `foot` so the pooled net above is unchanged: the request
+     that asked for it re-read the whole context to make one more tool call. It is that request's context, an
+     over-count where the same reply made other calls too. Only tune's per-feature net reads it. */
   const recoveries = [];
-  for (const r of parsed.results) {
+  parsed.results.forEach((r, pos) => {
     let ref = null, kind = null;
     const m = (r.file && OUT_FILE.exec(String(r.file))) || OUT_IN_CMD.exec(String(r.what || ''));   // out/ file read: Read tool, or a shell command that names it
     if (m) { ref = m[1]; kind = 'out-file'; }
     else { const ms = SHOW_CMD.exec(String(r.what || '')); if (ms) { ref = String(ms[1]); kind = 'show'; } }
-    if (!kind) continue;
+    if (!kind) return;
     const q = parsed.requests[r.afterReq], w = weightsOf(q && q.model);
-    recoveries.push({ kind, ref, foot: (r.tokens || 0) + (r.carried || 0), tokens: r.tokens || 0, matched: false,
+    recoveries.push({ kind, ref, pos, foot: (r.tokens || 0) + (r.carried || 0), trip: usageCtx(q && q.usage), tokens: r.tokens || 0, matched: false,
       pts: w ? resultPts(r.tokens || 0, r.carriedTurns, w) : 0 });
-  }
+  });
 
   /* Match a pull-back to the withhold whose saved output it read, setting both flags in one pass. An out/
      file read must EQUAL the stem the guard would have written -- exact, so a shared sid8 prefix cannot
      cross-attribute. A `show` argument is looser by design: `show` resolves a full path, an exact stem, or a
      unique prefix, and refuses an ambiguous one (cli.js showOutput), so mirror that -- reduce a path to its
-     stem, then take an exact stem, else a prefix that resolves to exactly one withhold; an ambiguous prefix
-     stays unattributed (counted as a pull-back, not netted). */
+     stem, then take an exact stem, else a prefix that resolves to exactly one stem; an ambiguous prefix
+     stays unattributed (counted as a pull-back, not netted). Several withholds share a stem when a dedup
+     pointer names a first copy the trim also cut; the pull-back goes to the latest of them before it, the one
+     whose marker the model had just seen. */
   const stemFromShow = (arg) => { const m = OUT_FILE.exec(String(arg)); return m ? m[1] : String(arg).replace(/\.txt$/, ''); };
   const attribute = (rec) => {
     const ref = rec.kind === 'show' ? stemFromShow(rec.ref) : rec.ref;
     if (!ref) return null;
-    const exact = withholds.filter((w) => w.stem && w.stem === ref);
-    if (exact.length) return exact[0];
-    if (rec.kind === 'show') { const pre = withholds.filter((w) => w.stem && w.stem.startsWith(ref)); if (pre.length === 1) return pre[0]; }
-    return null;
+    let hits = withholds.filter((w) => w.stem && w.stem === ref);
+    if (!hits.length && rec.kind === 'show') {
+      hits = withholds.filter((w) => w.stem && w.stem.startsWith(ref));
+      if (new Set(hits.map((w) => w.stem)).size !== 1) return null;
+    }
+    return hits.filter((w) => w.pos < rec.pos).pop() || hits[0] || null;
   };
-  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; w.pulledFoot += rec.foot; } }
+  for (const rec of recoveries) { const w = attribute(rec); if (w) { rec.matched = true; w.recovered = true; w.pulledFoot += rec.foot; w.pulledTrip += rec.trip; } }
 
   const saved = withholds.reduce((s, w) => s + w.savedTokens, 0);
   const savedCarried = withholds.reduce((s, w) => s + w.savedCarried, 0);
@@ -1998,11 +2006,19 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const led = ledger || [];
   const sessions = (parsedSessions || []).filter(Boolean);
 
-  const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried
+  const maxChars = cfg.maxChars == null ? TUNE_DEFAULTS.maxChars : Number(cfg.maxChars);
+  const kind = {};   // measured, per withhold kind: fired / backfired / savedCarried / pulledFoot
   /* `rows` keeps each withhold's original size, saving and pull-back cost, so a threshold can be weighed on
-     exactly the withholds a different value would have let through whole. */
-  const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0, rows: [] });
-    e.fired++; if (w.recovered) e.backfired++; e.savedCarried += w.savedCarried || 0; e.rows.push(w); };
+     exactly the withholds a different value would have let through whole. The kind's own totals weigh the
+     feature against running without it. On a shell result, blobElide, gitView and dedup act on output the
+     always-on trim would otherwise have cut to maxChars, so only what they kept out under maxChars is theirs
+     (shadowRecord's rule; the global maxChars, not a tools entry's). The trim is shell-only, so an MCP dedup
+     keeps its whole saving. A pull-back costs what re-entered plus the request that fetched it (`pulledTrip`).
+     A ledger row with a non-numeric size makes a NaN saving; it counts as 0, not as the kind's whole total. */
+  const bump = (k, w) => { const e = kind[k] || (kind[k] = { fired: 0, backfired: 0, savedCarried: 0, pulledFoot: 0, rows: [] });
+    const cut = w.shell && k !== 'trim' && w.chars > maxChars ? Math.round((w.chars - maxChars) / CHARS_PER_TOKEN) : 0;
+    e.fired++; if (w.recovered) e.backfired++; e.savedCarried += Math.max(0, w.savedTokens - cut) * w.turns || 0;
+    e.pulledFoot += w.pulledFoot + w.pulledTrip; e.rows.push(w); };
   let deltaFired = 0, deltaBack = 0, reReadFired = 0, reReadBack = 0, netCarried = 0, withholds = 0;
 
   const shadowed = Object.fromEntries(SHADOWED.map((k) => [k, emptyShadow()]));
@@ -2092,22 +2108,31 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const entriesFor = (k) => toolCfgs.filter((v) => plainObj(v) && k in v);
   const on = (k) => !!cfg[k] || entriesFor(k).some((v) => !!v[k]);
   const scoped = (k) => entriesFor(k).length > 0;
-  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as {fired, backfired, savedCarried, rows}
-  /* The read narrowings measure fired/backfired only (no out/ save, so no savedCarried); carry that shape. */
-  const readMeasured = (fired, back) => fired > 0 ? { fired, backfired: back, savedCarried: null } : null;
+  const measuredOf = (k) => kind[k] || null;   // bump builds each kind as {fired, backfired, savedCarried, pulledFoot, rows}
+  /* The read narrowings measure fired/backfired only (no out/ save, so no savedCarried and no net); carry that shape. */
+  const readMeasured = (fired, back) => fired > 0 ? { fired, backfired: back, savedCarried: null, pulledFoot: null } : null;
 
   /* One decision, applied to every feature. Measured beats opportunity: a feature that fired is judged on what
-     happened, never on an estimate. A measured backfire is disqualifying whatever the count (ab10: the count of
-     withholds does not predict the saving, so one real pull-back is evidence) -- and it is the ONLY thing that
-     earns a definitive "leave off". A clean measured record earns "turn it on" only past the confidence floor;
-     below it, "try". With no firings, material opportunity earns at most a "try" (never a "turn it on":
-     backfire is behavioural and must be measured), and NO material opportunity earns "measure" -- not "leave
-     off", because the off-state estimators have blind spots (blobElide's biggest wins in particular are
-     invisible off-state: the always-on trim char-slices a large blob before blobElide would ever see it), so
-     the honest verdict is "no signal from the off state, turn it on for a session and measure". */
+     happened, never on an estimate. A backfire on a feature that is off is "leave off", and it is the ONLY
+     thing that earns one: turning it back on is the person's call. On a feature that is on, a backfire is
+     weighed on the feature's own net where that is measured -- what it kept out, less what its pull-backs cost
+     (bump) -- and a loss or break-even is "review" whatever the count (ab10: the count of withholds does not
+     predict the saving), while a gain keeps it on. A read narrowing has no net (its pull-back is the model going
+     back for the whole file), so there a backfire counts only past the confidence floor: one event in two
+     firings is not a reason to turn a feature off (HANDOFF.md, 2026-09-27). A clean measured record earns "turn
+     it on" only past the confidence floor; below it, "try". With no firings, material opportunity earns at
+     most a "try" (never a "turn it on": backfire is behavioural and must be measured), and NO material
+     opportunity earns "measure" -- not "leave off", because the off-state estimators have blind spots
+     (blobElide's biggest wins in particular are invisible off-state: the always-on trim char-slices a large blob
+     before blobElide would ever see it), so the honest verdict is "no signal from the off state, turn it on for
+     a session and measure". */
   const decide = (isOn, measured, opp) => {
     if (measured && measured.fired > 0) {
-      if (measured.backfired > 0) return isOn ? 'review' : 'leave-off';
+      if (measured.backfired > 0) {
+        if (!isOn) return 'leave-off';
+        const held = measured.savedCarried == null ? measured.fired < MIN_FIRE : measured.savedCarried > measured.pulledFoot;
+        return held ? 'keep' : 'review';   // too few to judge a read narrowing, or a net gain despite the pull-backs
+      }
       if (measured.fired >= MIN_FIRE) return isOn ? 'keep' : 'turn-on';
       return isOn ? 'keep' : 'try';   // clean but too few to be sure: keep it if already on, else worth a try
     }
@@ -2196,7 +2221,6 @@ function autotune(parsedSessions, ledger, cfg, opts) {
   const readCap = { readMaxBytes, over: capOver, fired: capFired, verdict: capVerdict,
     why: capVerdict !== 'unmeasured' ? null : (guarded === 0 ? 'no-guard' : 'no-ledger') };
 
-  const maxChars = cfg.maxChars == null ? TUNE_DEFAULTS.maxChars : Number(cfg.maxChars);
   const readLimitLines = Number(cfg.readLimitLines) || TUNE_DEFAULTS.readLimitLines;
   const trimRec = recordAbove(measuredOf('trim'), maxChars), trimFired = trimRec ? trimRec.fired : 0;
   const sg = shellGrid(shellRows, stepsAround(MAX_CHARS_STEPS, maxChars));

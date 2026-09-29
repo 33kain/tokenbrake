@@ -1802,3 +1802,68 @@ Stage B's 8 counted rows are unchanged (report diffed before and after). The nin
 to 6.34 points: a synthetic reply after 256 minutes of idle had hidden the cold rebuild that followed it.
 `AB-TASK.md` has the rows that moved and one limitation left for an amendment (`carry()` counts synthetic replies
 as re-reads, 0.07% of carried tokens).
+
+## `tune` weighs a backfire against the feature's own net — 2026-09-29
+
+From the unblocked list: the 2026-09-27 entry. `tune` no longer calls a feature that is on `[!!]` on a single
+pull-back. For the features that save a copy (`blobElide`, `gitView`, `mcpTrim`, `dedup`) it weighs the feature
+against running without it:
+
+- **Saved:** what the feature kept out, times the requests it would have sat in. On a shell result, `blobElide`,
+  `gitView` and `dedup` act on output the always-on trim would otherwise have cut to `maxChars`, so only what
+  they kept out under `maxChars` counts (the shadow's rule). The trim is shell-only, so an MCP dedup keeps its
+  whole saving. The first draft counted the whole output, about three times too much for `blobElide` here.
+- **Pulled back:** what re-entered, times the requests it then sat in, plus the context of the request that asked
+  for it. That request re-read the whole context to make one more tool call. The first draft left it out, and
+  it is most of the cost: ~116k of `blobElide`'s ~117k.
+
+A loss or break-even is `review`; a gain is `keep`. A backfire on a feature that is off stays `leave-off`
+whatever its net, so `tune` never invites turning back on a feature that pulled back, and `--write` is
+unchanged. The two read narrowings have no net to weigh, so their backfire counts only from three firings
+(`MIN_FIRE`) when on, and is `leave-off` when off.
+
+`backfireAudit` also gives a pull-back of an out/ file that a trim and a dedup pointer share (the pointer names
+the first copy, which the trim also saved) to the latest of them before it. It went to the trim, so `dedup` read
+clean, and a `show <prefix>` of that one stem was left unattributed as ambiguous. The pooled net and `report --backfire` are unchanged: the round trip is kept apart from the footprint
+they sum.
+
+On the owner's 92 sessions:
+
+| feature | fired | pulled back | token-reads pulled back | token-reads saved | was | now |
+|---|---|---|---|---|---|---|
+| `blobElide` | 6 | 1 | ~117,341 | ~154,140 | `[!!]` | `[on]` |
+| `dedup` | 1 | 1 | ~77,790 | ~7,360 | `[!!]` | `[!!]` |
+| `readAfterEdit` | 2 | 1 (sent the model back) | not measured | not measured | `[!!]` | `[on]`, too few to judge |
+
+`dedup`'s one duplicate was 30,000 characters, which the trim would have cut to 6,000 anyway; the pull-back's
+request carried 77,750 tokens of context. That is the evidence for the held `dedup: false` (2026-09-20).
+`blobElide` keeps a thin margin on one pull-back.
+
+Left as they are, by choice: the pull-back footprint is still a lower bound (a Grep tool call on the saved file,
+or a second out/ path in one command, is not seen); a threshold floor makes a read narrowing go from `keep` (too
+few to judge) to `review` when a clean firing is added, as a clean record goes from `try` to `turn-on`; the
+saving uses the global `maxChars`, not a `tools` entry's.
+
+Follow-ups, not done here: the pooled net (`report --backfire`, the report's Net, tune's "Net so far") leaves
+the pull-back's round trip out, so it reads higher than the per-feature lines; moving `trip` into the footprint
+would fix it and move those numbers. `byKind` is a count only, so a pooled loss does not say which kind lost (the
+plain trim has no feature line). Pricing a delta backfire (the delta shown, then the whole file) would give the
+read narrowings a net.
+
+## `tune`'s two held knobs decided — 2026-09-30
+
+The 2026-09-20 pair, unblocked when stage B closed.
+
+- **`dedup: false`, applied** in the owner's `tokenbrake.json`. Its one firing in 92 sessions saved ~7,360
+  token-reads beyond the trim, and its pull-back cost ~77,790 (the entry above). `tune` lists it under "Leave off".
+- **`readMaxBytes` stays 60,000; the step to 45,000 is rejected.** It would newly cap 6 reads: the same three source
+  files (`content.js`, `background.js`, `test.mjs`, 48 to 59 KB) in two sessions. `tune` estimates the step at up to
+  ~436,722 token-reads. If each capped read sends the model back, the round trips alone re-read ~587,480 (the
+  context of each reading request, summed), so the step breaks even at a 74% send-back rate. `report --reads` puts
+  the rate at 300 lines at 67% on the owner's ranged reads, before what the send-back carries back in. A trial would
+  not settle it: a Read cap's pull-back cannot be measured from transcripts.
+
+Follow-up, not done: `tune`'s threshold advice for `readMaxBytes` weighs only the withholding side, so it still says
+"Try 45,000". Pricing the send-back (the per-limit rate times the context of the reading request) would let it weigh
+a step the way `tune` now weighs a feature. The Read cap's own net at 60,000 is the same question. A first look mixed
+the source-file cap with the `persistedLimitLines` cap on saved outputs, so it has no number yet.

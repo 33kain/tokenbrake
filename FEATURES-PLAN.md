@@ -261,9 +261,8 @@ on 2026-09-18).
   (firing/dormant/missing) and trim reach (`reachPooled`). `TUNE_DEFAULTS` mirrors the guard's DEFAULTS (guard.js
   can't be `require`d) and is **pinned to guard.js by a test**. 18 new checks. Tokens/cache, never dollars.
   - **`tune --write` — DONE.** Turns ON the features with a clean MEASURED record (a `turn-on`); never on an
-    estimate. It does NOT auto-disable a backfired feature -- the audit's net is pooled, not per-feature, so it
-    cannot tell a backfired-but-net-positive feature from a net-negative one, and reverting the former would cost
-    tokens; a backfire is surfaced as `reconsider` for the person to turn off by hand. Merges (every other key
+    estimate. It does NOT auto-disable a backfired feature: a measured loss (the feature's own net, since
+    2026-09-29) is surfaced as `reconsider` for the person to turn off by hand. Merges (every other key
     preserved, like `preset`), aborts rather than overwrite a malformed config, writes booleans on the fixed
     feature-list knob names (no injection into the written config), and prints each turn-on with its measured
     reason. Ran its own `/simplify → /code-review → /security-review` loop (cli.js only). This is the informed,

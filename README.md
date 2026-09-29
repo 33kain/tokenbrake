@@ -504,8 +504,11 @@ strictly apart:
 
 - **Measured** — the feature already fired in these sessions, so the backfire audit has its real record: fired
   N times, M pulled back, the token-reads it saved. A clean measured record with enough firings is the only
-  thing that earns a **turn it on**; a measured backfire earns a **leave off** (or, if it is already on, a
-  *reconsider*).
+  thing that earns a **turn it on**. A measured backfire on a feature that is off earns a **leave off**. On a
+  feature that is on, a pull-back is weighed against the feature's own saving (what it kept out beyond what the
+  always-on trim would have cut anyway): when the pull-backs cost at least that, counting what they carried back
+  in and the request that fetched them, it earns a *reconsider*; when it still saved more, it stays on. The two
+  read narrowings have no saving to weigh against, so a model sent back counts only past three firings.
 - **Opportunity** — the feature is off, so there is nothing to measure. Instead `tune` estimates how often it
   *would* act from what your transcripts already record (a blob-shaped shell result, a large MCP payload, a `git
   diff`, an edit followed by a whole re-read). Every estimate is built to **under-count**, and it earns at most a
@@ -535,11 +538,10 @@ changes a threshold, because the lower value has no record of its own until you 
 
 **`tune --write`** applies the recommendation to `~/.claude/tokenbrake.json`, and only ever acts on **measured**
 evidence — never an estimate. It turns **on** the features with a clean measured record (a `turn on`). It does
-**not** turn anything off: a feature that measurably backfired is surfaced as `reconsider` for you to disable
-deliberately (the backfire audit's net is pooled, not per-feature, so `--write` can't tell a feature that
-backfired once but is strongly net-positive from one that is net-negative — and reverting a net-positive feature
-would cost tokens); `try` and `measure` verdicts are opportunity estimates, left for you to enable and measure
-yourself first. It merges (every other key is preserved, like `preset`, and it aborts rather than overwrite a
+**not** turn anything off: a feature whose pull-backs cost at least what it saved is surfaced as `reconsider` for
+you to disable deliberately; `try` and `measure` verdicts (an estimate, or a clean record too thin for a `turn
+on`) are left for you to enable and measure yourself first. It merges (every other key is preserved, like
+`preset`, and it aborts rather than overwrite a
 malformed config), and prints exactly what it turned on and the measured reason. The apply is gated on measured
 evidence for the same reason the whole project ships every context-narrowing feature off: whether a withhold
 pays off or backfires is behavioural, and only a real session measures it.
