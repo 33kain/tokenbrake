@@ -1730,3 +1730,50 @@ Cut in PR #131 and published by the `Publish` workflow (run 36477971365). `lates
 --detail`) and headless sessions as staged work (#125, #126). The verify step waited about five minutes for the
 exact version to appear and passed; the publish itself took three seconds. The owner installed it globally
 (replacing a stale 0.3.0) and confirmed the new report runs.
+
+## Stage B passed; user-scope `init` installs the 300k window with `compactPrep` — 2026-09-29
+
+Stage B reached 8 counted automatic compactions on 2026-09-29 14:51 UTC and was read at 14:57: saving 47.2
+points of the five-hour window, recovery 0.9, and compaction's own charge at most 12.8 more (8 × the 1.6-point
+bound), so at worst 13.7 of the 47.2 came back; the stage allowed up to half. Per model: Opus 5, 3 counted, 5.1
+of 15.0 back; Opus 5.5, 5 counted, 8.6 of 32.2 back. The owner saw no difference after any compaction, so "felt
+worse" stays at none. The full table and what was not measured are in `AB-TASK.md`, "Stage B results".
+
+With v2 stage A passed on 2026-09-19, "The flip, v2" follows, in this PR. What passed is the pair, so the pair
+is what ships, and only where it was measured:
+
+- The first user-scope `init` writes `autoCompactWindow: 300000` into `settings.json` and `compactPrep: true`
+  into `tokenbrake.json`, and records that in `~/.claude/tokenbrake/init.json`. It installs neither half beside a
+  window the person set (the key, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`) or a `compactPrep: false`. A later
+  `init` finds the record and does not decide again, so a window removed after it stays removed.
+- `init --project` writes neither: project settings override user settings, so a committed window would
+  override each teammate's own.
+- `uninstall` removes the window only when the record says `init` wrote it and it still holds 300,000, then
+  deletes the record. The owner's hand-set 300,000 (and a plugin user's `/autocompact 300k`) is theirs and stays.
+- `guard.js`: the `compactPrep` default stays `false`, so the plugin install, a project install and
+  `doctor --fix` get no preparation step on a window nobody measured it with.
+- `status` names the window as `set by init` or `yours`, reads `compactPrep` the way the guard merges its
+  config (off under `enabled: false`), and flags init's window running without it.
+
+Review findings left open, by choice: `status` reads the prep default from this checkout's `guard.js`, not
+the installed copy (the `guard build: STALE` line already covers a mismatch); the window is written whatever
+the model, though it was measured on Opus with a 1M context only; `scripts/compact-stage1.mjs`'s OFF arm
+falls back to the user-scope window, so a re-run on a machine with the pair installed needs an explicit wide
+window, as `calibrate.mjs` passes. `fmt` in `cli.js` is now en-US, like `transcript.js`'s, so report numbers
+read the same on every locale.
+
+Users get this on the next release (0.7.0). The owner's machine already runs both halves, set by hand.
+
+Also noted: the owner's hooks run from the plugin (`tokenbrake@tokenbrake`, 0.5.0 in the plugin cache; its
+`guard.js` is byte-identical to 0.6.0's), not from `settings.json`, so `status` reports every hook as
+`missing (re-run init)` there. `status` has never looked at plugin installs; that is a gap in `status`, not in
+the install. Not fixed here.
+
+**Unblocked now that stage B is closed** (each waited on it; none is started):
+- The `compactionView` fix: a post-boundary request with no `usage` reads as zero context, and a missing
+  timestamp as epoch zero (`AB-TASK.md`, 2026-09-22).
+- The deferred refactors from the 2026-09-21 review (guard pipeline, transcript split, `node:test` harness).
+- `tune`'s two held knobs (2026-09-20): `dedup: false`, and `readMaxBytes` 45,000 for a few sessions.
+- `tune` calling a feature backfired on a single pull-back (2026-09-27): a floor, or a net rather than
+  any-event verdict.
+- `coldWarn`, pre-registered in #124, toward the brake-to-8-10 goal.

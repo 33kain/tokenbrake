@@ -25,6 +25,7 @@ const CFG = mkdtempSync(join(tmpdir(), 'tokenbrake-test-'));
 const PROJ = join(CFG, 'proj');
 mkdirSync(PROJ, { recursive: true });
 const env = { ...process.env, CLAUDE_CONFIG_DIR: CFG };
+delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;   // a window in the runner's own environment would read as the person's
 
 const guard = (mode, input) => spawnSync(process.execPath, ['./guard.js', mode], {
   input: typeof input === 'string' ? input : JSON.stringify(input), encoding: 'utf8', env
@@ -258,17 +259,60 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('guard.js was copied next to settings', existsSync(join(CFG, 'hooks', 'tokenbrake', 'guard.js')));
   t('pre-existing hook group and permissions untouched; only the tokenbrake entry left the shared group',
     s.permissions.allow[0] === 'Bash(ls)' && s.hooks.PostToolUse.some(g => g.matcher === 'Bash' && g.hooks.length === 1 && g.hooks[0].command === 'echo theirs'), JSON.stringify(s.hooks.PostToolUse));
+  /* Stage B passed the pair (AB-TASK.md, 2026-09-29): the first user-scope init installs the 300k window with
+     compactPrep on, and records that it did. */
+  const sp = join(CFG, 'settings.json'), tj = join(CFG, 'tokenbrake.json'), mk = join(CFG, 'tokenbrake', 'init.json');
+  const lineOf = (out, re) => out.split('\n').find(l => re.test(l));
+  t('the first init installs the pair: window 300000, compactPrep on in tokenbrake.json, and a record of both',
+    s.autoCompactWindow === 300000 && JSON.parse(readFileSync(tj, 'utf8')).compactPrep === true && JSON.parse(readFileSync(mk, 'utf8')).autoCompactWindow === true
+    && /compact: window 300,000 \(set by init\), with compactPrep on in tokenbrake\.json/.test(r.stdout), lineOf(r.stdout, /compact:/));
   r = cli(['init']);
-  t('init is idempotent (re-run does not duplicate groups)', JSON.parse(readFileSync(join(CFG, 'settings.json'), 'utf8')).hooks.PostToolUse.length === 2);
+  t('init is idempotent (re-run does not duplicate groups)', JSON.parse(readFileSync(sp, 'utf8')).hooks.PostToolUse.length === 2);
+  {
+    const hold = readFileSync(sp, 'utf8'), heldCfg = readFileSync(tj, 'utf8'), heldMark = readFileSync(mk, 'utf8');
+    const put = (o) => writeFileSync(sp, JSON.stringify({ ...JSON.parse(hold), autoCompactWindow: undefined, ...o }));
+    /* Init decides once: a window the person removed after it is not put back. */
+    put({});
+    let ri = cli(['init']);
+    t('init does not restore a window removed after it set one', JSON.parse(readFileSync(sp, 'utf8')).autoCompactWindow === undefined
+      && /compact: window Claude Code's own \(init decides once, and has\)/.test(ri.stdout), lineOf(ri.stdout, /compact:/));
+    /* A first init beside a window the person set installs neither half: 300k was measured with prep, and prep with 300k. */
+    rmSync(mk); writeFileSync(tj, '{}'); put({ autoCompactWindow: 500000 });
+    ri = cli(['init']);
+    t('a first init leaves a window the person chose, and adds no compactPrep beside it',
+      JSON.parse(readFileSync(sp, 'utf8')).autoCompactWindow === 500000 && !('compactPrep' in JSON.parse(readFileSync(tj, 'utf8')))
+      && JSON.parse(readFileSync(mk, 'utf8')).autoCompactWindow === false && /compact: window 500,000 \(yours; init leaves it\)$/.test(lineOf(ri.stdout, /compact:/)), lineOf(ri.stdout, /compact:/));
+    rmSync(mk); put({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '500000' } });
+    ri = cli(['init']);
+    t('a window set through the environment variable is the person\'s too', JSON.parse(readFileSync(sp, 'utf8')).autoCompactWindow === undefined
+      && /compact: window CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 \(yours; init leaves it\)/.test(ri.stdout), lineOf(ri.stdout, /compact:/));
+    /* Init's window with the guard off is the window alone: status says so. */
+    writeFileSync(sp, hold); writeFileSync(mk, heldMark); writeFileSync(tj, JSON.stringify({ enabled: false }));
+    const rs = cli(['status']);
+    t('status reads compaction prep as off when the guard is disabled, and flags init\'s window without it',
+      /compaction prep: off \(tokenbrake\.json\) -- init's window without it/.test(rs.stdout), lineOf(rs.stdout, /^  compaction prep:/));
+    writeFileSync(tj, heldCfg);
+  }
 
   r = cli(['status']);
   t('status exits 0', r.status === 0, r.stderr);
+  t('status shows the window init set', /compaction window: 300,000 \(set by init\)/.test(r.stdout), lineOf(r.stdout, /compaction window/));
+  t('status says compaction prep is on, from tokenbrake.json', /compaction prep: on \(tokenbrake\.json\)$/.test(lineOf(r.stdout, /^  compaction prep:/)), lineOf(r.stdout, /^  compaction prep:/));
   t('status reports both hooks installed', /PostToolUse guard: installed/.test(r.stdout) && /PreToolUse Read cap: installed/.test(r.stdout));
   t('status says nothing about a second scope when there is none', !/runs twice per call/.test(r.stdout));
   const pr = cli(['init', '--project']);
   const r2 = cli(['status']);
   t('status warns when user and project scope are both installed', pr.status === 0 && /also installed at project scope .*runs twice per call/.test(r2.stdout), r2.stdout.split('\n').find(l => /twice/.test(l)));
-  cli(['uninstall', '--project']);
+  {
+    /* init never writes a window at project scope, so a 300,000 there is a person's, and uninstall --project keeps it. */
+    const pp = join(PROJ, '.claude', 'settings.json');
+    writeFileSync(pp, JSON.stringify({ ...JSON.parse(readFileSync(pp, 'utf8')), autoCompactWindow: 300000 }));
+    cli(['uninstall', '--project']);
+    const pk = JSON.parse(readFileSync(pp, 'utf8'));
+    t('uninstall --project leaves a project file\'s window, even at 300,000', pk.autoCompactWindow === 300000, JSON.stringify(pk));
+    delete pk.autoCompactWindow;
+    writeFileSync(pp, JSON.stringify(pk));
+  }
   /* The spawn test is the check the Windows node-resolution risk needed: it starts
      the recorded command with the recorded args and no shell, as Claude Code will. */
   t('status spawns the PostToolUse hook and sees an object-shaped trim', /PostToolUse spawn test \(.*\): ok \(/.test(r.stdout), r.stdout.split('\n').find(l => /PostToolUse spawn/.test(l)));
@@ -311,6 +355,9 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('--project writes .claude/settings.json with the ${CLAUDE_PROJECT_DIR} placeholder and plain node',
     ph.args[0] === '${CLAUDE_PROJECT_DIR}/.claude/hooks/tokenbrake/guard.js' && ph.command === 'node');
   t('--project copies guard.js under .claude/hooks', existsSync(join(PROJ, '.claude', 'hooks', 'tokenbrake', 'guard.js')));
+  t('--project writes no compaction window: a project file\'s would override each teammate\'s own',
+    ps.autoCompactWindow === undefined && /compact: window not set at project scope \(user-scope init sets 300,000\)$/.test(lineOf(r.stdout, /compact:/)),
+    lineOf(r.stdout, /compact:/));
   r = cli(['status', '--project']);
   t('status --project resolves the placeholder and spawns', /PostToolUse spawn test \(node\): ok \(/.test(r.stdout), r.stdout.split('\n').find(l => /PostToolUse spawn/.test(l)));
 
@@ -318,7 +365,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
      `status` run without --project -- and it runs the guard exactly once. The warning used to fire on the
      other scope alone and say "runs twice per call", which on the first ab7 arm read as a second install
      to hunt down. */
-  cli(['uninstall']);
+  const un = cli(['uninstall']);
   r = cli(['status']);
   t('project scope alone is reported as running once, not as a double install',
     /installed at project scope instead/.test(r.stdout) && !/runs twice per call/.test(r.stdout),
@@ -329,6 +376,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('uninstall removes only our groups', after.hooks.PostToolUse.length === 1 && after.hooks.PostToolUse[0].hooks[0].command === 'echo theirs' && !after.hooks.PreToolUse);
   t('uninstall leaves permissions and the ledger', after.permissions.allow[0] === 'Bash(ls)' && existsSync(join(CFG, 'tokenbrake', 'ledger.jsonl')));
   t('uninstall removes the guard copy', !existsSync(join(CFG, 'hooks', 'tokenbrake', 'guard.js')));
+  t('uninstall removes the window init set and its record, and says so',
+    after.autoCompactWindow === undefined && !existsSync(mk) && /autoCompactWindow 300,000 removed/.test(un.stdout), String(after.autoCompactWindow));
+  /* The same value set by hand (`/autocompact 300k`, as the plugin install is told to) is the person's: no record, no removal. */
+  writeFileSync(sp, JSON.stringify({ ...after, autoCompactWindow: 300000 }));
+  r = cli(['uninstall']);
+  t('uninstall leaves a 300,000 window init did not set', JSON.parse(readFileSync(sp, 'utf8')).autoCompactWindow === 300000 && !/removed:/.test(r.stdout));
+  writeFileSync(sp, JSON.stringify(after));
 }
 
 {
