@@ -83,8 +83,8 @@ the second pass is a no-op on an already trimmed output, and the ledger records 
 `--caps` and `--reach` drop the duplicate and say how many they dropped, and `status` reports the overlap -- but that
 is cleanup after a misconfiguration, not a mode to run in.
 
-Restart Claude Code (or run `/hooks`: `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and `SessionStart` each list
-a tokenbrake entry, `guard.js` in its command). Node 18+ is the only requirement — no
+Restart Claude Code (or run `/hooks`: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `Stop` and
+`SessionEnd` each list a tokenbrake entry, `guard.js` in its command). Node 18+ is the only requirement — no
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
 
 ```
@@ -471,6 +471,17 @@ both: the window into `settings.json` and `compactPrep: true` into `tokenbrake.j
 beside a window or a `compactPrep: false` you set yourself, because each half was measured only with the other.
 The guard's own default stays off, so a plugin or project install gets neither. With it off, shadow records what it
 would have injected.
+
+`coldWarn` (default `false`, Windows only) is a warning, not a brake: it changes nothing in context. A session's
+context stays in Claude Code's prompt cache for an hour after the last request. The first message after that writes
+all of it again: on a 500k context about 3.8 points of the five-hour window, where a message inside the hour reads
+it for about 0.08. When a turn ends with at least `coldWarnMinContext` (default 100,000) tokens in context, the
+`Stop` hook starts a small detached timer and returns. If the session then sits idle for `coldWarnAfterMin`
+(default 50; keep it under 60) minutes, one notification names the folder, the context and what writing it again
+would draw, and says any message keeps it warm. A new turn in that session moves the clock, and closing the session
+(`SessionEnd`) drops it. A session left alone is warned once, and one whose requests write 5-minute cache is not
+warned at all: it is cold long before. Each warning is a ledger row (`ev: "coldwarn"`). It is the pilot of a
+pre-registered test (`AB-TASK.md`, 2026-09-25), and stays off until that test measures it.
 
 `blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
 minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,

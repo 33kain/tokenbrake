@@ -11,6 +11,9 @@
 //   read-pre  PreToolUse (matcher Read): caps unbounded reads of large files via updatedInput.limit
 //   session-start  SessionStart (matcher compact): with compactPrep on, re-injects the session's working set
 //             (pointers only) after a compaction; off, a shadow row records what it would have injected.
+//   stop      Stop: with coldWarn on, arms the timer that warns before an idle session's cache goes cold.
+//   session-end  SessionEnd: drops a closed session's timer.
+//   coldwarn-timer  not a hook: the detached timer `stop` starts.
 
 const fs = require('fs');
 const path = require('path');
@@ -69,6 +72,9 @@ const DEFAULTS = {
   gitCollapse: ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'Cargo.lock', 'go.sum', 'composer.lock', 'Gemfile.lock', 'poetry.lock', '.min.js', '.min.css', '.map'], // paths whose diff hunks are collapsed, matched as a SUFFIX (a filename or extension, so `.map` collapses foo.map but not a.mapper.js); only consulted when gitView is on
   compactPrep: false,    // OFF by default: after a compaction, re-inject the working set as pointers (files edited and read, with ranges; the last failing command; the task's first words) so the model does not re-read to find its place. Stays OFF here: stage B passed the pair (AB-TASK.md, 2026-09-29), so user-scope init turns it on in tokenbrake.json with the 300k window
   compactPrepMaxChars: 8000, // ~2,000 tokens: the whole injected block stays under this
+  coldWarn: false,       // OFF by default: a Windows notification before an idle session's cache goes cold, so one message can keep it warm; the pilot of AB-TASK.md, 2026-09-25. Changes nothing in context
+  coldWarnAfterMin: 50,  // idle minutes before the warning; the cache lives 60 minutes from the last request
+  coldWarnMinContext: 100000, // only a context at least this big is worth a warning (~0.76 points to write again on Opus 5.5)
   logAllTools: true,     // record size of every tool result in the ledger (feeds `tokenbrake report`)
   shadow: true,          // ON by default: an off-by-default feature (blobElide, gitView, mcpTrim) still runs its own test and logs what it WOULD have withheld (ev:'shadow'), emitting nothing -- evidence for `tune` without a live run. Changes nothing that enters context.
   noTrim: [],            // allowlist: shell commands / read paths matching any of these substrings are left whole
@@ -321,8 +327,9 @@ function hashOf(text) {
 }
 /* One per-session append-only JSONL of small state, under <kind>/<session>.jsonl -- append, not rewrite, so
    two tool calls landing at once cannot lose each other's line. Dedup (feature 6) and Read-After-Edit
-   (narrowing 1) both use it; the append body was identical in both, so it lives once here. */
-function sessionStatePath(kind, session) { return path.join(TB_DIR, kind, String(session || 'session').replace(/[^\w-]/g, '_') + '.jsonl'); }
+   (narrowing 1) both use it; the append body was identical in both, so it lives once here. coldWarn keeps one
+   record per session instead, replaced whole, under the same name with `ext` '.json'. */
+function sessionStatePath(kind, session, ext = '.jsonl') { return path.join(TB_DIR, kind, String(session || 'session').replace(/[^\w-]/g, '_') + ext); }
 function appendSessionState(p, rec) {
   try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.appendFileSync(p, JSON.stringify(rec) + '\n'); } catch { /* best-effort */ }
 }
@@ -1272,14 +1279,223 @@ function handleSessionStart(input, cfg) {
   if (text) emit({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
 }
 
+/* What each kind of token weighs against the five-hour limit, in points of the window per million tokens, per
+   calibrated model: Opus 5 (AB-TASK.md, "Calibration results", 2026-09-18) and Opus 5.5 ("Opus 5.5 recalibration,
+   fourth run", 2026-09-25). Other models are not calibrated. `countsFrom` is the day a model's automatic
+   compactions start counting toward stage 2 (AB-TASK.md, 2026-09-22 amendment: the day its weights merged).
+   transcript.js prices every report with these; they live here because the guard is installed alone. */
+const LIMIT_WEIGHTS = [
+  { model: 'claude-opus-5', label: 'Opus 5', read: 0.20, write: 8.9, output: 34 },
+  { model: 'claude-opus-5-5', label: 'Opus 5.5', read: 0.16, write: 7.62, output: 29.44, countsFrom: '2026-09-25' },
+];
+/* A model's weights: the calibrated model itself, or it with a date suffix -- not a later model whose id merely
+   starts the same (claude-opus-5-5 starts with claude-opus-5 and has weights of its own). Null when uncalibrated. */
+const weightsOf = (model) => {
+  const m = String(model || '');
+  return LIMIT_WEIGHTS.find(w => m.startsWith(w.model) && /^(-\d{8})?$/.test(m.slice(w.model.length))) || null;
+};
+function usageCtx(u) {
+  return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
+}
+/* Points and token counts as the report writes them; coldWarn's notification writes them the same way. */
+const pfmt = (n) => n >= 10 ? String(Math.round(n)) : n >= 1 ? n.toFixed(1) : n >= 0.005 ? n.toFixed(2) : '< 0.01';
+const kfmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1000 ? Math.round(n / 1000) + 'k' : String(Math.round(n));
+
+/* A user entry the person typed as a prompt, which a model request answers. Not the ones Claude Code writes
+   itself and answers locally: a slash command and its output (/model, /exit), the isMeta caveat beside them,
+   an interrupt marker, or a turn of tool results. Counting those let a session of slash commands alone read
+   as three prompts with no reply (transcript.js); coldWarn would read them as a turn that never ends. */
+const LOCAL_ENTRY = /^\s*<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>/;
+const INTERRUPTED = /^\s*\[Request interrupted/;   // an interrupt ends a turn, and fires no Stop
+const entryText = (e) => {
+  const c = e.message && e.message.content;
+  return typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b && b.type === 'text').map(b => b.text || '').join('') : '';
+};
+function isPrompt(e) {
+  if (e.type !== 'user' || !e.message || e.isMeta) return false;
+  const text = entryText(e);
+  return !!text && !LOCAL_ENTRY.test(text) && !INTERRUPTED.test(text);
+}
+
+/* coldWarn (AB-TASK.md: pre-registered 2026-09-25, and the prototype's reading of it, 2026-09-30). A session's
+   context stays in the prompt cache for an hour after the request that last read it; the first message after that
+   writes all of it again. When a turn ends with a big context, a timer waits coldWarnAfterMin idle minutes and then
+   shows one Windows notification: the folder, the context, what writing it again would draw, and that any message
+   keeps it warm. Elsewhere it does nothing. It changes nothing in context.
+   - One timer per session: a detached `node guard.js coldwarn-timer`, which the Stop hook starts and does not wait
+     for. The state file (coldwarn/<session>.json, one record, replaced whole) is what the two share. A later Stop
+     rewrites it and a live timer re-reads it when it wakes, so a session keeps one timer however many turns end.
+   - The timer decides from the transcript when it wakes, not from what the Stop saw. While a turn runs (a prompt or
+     a request newer than the last Stop) nothing is warned; the next Stop moves the clock, and so does a turn that
+     ends with no Stop (an interrupt, an API error). A local command (/context, /cost) is not a turn. The last
+     request sets when the warning is due, from when it was sent: its cache was refreshed then.
+   - Only a context cached for an hour is warned about: a request that wrote 5-minute cache is cold long before the
+     warning, and a compaction leaves no context to keep warm.
+   - One warning per request, recorded by that request's send time. Repeat is a chain: a turn that answered a shown
+     warning while its cache was warm keeps the chain's start, any other turn starts a new chain, and no warning is
+     due 3 hours or more after its start. A session left alone is warned once, because a second warning after the
+     cache expired would keep nothing warm.
+   - SessionEnd removes the state, and an uninstall removes the guard file; either way the timer exits when it
+     next wakes.
+   - Fail open: anything that goes wrong warns about nothing. */
+const COLD_TAIL_BYTES = 1024 * 1024;   // the last request sits at the end of the transcript
+const CACHE_LIFE = 60 * 60e3, COLD_CHAIN = 3 * 60 * 60e3;
+const COLD_POLL = 5 * 60e3;            // the longest a timer sleeps: a closed session, a knob turned off or a sleeping machine is seen soon
+const coldPath = (session) => sessionStatePath('coldwarn', session, '.json');
+const coldKnob = (cfg, k) => Number(cfg[k]) > 0 ? Number(cfg[k]) : DEFAULTS[k];
+function coldState(session) {
+  try { const s = JSON.parse(fs.readFileSync(coldPath(session), 'utf8')); return s && typeof s === 'object' ? s : null; } catch { return null; }
+}
+/* Replaced whole through a fresh temp file ('wx', a random name), so a planted file cannot redirect the write.
+   Whether it was written. */
+function coldSave(session, st) {
+  const p = coldPath(session), tmp = p + '.' + process.pid + '.' + Math.random().toString(36).slice(2, 8) + '.tmp';
+  try { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(tmp, JSON.stringify(st), { flag: 'wx' }); fs.renameSync(tmp, p); return true; }
+  catch { try { fs.unlinkSync(tmp); } catch { /* best-effort */ } return false; }
+}
+const alive = (pid) => { try { return pid > 0 && process.kill(pid, 0); } catch { return false; } };
+
+/* The transcript's last request (when it was sent, its context, its model, whether it wrote 5-minute cache);
+   whether a turn is running, one begun after `since` that has not ended; and when the first turn after `since`
+   began. A request is sent right after the user entry before it (a prompt or tool results) is written, and its
+   own entries are written as it streams, minutes later for a long one. A sidechain is a subagent's, whose cache
+   is not this session's. */
+function coldScan(file, since) {
+  let last = null, sent = null, ended = since, busy = -Infinity, first = Infinity;
+  for (const e of jsonlEntries(readTail(file, COLD_TAIL_BYTES))) {
+    if (!e || e.isSidechain) continue;
+    const t = Date.parse(e.timestamp);
+    if (!Number.isFinite(t)) continue;
+    if (e.type === 'system' && e.subtype === 'compact_boundary') { last = null; continue; }
+    let began = false;   // this entry is part of a turn: a prompt, or a request
+    if (e.type === 'user') {
+      sent = t;
+      if (INTERRUPTED.test(entryText(e))) ended = Math.max(ended, t);
+      else began = isPrompt(e);
+    } else if (e.type === 'assistant' && e.message) {
+      if (e.isApiErrorMessage) { ended = Math.max(ended, t); continue; }
+      const u = e.message.usage, ctx = usageCtx(u);
+      if (!ctx) continue;
+      began = true;
+      last = { at: sent != null ? sent : t, ctx, model: e.message.model,
+        short: !!(u.cache_creation && u.cache_creation.ephemeral_5m_input_tokens > 0) };
+    }
+    if (began && t > since) { busy = t; first = Math.min(first, t); }
+  }
+  return { last, active: busy > ended, first };
+}
+
+/* Whether a request's context is one to warn about: big enough, and cached for the hour. */
+const coldWorth = (r, cfg) => !!r && !r.short && r.ctx >= coldKnob(cfg, 'coldWarnMinContext');
+
+/* What a waking timer does: 'cancel', 'warn', or the time to sleep until. Past the cache's life (a turn that never
+   ended, a machine that slept through it) it cancels: a warning then keeps nothing warm. */
+function coldNext(st, scan, cfg, now) {
+  const r = scan.last;
+  if (!coldWorth(r, cfg) || now >= r.at + CACHE_LIFE) return 'cancel';
+  if (scan.active) return now + COLD_POLL;
+  const due = r.at + coldKnob(cfg, 'coldWarnAfterMin') * 60e3;
+  if (st.warned >= r.at || due >= st.from + COLD_CHAIN) return 'cancel';
+  return now < due ? due : 'warn';
+}
+
+function handleStop(input, cfg) {
+  if (!cfg.coldWarn || !NOTIFY || !input.session_id) return;
+  const file = transcriptFile(input.transcript_path);
+  if (!file) return;
+  const session = String(input.session_id), prev = coldState(session) || {}, now = Date.now();
+  const live = prev.token && alive(prev.pid);
+  // Read only when it decides something: whether to arm, or whether this turn answered a warning shown since the
+  // last Stop (`shown`, which each Stop drops) before that request's cache expired.
+  const scan = !live || prev.shown ? coldScan(file, prev.stop || now) : null;
+  const st = { transcript: file, folder: prepClean(path.basename(String(input.cwd || '')), 60), stop: now,
+    from: prev.shown && prev.warned + CACHE_LIFE > scan.first ? prev.from : now, warned: prev.warned || 0 };
+  if (live) return coldSave(session, { ...st, token: prev.token, pid: prev.pid });   // the live timer re-reads this
+  if (!coldWorth(scan.last, cfg)) return coldSave(session, st);
+  st.token = require('crypto').randomBytes(12).toString('hex');
+  coldSave(session, st);   // before the spawn: the timer checks its token first thing
+  const c = require('child_process').spawn(process.execPath, [__filename, 'coldwarn-timer', session, st.token],
+    { detached: true, stdio: 'ignore', windowsHide: true, cwd: os.homedir() });
+  c.on('error', () => {});
+  c.unref();
+  const cur = coldState(session);   // unless another Stop hook (a second install) armed its own timer meanwhile
+  if (c.pid && cur && cur.token === st.token) coldSave(session, { ...cur, pid: c.pid });
+}
+
+function handleSessionEnd(input) {
+  if (input.session_id) try { fs.unlinkSync(coldPath(String(input.session_id))); } catch { /* none armed */ }
+}
+
+async function coldTimer(session, token) {
+  const owned = () => { const s = coldState(session); return s && s.token === token ? s : null; };
+  for (;;) {
+    const cfg = loadConfig(), st = owned();
+    // turned off, uninstalled, the session closed, or another timer owns it
+    if (!cfg.enabled || !cfg.coldWarn || !fs.existsSync(__filename) || !st) return;
+    const file = transcriptFile(st.transcript);
+    const scan = file ? coldScan(file, st.stop) : { last: null, active: false };
+    const next = coldNext(st, scan, cfg, Date.now());
+    if (typeof next === 'number') { await new Promise((r) => setTimeout(r, Math.min(next - Date.now(), COLD_POLL))); continue; }
+    const shown = next === 'warn' && coldNotify(session, st, scan.last);
+    const cur = owned();   // re-read: a Stop may have rewritten it while this one looked
+    if (!cur) return;
+    if (next === 'warn') {
+      // the warned request, shown or not; only a shown warning can be answered. A state that did not take it would
+      // warn again, so then this timer stops. The next look lets go, or waits on a turn that ended meanwhile.
+      if (!coldSave(session, { ...cur, warned: scan.last.at, shown })) return;
+      continue;
+    }
+    if (cur.stop !== st.stop) continue;   // a turn ended while this one decided: look again
+    coldSave(session, { ...cur, token: null });
+    return;
+  }
+}
+
+/* The notification, through Windows PowerShell's own toast: no module, nothing installed. The script is constant;
+   the title and body reach it only as environment variables and are XML-escaped there. */
+const TOAST_PS = [
+  "$ErrorActionPreference = 'Stop'",
+  '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
+  '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null',
+  '$x = New-Object Windows.Data.Xml.Dom.XmlDocument',
+  "$x.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_TITLE) + '</text><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_BODY) + '</text></binding></visual></toast>')",
+  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show((New-Object Windows.UI.Notifications.ToastNotification $x))"
+].join('\n');
+function toast(title, body) {
+  /* Absolute, from the system root: a bare powershell.exe is looked up in the working directory first. */
+  const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  return require('child_process').spawnSync(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(TOAST_PS, 'utf16le').toString('base64')],
+    { env: { ...process.env, TOKENBRAKE_TITLE: title, TOKENBRAKE_BODY: body }, stdio: 'ignore', windowsHide: true, timeout: 30000, cwd: os.homedir() }).status === 0;
+}
+/* Who shows a warning: the toast on Windows, nobody elsewhere (so nothing is armed there). TOKENBRAKE_NO_NOTIFY
+   stands in a notifier that shows nothing and reports it not shown, or shown when set to `shown`, so test.mjs runs
+   the whole lifecycle on any platform. */
+const NOTIFY = process.env.TOKENBRAKE_NO_NOTIFY ? () => process.env.TOKENBRAKE_NO_NOTIFY === 'shown'
+  : process.platform === 'win32' ? toast : null;
+
+/* Shows the warning and records it; whether it was shown. */
+function coldNotify(session, st, r) {
+  const now = Date.now(), w = weightsOf(r.model), k = kfmt(r.ctx);
+  const title = 'tokenbrake: ' + (st.folder || 'a session') + ' goes cold in ~' + Math.max(1, Math.round((r.at + CACHE_LIFE - now) / 60e3)) + ' min';
+  const body = (w ? 'Writing its ' + k + ' context again would draw ~' + pfmt(r.ctx * w.write / 1e6) + ' points of the five-hour window.'
+    : 'Its ' + k + ' context would be written again in full.') + ' Any message keeps it warm.';
+  let shown = false;
+  try { shown = NOTIFY(title, body); } catch { /* not shown */ }
+  log({ ev: 'coldwarn', session, ctx: r.ctx, model: r.model, idle: Math.round((now - r.at) / 60e3), shown });
+  return shown;
+}
+
 function main() {
   try {
     const cfg = loadConfig();
     if (!cfg.enabled) return;
+    if (MODE === 'coldwarn-timer') { coldTimer(process.argv[3] || '', process.argv[4] || '').catch(() => {}); return; }
     const input = readStdin();
     if (!input || typeof input !== 'object') return;
     if (MODE === 'read-pre') handleReadPre(input, cfg);
     else if (MODE === 'session-start') handleSessionStart(input, cfg);
+    else if (MODE === 'stop') handleStop(input, cfg);
+    else if (MODE === 'session-end') handleSessionEnd(input);
     else handlePost(input, cfg);
   } catch { /* fail open */ }
   process.exitCode = 0;
@@ -1290,4 +1506,4 @@ function main() {
    guard's questions with the guard's answers instead of keeping copies that drift. It stays one file: the install
    copies guard.js alone, and a copy run by Claude Code is always `require.main`. */
 if (require.main === module) main();
-else module.exports = { DEFAULTS, EXCERPT, GIT_DIFF, PERSISTED, workingSet, renderWorkingSet, resultText, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };
+else module.exports = { DEFAULTS, weightsOf, usageCtx, pfmt, kfmt, isPrompt, coldScan, coldNext, alive, EXCERPT, GIT_DIFF, PERSISTED, workingSet, renderWorkingSet, resultText, hashOf, dedupPointer, patchRanges, editWindow, priorReadIn, reReadDecision, deltaNote, reReadNote, matchesAny, noTrimmed, toolConfig };

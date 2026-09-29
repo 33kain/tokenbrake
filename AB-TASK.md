@@ -4347,3 +4347,114 @@ Three rows outside them changed:
 before it, so `carriedTurns`, and with it a compaction's recovery, runs slightly high. On this machine's 393
 sessions that is 23 of 7,023 requests (22 synthetic replies), 139k of 189.4M carried tokens (0.07%). The fix changes
 a counting rule every carried figure uses, so it waits for an amendment of its own.
+
+## Amendment: coldWarn's first check is read from the owner's transcripts — 2026-09-30, before any of it is read
+
+**Why.** The pilot's check 1 asks whether a cache read refreshes the cache's 1-hour life. It was pre-registered as
+one interactive session: a message at ~50 minutes, then another ~50 minutes later, both reading from cache. That
+takes about 100 minutes of the owner's time and gives one instance. The owner's transcripts already hold the same
+test many times over, because every request records what it read from cache, what it wrote, and when. The owner
+agreed to read it from there on 2026-09-30.
+
+**The test.** It runs over the unstaged sessions, the pool `tune` and `report` use (no benchmark, calibration or
+headless session). It reads sized requests only (`usageCtx > 0`, the 2026-09-29 rule).
+- **Late read.** A request C with an anchor W: the latest sized request at least **65 minutes** before C. Between
+  them:
+  - no compaction boundary;
+  - the same model on every sized request from W to C;
+  - no 5-minute cache writes (`cache_creation.ephemeral_5m_input_tokens` above 0);
+  - no two consecutive sized requests more than **55 minutes** apart.
+  The 5 minutes either side of the hour cover the gap between a transcript's timestamp and the server's clock.
+- **Why that tests the refresh.** Everything W read or wrote was written at or before W. If a read does not
+  refresh the life, each of those tokens expires 60 minutes after it was written, so before C.
+- **Refreshed.** C's cache read, minus every token written after W and before C (cache writes plus uncached input),
+  is at least **50,000**. So at least 50k of what C read from cache is older than W. The 50k is above the
+  29,951-token system-and-tools prefix (HANDOFF.md, 2026-09-25), which another session could have kept warm.
+- **Not refreshed.** C read under 50,000 from cache and wrote at least 50,000: the context was written again.
+- **Undecided.** Anything else, for example a small context or one mostly written after W. It is counted, but in
+  neither bucket.
+- **Sessions are the unit,** because late reads in one session are not independent.
+  - A session is refreshed if it has a refreshed late read and no not-refreshed one.
+  - It is not refreshed if it has a not-refreshed late read.
+- **The idle case** is the one the warning relies on. It is a refreshed late read whose chain from W has a gap of at
+  least **40 minutes**: a message after 40 to 55 idle minutes kept the context alive past the hour.
+
+**It passes when:**
+- at least **5 sessions** are refreshed;
+- not-refreshed sessions are at most **10%** of the sessions with a decided late read;
+- the idle case appears in at least **3 sessions**.
+
+If the idle case appears in fewer than 3 sessions, the transcripts do not settle check 1, and it runs as
+pre-registered (the interactive session). If not-refreshed sessions are over 10%, check 1 fails, and coldWarn stops
+as pre-registered.
+
+**Already on record** (read 2026-09-25, not under this rule). Over 57 sessions:
+- every write is 1-hour cache;
+- only 2 re-writes of 5k+ came within an hour of the previous request.
+
+That is indirect evidence. Without a refresh, long active sessions would re-write about every hour. This test reads
+it directly.
+
+**Unchanged:** checks 2 and 3, the feature, its pass rule, and every counting rule. The script
+(`scripts/coldwarn-refresh.cjs`) follows in its own commit, before it is run.
+
+This is written before any of it is read.
+
+### coldWarn check 1 — read 2026-09-30: PASS
+
+`node scripts/coldwarn-refresh.cjs`, over 98 unstaged sessions. 16 have a late read.
+
+| | late reads | sessions |
+|---|---:|---:|
+| refreshed | 732 | 15 |
+| not refreshed | 1 | 1 |
+| undecided | 15 | 0 (only undecided) |
+| idle case (a gap of 40 to 55 minutes in the chain) | | 9 |
+
+- **Refreshed:** 15 sessions, against 5 needed.
+- **Not refreshed:** 1 of 16 decided sessions (6%), against at most 10%.
+- **Idle case:** 9 sessions, against 3. Examples:
+  - `fb888c78`: a 55-minute gap, then a read of 170,621 from cache with 1,557 written after the anchor;
+  - `c310b54d`: gaps of 44 and 42 minutes in one chain, then a read of 612,512.
+
+**The not-refreshed one** is the miss HANDOFF.md already listed as unexplained on 2026-09-25: `122def48`, 2026-09-19
+22:13:40 UTC. It came 38 minutes after the previous request and 69 after the anchor. It read only the 29,951-token
+system-and-tools prefix and wrote 151,656. The next request, 5 seconds later, read 181,607: what this one had just
+written. It was the first prompt after local midnight. Five other midnight crossings in the pool read from cache
+normally, so midnight alone does not explain it. It fits either reading, an expiry without a refresh or a change in
+the prompt. The rule counts it against, and the result passes with it.
+
+Check 1 passes. The pilot goes on to checks 2 and 3, which need the feature built (off by default).
+
+## Amendment: how the coldWarn prototype reads the pre-registration — 2026-09-30, before any warning fires
+
+The prototype is built for pilot checks 2 and 3. Where the text of 2026-09-25 leaves a choice, this is the reading.
+No warning has fired in the owner's sessions.
+
+- **Cancel** is read from the transcript when the timer wakes. A prompt or a request after the turn ended cancels
+  it, and the next turn's end re-arms it. There is no `UserPromptSubmit` hook: a prompt is in the transcript the
+  moment it is sent.
+- **Repeat** is a chain.
+  - A turn that answered a warning keeps the chain's start. Any other turn starts a new chain.
+  - No warning is due 3 hours or more after the chain's start.
+  - A session left alone is warned once. A second warning after its cache expired would keep nothing warm.
+- **A closed session** (`SessionEnd`) is not warned about.
+- **A timer that wakes after the cache expired** (the machine slept through it) does not warn.
+- **The ledger row** carries `shown`: whether Windows took the notification without an error. Only a shown warning
+  counts toward the 20.
+- **Windows only.** Elsewhere the feature does nothing.
+- **Two knobs** let the pilot see a warning without waiting: `coldWarnAfterMin` (50) and `coldWarnMinContext`
+  (100,000). A warning counts only at those pre-registered values.
+
+Counting starts after checks 2 and 3 pass. Unchanged: the feature's purpose, the measurement, the pass rule and every
+counting rule.
+
+Added after the code review, the same day, still before any warning fires:
+- **A turn also ends** at an interrupt or an API error Claude Code gave up on; neither fires `Stop`. A local command
+  (`/context`, `/cost`) is not a turn.
+- **Answered** means begun while the warned request's cache was still warm, and only a shown warning can be
+  answered. A turn begun after that hour starts a new chain.
+- **The idle clock** runs from when the last request was sent (the user entry before it), when its cache was
+  refreshed, not from when its reply finished streaming.
+- **A request that wrote 5-minute cache** is not warned about: it is cold long before 50 minutes. Check 1 excluded
+  those requests for the same reason.
