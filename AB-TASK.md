@@ -4425,3 +4425,26 @@ normally, so midnight alone does not explain it. It fits either reading, an expi
 the prompt. The rule counts it against, and the result passes with it.
 
 Check 1 passes. The pilot goes on to checks 2 and 3, which need the feature built (off by default).
+
+## Amendment: how the coldWarn prototype reads the pre-registration — 2026-09-30, before any warning fires
+
+The prototype is built for pilot checks 2 and 3. Where the text of 2026-09-25 leaves a choice, this is the reading.
+No warning has fired in the owner's sessions.
+
+- **Cancel** is read from the transcript when the timer wakes. A prompt or a request after the turn ended cancels
+  it, and the next turn's end re-arms it. There is no `UserPromptSubmit` hook: a prompt is in the transcript the
+  moment it is sent.
+- **Repeat** is a chain.
+  - A turn that answered a warning keeps the chain's start. Any other turn starts a new chain.
+  - No warning is due 3 hours or more after the chain's start.
+  - A session left alone is warned once. A second warning after its cache expired would keep nothing warm.
+- **A closed session** (`SessionEnd`) is not warned about.
+- **A timer that wakes after the cache expired** (the machine slept through it) does not warn.
+- **The ledger row** carries `shown`: whether Windows took the notification without an error. Only a shown warning
+  counts toward the 20.
+- **Windows only.** Elsewhere the feature does nothing.
+- **Two knobs** let the pilot see a warning without waiting: `coldWarnAfterMin` (50) and `coldWarnMinContext`
+  (100,000). A warning counts only at those pre-registered values.
+
+Counting starts after checks 2 and 3 pass. Unchanged: the feature's purpose, the measurement, the pass rule and every
+counting rule.
