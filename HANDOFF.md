@@ -1785,3 +1785,20 @@ finished at 20:02 UTC. It ships the stage B flip (#133): the first user-scope `i
 `compactPrep`, recorded in `~/.claude/tokenbrake/init.json`, and `uninstall` removes only the window init wrote.
 Existing installs get the pair on their first `init` after upgrading. The plugin moves to 0.7.0 with no change in
 behavior; a plugin install does not update itself (`claude plugin update tokenbrake@tokenbrake`).
+
+## The `compactionView` edges fixed — 2026-09-29
+
+The first item on the unblocked list. `compactionView` now reads only requests whose usage reports a context size.
+A request with no `usage`, or one of Claude Code's all-zero `<synthetic>` replies, no longer sets a compaction's size,
+counts toward its saving or takes a recovery slot. The idle before a request runs from the last sized one, and a
+missing timestamp or usage is never a cold rebuild. `/code-review` found four more edges in the fix itself (a
+compaction with nothing sized after it lost its row and so its charge; the fallback `pre` could reach across the
+compaction before; `preTokens: null` parsed as 0; a no-usage request could fake a cold rebuild). All four are
+fixed and tested. `reachedApi` is the one rule for "no API request behind it" in `usageTotals` and `limitDraw`.
+`report --compactions` now reads "Counted: 10 automatic compactions; the stage 2 rule read 8" past the 8, not "10
+of the 8".
+
+Stage B's 8 counted rows are unchanged (report diffed before and after). The ninth, 2026-09-29 15:03, rose from 4.76
+to 6.34 points: a synthetic reply after 256 minutes of idle had hidden the cold rebuild that followed it.
+`AB-TASK.md` has the rows that moved and one limitation left for an amendment (`carry()` counts synthetic replies
+as re-reads, 0.07% of carried tokens).

@@ -4322,3 +4322,28 @@ window.
 - Measured on one person's work, on Opus 5 and Opus 5.5 with a 1M window. `autoCompactWindow` also applies to
   headless `claude -p` (the 2026-09-23 calibration run), which stage B did not measure: a script that builds a
   context past 300k compacts under the new default.
+
+## The `compactionView` edges fixed, after stage B closed — 2026-09-29
+
+The two edges recorded on 2026-09-22 are fixed now that stage B's verdict is read, with four more the review of the
+fix found. Only a request whose usage reports a context size sets a compaction's sizes, counts toward its saving or
+takes a slot of its 30-request recovery window. One with no `usage`, only output, or Claude Code's all-zero
+`<synthetic>` reply is skipped instead of read as zero context. The idle time before a request runs from the last
+sized one: a synthetic reply leaves that clock alone, and a request with no usage or no timestamp leaves it unknown,
+never a cold rebuild. With `preTokens` absent (or `null`, which the parser used to read as 0), the size before
+comes from the last sized request since the compaction before, not across it. A compaction with no sized request
+after it keeps its row, with `post` unknown and no saving, so its charge still counts.
+
+**The 8 counted compactions are unchanged,** row for row, in `report --compactions` run before and after the fix.
+Three rows outside them changed:
+- **2026-09-29 15:03, the ninth, after the read: saving 4.76 → 6.34.** At 19:25 a synthetic reply followed 256
+  minutes of idle, and the next request re-wrote 75k 28 seconds later. The old code measured the idle from the
+  synthetic reply and missed that cold rebuild, an edge that undercounted the saving. Recovery 0.30 → 0.31, as the
+  reply no longer takes a slot of the window.
+- 2026-09-27 09:40 (`claude-fable-5`, not counted): 267k → 0 became 267k → 64k, saving 13.69 → 10.38.
+- 2026-09-19 10:03 (benchmark, not counted): 205k → 0 with 0.21 saved became 205k → ?, with none.
+
+**Left as is, recorded:** `carry()` still counts a request that never reached the API as a re-read of every result
+before it, so `carriedTurns`, and with it a compaction's recovery, runs slightly high. On this machine's 393
+sessions that is 23 of 7,023 requests (22 synthetic replies), 139k of 189.4M carried tokens (0.07%). The fix changes
+a counting rule every carried figure uses, so it waits for an amendment of its own.

@@ -1016,7 +1016,7 @@ function compactionsReport() {
   console.log('\n  when              trigger  context       later  saving  recovery (files re-read)   counts');
   for (const r of rows.sort((a, b) => (a.at || 0) - (b.at || 0))) {
     const when = r.at ? new Date(r.at).toISOString().slice(0, 16).replace('T', ' ') : '?';
-    console.log('  ' + when.padEnd(17) + ' ' + String(r.trigger || '?').padEnd(8) + ' ' + (k(r.pre) + ' -> ' + k(r.post)).padEnd(13)
+    console.log('  ' + when.padEnd(17) + ' ' + String(r.trigger || '?').padEnd(8) + ' ' + (k(r.pre) + ' -> ' + (r.post == null ? '?' : k(r.post))).padEnd(13)
       + ' ' + String(r.later).padStart(5) + '  ' + r.saving.toFixed(2).padStart(6) + '  '
       + (r.recovery.pts.toFixed(2) + ' (' + r.recovery.files.length + ')').padEnd(25) + '  ' + (r.why ? 'no -- ' + r.why : 'yes'));
   }
@@ -1024,7 +1024,8 @@ function compactionsReport() {
   const v = transcript.compactionVerdict(counted), perModel = transcript.compactionVerdictByModel(counted);
   const { n: need, share: bar } = transcript.STAGE2;
   const share = (c, of = v) => of.saving > 0 ? Math.round(100 * c / of.saving) + '%' : 'n/a';
-  console.log('\n  Counted: ' + v.n + ' of the ' + need + ' automatic compactions the stage 2 rule reads (it passed on the author\'s work, 2026-09-29).'
+  console.log('\n  Counted: ' + v.n + (v.n > need ? ' automatic compactions; the stage 2 rule read ' + need : ' of the ' + need + ' automatic compactions the stage 2 rule reads')
+    + ' (it passed on the author\'s work, 2026-09-29).'
     + '  Saving ' + v.saving.toFixed(1) + ' points; recovery ' + v.recovery.toFixed(1)
     + '; compaction charged at ' + chargeLow + ' and ' + chargeHigh + ' points each.');
   console.log('  Cost as a share of the saving: ' + share(v.costLow) + ' at the estimate, ' + share(v.costHigh) + ' at the bound.'

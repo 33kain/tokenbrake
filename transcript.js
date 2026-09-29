@@ -409,8 +409,9 @@ function parseTranscript(file) {
 
     if (e.type === 'system' && e.subtype === 'compact_boundary') {
       const m = e.compactMetadata || {};
+      // preTokens is taken only as a number: Number(null) and Number('') would read as a 0-token context.
       boundaries.push({ atReq: requests.length, trigger: m.trigger || null,
-        preTokens: Number.isFinite(Number(m.preTokens)) ? Number(m.preTokens) : null, at: Date.parse(e.timestamp) || null });
+        preTokens: Number.isFinite(m.preTokens) ? m.preTokens : null, at: Date.parse(e.timestamp) || null });
       continue;
     }
 
@@ -552,12 +553,16 @@ const resultPts = (tokens, carriedTurns, weights) => tokens * (weights.write + (
 function usageCtx(u) {
   return u ? (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.input_tokens || 0) : 0;
 }
+/* Whether a request reached the API: Claude Code's own synthetic replies carry all-zero usage, and some entries none. */
+const reachedApi = (u) => !!u && usageCtx(u) + (u.output_tokens || 0) > 0;
 
 /* Every compaction in a session, priced (AB-TASK.md, "An earlier compaction window", stage 2). For each one:
-   - the saving: the context dropped from `pre` to the next request's size, so every later request re-reads that
-     much less, and a cold rebuild (a write of 20k+ after over an hour idle) rewrites that much less. It accrues
-     until the next compaction, and stops where the uncompacted context would have passed Claude Code's own
-     default window, because there the session would have compacted anyway.
+   - the saving: the context dropped from `pre` (the boundary's own figure, else the last request since the
+     compaction before it) to the size the next request reports, so every later request re-reads that much less,
+     and a cold rebuild (a write of 20k+ after over an hour idle) rewrites that much less. It accrues until the
+     next compaction, and stops where the uncompacted context would have passed Claude Code's own default window,
+     because there the session would have compacted anyway. Only requests that report a context size count; with
+     none after the compaction yet, the row is kept (it still drew its charge) with `post` null and no saving.
    - the recovery: in the `recoveryWindow` requests after the compaction, every result that went back to a file
      already read before it -- a Read of it, or a shell/Grep/Glob lookup whose command or path names it (the stage 1
      pilot recovered three lost details with one grep, which a Read-only count scored as zero). Each is priced as a
@@ -594,7 +599,17 @@ function lookupOf(r, byName) {
 function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recoveryWindow = 30 } = {}) {
   carry(parsed);
   const reqs = parsed.requests;
-  const times = reqs.map(q => Date.parse(q.at) || 0);
+  // A request tells the context's size only when its usage reports one; the rest are skipped, never read as zero
+  // context. The idle before each runs from the last one that did. Claude Code's all-zero synthetic replies never
+  // reached the API and leave that clock alone; any other request without a size (no usage at all) leaves the idle
+  // unknown, and so does a missing timestamp: NaN, never a cold rebuild.
+  const real = reqs.map(q => usageCtx(q.usage) > 0);
+  let lastAt = NaN;
+  const idle = reqs.map((q, i) => {
+    if (real[i]) { const t = Date.parse(q.at), gap = t - lastAt; lastAt = t; return gap; }
+    if (!q.usage || reachedApi(q.usage)) lastAt = NaN;
+    return NaN;
+  });
   // Each result's file, normalized once (a Read's absolute path and a grep's relative one are the same file), and
   // the files read so far, grown across the boundaries in order rather than rebuilt at each one.
   const keys = parsed.results.map(r => r.file ? normReadPath(r.file, parsed.cwd) : null);
@@ -603,19 +618,25 @@ function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recove
   const rows = [];
   parsed.boundaries.forEach((b, bi) => {
     const k = b.atReq;
-    if (k >= reqs.length) return;   // no request after it yet
-    // An uncalibrated model is priced at Opus 5's weights for the listing only; compactionWhy never counts it.
-    const weights = weightsOf(reqs[k].model) || weightsOf('claude-opus-5');
     const end = bi + 1 < parsed.boundaries.length ? parsed.boundaries[bi + 1].atReq : reqs.length;
-    const post = usageCtx(reqs[k].usage);
-    const pre = b.preTokens != null ? b.preTokens : (k ? usageCtx(reqs[k - 1].usage) : 0);
-    const drop = Math.max(0, pre - post);
-    let colds = 0, requestsCounted = 0;
-    for (let i = k; i < end; i++) {
+    let m = real.indexOf(true, k);
+    if (m >= end) m = -1;   // none after it yet
+    const lastBefore = k ? real.lastIndexOf(true, k - 1) : -1;   // lastIndexOf(x, -1) would search from the end
+    const prev = lastBefore >= (bi ? parsed.boundaries[bi - 1].atReq : 0) ? lastBefore : -1;   // not across the compaction before
+    // An uncalibrated model is priced at Opus 5's weights for the listing only; compactionWhy never counts it.
+    const model = (reqs[m >= 0 ? m : lastBefore] || {}).model || null;
+    const weights = weightsOf(model) || weightsOf('claude-opus-5');
+    const post = m >= 0 ? usageCtx(reqs[m].usage) : null;
+    const pre = b.preTokens != null ? b.preTokens : (prev >= 0 ? usageCtx(reqs[prev].usage) : 0);
+    const drop = post == null ? 0 : Math.max(0, pre - post);
+    let colds = 0, requestsCounted = 0, later = 0;
+    for (let i = k; i < end; i++) if (real[i]) later++;
+    if (m >= 0) for (let i = m; i < end; i++) {
+      if (!real[i]) continue;
       const u = reqs[i].usage;
       if (usageCtx(u) + drop > defaultWindow) break;
       requestsCounted++;
-      if (i && times[i] - times[i - 1] > 60 * 60 * 1000 && u && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
+      if (idle[i] > 60 * 60 * 1000 && (u.cache_creation_input_tokens || 0) >= 20000) colds++;
     }
     for (; seen < parsed.results.length && parsed.results[seen].afterReq < k; seen++) {
       if (keys[seen]) {
@@ -626,7 +647,8 @@ function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recove
     }
     const files = new Set();
     let pts = 0;
-    const stop = Math.min(end, k + recoveryWindow);
+    let stop = k;   // just past the `recoveryWindow`th request after it that reports a size
+    for (let c = 0; stop < end && c < recoveryWindow; stop++) if (real[stop]) c++;
     for (let i = seen; i < parsed.results.length && parsed.results[i].afterReq < stop; i++) {
       const r = parsed.results[i];
       if (r.isError) continue;
@@ -636,7 +658,7 @@ function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recove
       pts += resultPts(r.tokens, r.carriedTurns, weights);
     }
     rows.push({
-      at: b.at, trigger: b.trigger, model: reqs[k].model || null, pre, post, drop, later: end - k, requestsCounted,
+      at: b.at, trigger: b.trigger, model, pre, post, drop, later, requestsCounted, colds,
       saving: drop * (requestsCounted * weights.read + colds * weights.write) / 1e6,
       recovery: { files: [...files], pts }
     });
@@ -1179,7 +1201,7 @@ function usageTotals(parsed) {
   let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0, lastModel = null;
   for (const q of parsed.requests) {
     const u = q.usage;
-    if (!u || !(usageCtx(u) + (u.output_tokens || 0))) continue;   // Claude Code's synthetic replies: all-zero, no API request
+    if (!reachedApi(u)) continue;
     requestsWithUsage++;
     const inp = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
     last = usageCtx(u); lastModel = q.model;
@@ -1197,7 +1219,7 @@ function limitDraw(parsed) {
   const models = new Set();
   for (const q of parsed.requests) {
     const u = q.usage;
-    if (!u || !(usageCtx(u) + (u.output_tokens || 0))) continue;
+    if (!reachedApi(u)) continue;
     const W = weightsOf(q.model);
     if (!W) { unpriced++; continue; }
     priced++;
