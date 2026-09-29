@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **`report --compactions` reads only requests that report a context size.** A request with no usage, or one of
+  Claude Code's all-zero synthetic replies, no longer reads as zero context after a compaction or takes a recovery
+  slot. A missing timestamp or usage no longer reads as a cold rebuild, and a synthetic reply after an idle hour no
+  longer hides the cold rebuild that follows it. A compaction with nothing sized after it is listed with its size
+  after unknown instead of dropped. Past the 8 the stage read, the count reads "10 automatic compactions; the stage
+  2 rule read 8". Stage B's 8 counted compactions are unchanged (`AB-TASK.md`, 2026-09-29).
+
 ## 0.7.0 — 2026-09-29
 
 The compaction window passed its measurement, and `init` installs it. Stage B tracked 8 automatic compactions on

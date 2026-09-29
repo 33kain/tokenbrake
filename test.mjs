@@ -4358,6 +4358,41 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('lookup: a later occurrence can match when the first does not', lk({ cmd: 'grep myapp.js app.js' }) === '/w/app.js');
   t('lookup: a Glob looking for the file by pattern counts', lk({ lookIn: '**/app.js' }) === '/w/app.js');
   rmSync(join(dir, 'grep.jsonl'));
+  /* Requests that report no context size (Claude Code's all-zero synthetic replies, entries with no usage or only
+     output) and requests with no timestamp: none is read as zero context, and none makes or hides a cold rebuild. */
+  n = 0;
+  const synth = (minutes) => { const e = req(0, 0, minutes); e.message.model = '<synthetic>'; e.message.usage.output_tokens = 0; return e; };
+  const noUsage = (minutes) => { const e = req(0, 0, minutes); delete e.message.usage; return e; };
+  const outOnly = (minutes) => { const e = req(0, 0, minutes); e.message.usage = { output_tokens: 5 }; return e; };
+  const noTime = (ctx, write) => { const e = req(ctx, write, 0); delete e.timestamp; return e; };
+  const cb = (preTokens, minutes = 3) => ({ type: 'system', subtype: 'compact_boundary', timestamp: at(minutes), compactMetadata: { trigger: 'auto', preTokens } });
+  const edgesOf = (name, lines, opts) => {
+    writeFileSync(join(dir, name + '.jsonl'), lines.map(e => JSON.stringify({ sessionId: name, cwd: '/w', ...e })).join('\n') + '\n');
+    const rows = TR.compactionView(TR.parseTranscript(join(dir, name + '.jsonl')), opts);
+    rmSync(join(dir, name + '.jsonl'));
+    return rows;
+  };
+  const [e1] = edgesOf('edges', [req(300000, 500, 2), cb(300000), synth(3), noUsage(3), outOnly(3),
+    req(50000, 50000, 4), req(51000, 500, 5), req(52000, 500, 6)]);
+  t('compactions: the context after is the first request that reports a size, and only those count',
+    e1 && e1.post === 50000 && e1.drop === 250000 && e1.requestsCounted === 3 && e1.later === 3 && e1.model === 'claude-opus-5', JSON.stringify(e1));
+  const coldsOf = (name, tail) => { const [r] = edgesOf(name, [req(300000, 500, 2), cb(300000), req(50000, 50000, 4), ...tail]); return r && r.colds; };
+  t('compactions: a request with no timestamp is no cold rebuild for the next one', coldsOf('notime', [noTime(51000, 500), req(80000, 30000, 5)]) === 0);
+  t('compactions: a synthetic reply after an idle hour does not hide the cold rebuild after it', coldsOf('idle', [synth(200), req(80000, 30000, 201)]) === 1);
+  t('compactions: a request with no usage inside an idle hour leaves the idle unknown, not cold', coldsOf('unknown', [noUsage(50), req(80000, 30000, 100)]) === 0);
+  const none = edgesOf('none', [req(300000, 500, 2), cb(300000), synth(4), noUsage(5)]);
+  t('compactions: with no sized request after it yet, the row is kept (it drew its charge) with no saving',
+    none.length === 1 && none[0].post === null && none[0].saving === 0 && none[0].requestsCounted === 0 && none[0].model === 'claude-opus-5', JSON.stringify(none));
+  const mid = edgesOf('mid', [req(300000, 500, 2), cb(300000), synth(4), cb(null, 5), req(40000, 40000, 6)]);
+  t('compactions: one with only synthetic replies before the next compaction keeps its row; the next reads no size from before the first',
+    mid.length === 2 && mid[0].post === null && mid[1].pre === 0 && mid[1].drop === 0, JSON.stringify(mid));
+  const preOf = (c) => { const [r] = edgesOf('pre', [req(200000, 500, 2), synth(2), c, req(40000, 40000, 4)]); return r; };
+  t('compactions: with no preTokens (absent or null), the context before is the last sized request',
+    preOf(cb()).pre === 200000 && preOf(cb()).drop === 160000 && preOf(cb(null)).pre === 200000, JSON.stringify(preOf(cb(null))));
+  const [rw] = edgesOf('window', [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2), cb(300000),
+    req(50000, 50000, 4), synth(5), readUse('b', '/w/app.js', 6), readRes('b', 6)], { recoveryWindow: 2 });
+  t('compactions: the recovery window counts requests that report a size, so a synthetic reply takes no slot',
+    rw && rw.recovery.files.length === 1, JSON.stringify(rw));
   const big = TR.compactionView(p, { defaultWindow: 290000 });
   t('compactions: the saving stops where the uncompacted context passes the default window', big[0].requestsCounted === 0 && big[0].saving === 0);
   t('stage 2: an automatic Opus 5 compaction outside the bench counts', TR.compactionWhy(row, { cwd: '/w' }) === '');
