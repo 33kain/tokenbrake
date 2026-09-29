@@ -4347,3 +4347,55 @@ Three rows outside them changed:
 before it, so `carriedTurns`, and with it a compaction's recovery, runs slightly high. On this machine's 393
 sessions that is 23 of 7,023 requests (22 synthetic replies), 139k of 189.4M carried tokens (0.07%). The fix changes
 a counting rule every carried figure uses, so it waits for an amendment of its own.
+
+## Amendment: coldWarn's first check is read from the owner's transcripts — 2026-09-30, before any of it is read
+
+**Why.** The pilot's check 1 asks whether a cache read refreshes the cache's 1-hour life. It was pre-registered as
+one interactive session: a message at ~50 minutes, then another ~50 minutes later, both reading from cache. That
+takes about 100 minutes of the owner's time and gives one instance. The owner's transcripts already hold the same
+test many times over, because every request records what it read from cache, what it wrote, and when. The owner
+agreed to read it from there on 2026-09-30.
+
+**The test.** It runs over the unstaged sessions, the pool `tune` and `report` use (no benchmark, calibration or
+headless session). It reads sized requests only (`usageCtx > 0`, the 2026-09-29 rule).
+- **Late read.** A request C with an anchor W: the latest sized request at least **65 minutes** before C. Between
+  them:
+  - no compaction boundary;
+  - the same model on every sized request from W to C;
+  - no 5-minute cache writes (`cache_creation.ephemeral_5m_input_tokens` above 0);
+  - no two consecutive sized requests more than **55 minutes** apart.
+  The 5 minutes either side of the hour cover the gap between a transcript's timestamp and the server's clock.
+- **Why that tests the refresh.** Everything W read or wrote was written at or before W. If a read does not
+  refresh the life, each of those tokens expires 60 minutes after it was written, so before C.
+- **Refreshed.** C's cache read, minus every token written after W and before C (cache writes plus uncached input),
+  is at least **50,000**. So at least 50k of what C read from cache is older than W. The 50k is above the
+  29,951-token system-and-tools prefix (HANDOFF.md, 2026-09-25), which another session could have kept warm.
+- **Not refreshed.** C read under 50,000 from cache and wrote at least 50,000: the context was written again.
+- **Undecided.** Anything else, for example a small context or one mostly written after W. It is counted, but in
+  neither bucket.
+- **Sessions are the unit,** because late reads in one session are not independent.
+  - A session is refreshed if it has a refreshed late read and no not-refreshed one.
+  - It is not refreshed if it has a not-refreshed late read.
+- **The idle case** is the one the warning relies on. It is a refreshed late read whose chain from W has a gap of at
+  least **40 minutes**: a message after 40 to 55 idle minutes kept the context alive past the hour.
+
+**It passes when:**
+- at least **5 sessions** are refreshed;
+- not-refreshed sessions are at most **10%** of the sessions with a decided late read;
+- the idle case appears in at least **3 sessions**.
+
+If the idle case appears in fewer than 3 sessions, the transcripts do not settle check 1, and it runs as
+pre-registered (the interactive session). If not-refreshed sessions are over 10%, check 1 fails, and coldWarn stops
+as pre-registered.
+
+**Already on record** (read 2026-09-25, not under this rule). Over 57 sessions:
+- every write is 1-hour cache;
+- only 2 re-writes of 5k+ came within an hour of the previous request.
+
+That is indirect evidence. Without a refresh, long active sessions would re-write about every hour. This test reads
+it directly.
+
+**Unchanged:** checks 2 and 3, the feature, its pass rule, and every counting rule. The script
+(`scripts/coldwarn-refresh.cjs`) follows in its own commit, before it is run.
+
+This is written before any of it is read.
