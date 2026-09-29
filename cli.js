@@ -1603,13 +1603,13 @@ function tuneReport() {
 
   /* `--write`: apply the recommendation to tokenbrake.json. This is the one part of the tuner that changes what
      the guard withholds next session, so it only ever turns a feature ON, and only on a clean MEASURED record
-     (a 'turn-on') -- never on an estimate. It does NOT auto-disable: a measured backfire is surfaced as
-     'reconsider' for the person to turn off deliberately, because the audit's net is pooled, not per-feature, so
-     --write cannot tell a feature that backfired once but is strongly net-positive from one that is net-negative
-     -- and reverting a net-positive feature would cost tokens. 'try'/'measure' are opportunity estimates, left
-     for the person to enable and measure. Knob names come from the fixed feature list (never transcript
-     content), values are booleans, and every other key is preserved (merge, not replace) -- the `preset`
-     contract. The plain `tokenbrake tune` is the preview; this is the deliberate apply. */
+     (a 'turn-on') -- never on an estimate. It does NOT auto-disable: a measured loss is surfaced as 'reconsider'
+     for the person to turn off deliberately. The net behind it is each feature's own, but a read narrowing has
+     none (its backfire counts past the confidence floor), and turning a feature off stays the person's call.
+     'try'/'measure' are opportunity estimates, or a clean record too thin to call, left for the person to
+     enable and measure. Knob names come from the fixed feature list (never transcript content), values are
+     booleans, and every other key is preserved (merge, not replace) -- the `preset` contract. The plain
+     `tokenbrake tune` is the preview; this is the deliberate apply. */
   if (flag('--write')) {
     const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
     /* --write changes ONE global tokenbrake.json, so when the evidence behind it was narrowed by --cwd or
@@ -1682,10 +1682,14 @@ function tuneReport() {
     if (m && m.fired > 0) {
       const back = isRead
         ? m.backfired + ' sent the model back'
-        : m.backfired + ' pulled back' + (m.savedCarried ? ', ~ ' + fmt(m.savedCarried) + ' token-reads saved' : '');
-      return 'fired ' + m.fired + 'x, ' + back
-        + (f.status === 'try' ? '  -- clean, but too few firings to be sure; run a few more sessions' : '')
-        + (f.status === 'review' ? '  -- it backfired; reconsider leaving it on' : '');
+        : m.backfired + ' pulled back' + (m.backfired ? ' (~ ' + fmt(m.pulledFoot) + ' token-reads, with the requests that fetched them)' : '')
+          + (m.savedCarried ? ', ~ ' + fmt(m.savedCarried) + ' token-reads saved' : '');
+      const loss = !isRead && m.savedCarried <= m.pulledFoot;
+      const why = f.status === 'review' ? (isRead ? 'it backfired' : 'the pull-backs cost at least what it saved') + '; reconsider leaving it on'
+        : f.status === 'leave-off' ? (isRead ? 'it sent the model back' : loss ? 'the pull-backs cost at least what it saved' : 'it pulled back; turning it back on is your call')
+        : f.status === 'keep' && m.backfired ? (isRead ? 'too few firings to judge; run a few more sessions' : 'it saved more than the pull-backs cost')
+        : f.status === 'try' ? 'clean, but too few firings to be sure; run a few more sessions' : '';
+      return 'fired ' + m.fired + 'x, ' + back + (why && '  -- ' + why);
     }
     /* The opportunity estimators measure the OFF state -- they count results the feature would have acted on
        had it been running. For a feature that is already ON, "would act on N result(s)" asserts the guard
@@ -1808,10 +1812,11 @@ function tuneReport() {
   if (s.excluded.length) parts.push('Would turn on, but your config says otherwise: ' + s.excluded.join(', '));
   console.log('\n  ' + (parts.length ? parts.join('.  ') + '.' : 'Nothing to change on this evidence.'));
   if (skipped.length) { console.log('\n  Skipped:'); for (const [id, why] of skipped.slice(0, 12)) console.log('    ' + id + '...  ' + why); if (skipped.length > 12) console.log('    (+ ' + (skipped.length - 12) + ' more)'); }
-  console.log('\n  A "turn on" is a MEASURED, clean record. A "try" is an ESTIMATE from what the model read -- built to under-count,');
-  console.log('  so turn the feature on and run `tokenbrake report --backfire` to confirm before trusting it. "Measure" means the');
-  console.log('  off state shows no signal either way (some wins are invisible until the feature runs); only a measured backfire is');
-  console.log('  a real "leave off". Recommendations only: nothing here changes your config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens only.');
+  console.log('\n  A "turn on" is a MEASURED, clean record. A "try" is an ESTIMATE from what the model read (built to under-count), or a');
+  console.log('  clean record too thin to call; turn the feature on and run `tokenbrake report --backfire` to confirm');
+  console.log('  before trusting it. "Measure" means the off state shows no signal either way (some wins are invisible until the');
+  console.log('  feature runs); only a measured backfire is a real "leave off". Recommendations only: nothing here changes your');
+  console.log('  config -- set the named knob in ' + path.join(CFG_DIR, 'tokenbrake.json') + ' yourself. Tokens only.');
 }
 
 function help() {

@@ -2205,6 +2205,27 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     [trimRow(A), trimRow(B)]);
   t('an ambiguous `show <sid8>` prefix is counted but not cross-attributed', amb.backfired === 0 && amb.unmatchedEvents === 1, JSON.stringify({ b: amb.backfired, u: amb.unmatchedEvents }));
 
+  /* A dedup pointer names the first copy's out/ file, which the trim also wrote when it cut that copy: two
+     withholds, one stem. A pull-back after the pointer is the pointer's, not the first copy's trim. */
+  const shared = T.backfireAudit({ sessionId: sid, cwd: '/w', requests: reqs(5), compactions: [],
+    results: [{ id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 1500, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 30, afterReq: 1 },
+      { id: 'toolu_P', name: 'Read', file: outPath(A), what: outPath(A), marker: false, tokens: 2000, afterReq: 2 }] },
+    [trimRow(A), { ev: 'post', session: sid, id: B, tool: 'Bash', chars: 20000, kept: 110, dedup: true, sameAs: stem(A) }]);
+  t('a pull-back of a stem the trim and a dedup share goes to the dedup the model had just seen',
+    shared.withholds[1].kind === 'dedup' && shared.withholds[1].recovered && !shared.withholds[0].recovered, JSON.stringify(shared.withholds.map((w) => [w.kind, w.recovered])));
+  const sharedShow = T.backfireAudit({ sessionId: sid, cwd: '/w', compactions: [],
+    requests: reqs(5).map((q, i) => i === 2 ? { ...q, usage: { cache_read_input_tokens: 50000 } } : q),
+    results: [{ id: A, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 1500, afterReq: 0 },
+      { id: B, name: 'Bash', file: null, what: 'npm test', marker: true, tokens: 30, afterReq: 1 },
+      { id: 'toolu_S', name: 'Bash', file: null, what: 'tokenbrake show ' + stem(A).slice(0, 14), marker: false, tokens: 2000, afterReq: 2 }] },
+    [trimRow(A), { ev: 'post', session: sid, id: B, tool: 'Bash', chars: 20000, kept: 110, dedup: true, sameAs: stem(A) }]);
+  t('and a `show <prefix>` of that one stem does too, not left unattributed as ambiguous',
+    sharedShow.withholds[1].recovered && !sharedShow.withholds[0].recovered && !sharedShow.unmatchedEvents, JSON.stringify({ w: sharedShow.withholds.map((w) => w.recovered), u: sharedShow.unmatchedEvents }));
+  t('the request that fetched it is kept out of the pooled net (it counts only in tune\'s per-feature net)',
+    sharedShow.withholds[1].pulledTrip === 50000 && sharedShow.recoveredCarried === sharedShow.withholds[1].pulledFoot && sharedShow.recoveredCarried < 50000,
+    JSON.stringify({ trip: sharedShow.withholds[1].pulledTrip, rc: sharedShow.recoveredCarried }));
+
   /* A net of exactly zero with a backfire is break-even, not a win. savedCarried == recoveredCarried by
      construction: A at afterReq0 of 3 requests carries 2 turns, savedTokens*(2+1) = 2000*3 = 6000; the
      recovery at afterReq1 carries 1 turn, foot = 3000 + 3000 = 6000. */
@@ -3573,7 +3594,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
    The recommendation engine (transcript.autotune) composes the backfire audit (MEASURED: what the feature did
    when it ran) with coarse OPPORTUNITY estimates (what it would do, for a feature that is off). The decision it
    makes per feature is the driftable part, so it is pinned here: measured beats opportunity, a measured backfire
-   is disqualifying, and opportunity earns at most a "try", never a "turn it on". The opportunity estimators and
+   is leave-off when off and weighed on the feature's own net when on, and opportunity earns at most a "try",
+   never a "turn it on". The opportunity estimators and
    the mirrored TUNE_DEFAULTS are pinned too. */
 {
   console.log('\n-- auto-tuner (tokenbrake tune)');
@@ -3599,14 +3621,46 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a clean measured record (3 fires, 0 pulled back) recommends turn-on when the feature is off',
     fBlob(onClean).status === 'turn-on' && onClean.summary.turnOn.includes('Binary-Blob Elider'), fBlob(onClean).status);
   const onKeep = T.autotune([cleanBlob()], cleanLedger, { blobElide: true });
+  /* The clean record plus one small pull-back: three firings, a clear gain. */
+  const gainPastFloor = { ...cleanBlob(), results: [...cleanBlob().results,
+    R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 10, afterReq: 3 })] };
   t('the same clean record, already on, recommends keep', fBlob(onKeep).status === 'keep' && onKeep.summary.keep.includes('Binary-Blob Elider'), fBlob(onKeep).status);
 
-  const backfiredBlob = () => ({ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+  /* A backfire on a feature that is on is judged on its own net. The withhold keeps ~7,450 tokens out over 4
+     requests, but the always-on trim would have cut the 30,000-char output to maxChars (6,000) anyway, so its
+     own saving is ~1,450 tokens, ~5,800 token-reads. A pull-back of `back` tokens at request 1 carries them
+     over 2 (x3 in all); `ctx` is the context of the request that asked for it. */
+  const backfiredBlob = (back = 20000, at = 1, ctx = 0) => ({ sessionId: sid, cwd: '/w', compactions: [],
+    requests: reqs(4).map((q, i) => i === at && ctx ? { ...q, usage: { cache_read_input_tokens: ctx } } : q),
     results: [R({ id: IDs[0], what: 'cat bundle.min.js', marker: true, tokens: 100, afterReq: 0 }),
-      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 6000, afterReq: 1 })] });
+      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: back, afterReq: at })] });
   t('a measured backfire recommends leave-off when off', fBlob(T.autotune([backfiredBlob()], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
   const onBack = T.autotune([backfiredBlob()], [blobLedger(IDs[0])], { blobElide: true });
-  t('a measured backfire recommends review when on', onBack.features.find((f) => f.key === 'blobElide').status === 'review' && onBack.summary.review.includes('Binary-Blob Elider'));
+  t('a measured net loss recommends review when on', onBack.features.find((f) => f.key === 'blobElide').status === 'review' && onBack.summary.review.includes('Binary-Blob Elider'));
+  const backTune = (on, back, at, ctx, cfg) => T.autotune([backfiredBlob(back, at, ctx)], [blobLedger(IDs[0])], { blobElide: on, ...cfg });
+  const onGain = backTune(true, 1000);
+  t('a pull-back that cost less than the feature saved keeps it on, not review',
+    fBlob(onGain).status === 'keep' && fBlob(onGain).measured.pulledFoot === 3000 && !onGain.summary.review.length, JSON.stringify(fBlob(onGain).measured, (k, v) => k === 'rows' ? undefined : v));
+  t('the saving weighed is only what the feature kept out beyond the trim', fBlob(onGain).measured.savedCarried === 5800, fBlob(onGain).measured.savedCarried);
+  t('so a pull-back under the gross saving but over its own is review', fBlob(backTune(true, 6000)).status === 'review');
+  t('and with a maxChars the output fit under, the whole saving is its own', fBlob(backTune(true, 6000, 1, 0, { maxChars: 30000 })).status === 'keep');
+  const tripped = fBlob(backTune(true, 1000, 1, 5000));
+  t('the request that fetched the pull-back re-read the context, and that counts against it',
+    tripped.status === 'review' && tripped.measured.pulledFoot === 8000, JSON.stringify({ s: tripped.status, p: tripped.measured.pulledFoot }));
+  t('with the feature off, a backfire is leave-off even when it saved more', fBlob(backTune(false, 1000)).status === 'leave-off');
+  /* The trim is shell-only, so an MCP dedup is weighed on its whole saving: 20,000 chars kept to 110, ~4,973
+     tokens over 4 requests (~19,892 token-reads), against a 2,500-token pull-back (7,500). */
+  const mcpDedup = (name) => T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
+    results: [R({ id: IDs[0], name, what: name, marker: true, tokens: 30, afterReq: 0 }),
+      R({ id: 'toolu_RD', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 2500, afterReq: 1 })] }],
+    [{ ev: 'post', session: sid, id: IDs[0], tool: name, chars: 20000, kept: 110, dedup: true, sameAs: stem(IDs[0]) }], { dedup: true }).features.find((f) => f.key === 'dedup');
+  t('an MCP dedup keeps its whole saving (no trim would have cut it), so the pull-back leaves it on',
+    mcpDedup('mcp__srv__get').status === 'keep' && mcpDedup('mcp__srv__get').measured.savedCarried === 19892, JSON.stringify(mcpDedup('mcp__srv__get').measured, (k, v) => k === 'rows' ? undefined : v));
+  t('the same dedup on a shell result is weighed beyond the trim, and the pull-back outweighs it', mcpDedup('Bash').status === 'review', mcpDedup('Bash').status);
+  const badRow = T.autotune([gainPastFloor], [blobLedger(IDs[0]), blobLedger(IDs[1]), { ...blobLedger(IDs[2]), kept: 'x' }], { blobElide: true });
+  t('a ledger row with a non-numeric size counts as no saving, not as a NaN that poisons the whole kind',
+    fBlob(badRow).status === 'keep' && Number.isFinite(fBlob(badRow).measured.savedCarried), JSON.stringify(fBlob(badRow).measured, (k, v) => k === 'rows' ? undefined : v));
+  t('break-even is not a gain: the pull-back cost exactly what was saved', fBlob(backTune(true, 1450, 0)).status === 'review');
 
   const fewClean = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
     results: [R({ id: IDs[0], what: 'cat bundle.min.js', marker: true, tokens: 500, afterReq: 0 })] };
@@ -3631,9 +3685,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
 
   const mixed = { sessionId: sid, cwd: '/w', requests: reqs(4), compactions: [],
     results: [R({ id: IDs[0], what: 'cat x', marker: true, tokens: 100, afterReq: 0 }),
-      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 6000, afterReq: 1 }),
+      R({ id: 'toolu_RB', name: 'Read', file: outOf(IDs[0]), what: outOf(IDs[0]), tokens: 20000, afterReq: 1 }),
       R({ name: 'Bash', what: 'base64', chars: 6000, lines: 1, carried: 9999 })] };
   t('a measured backfire wins over heavy opportunity (leave-off, not try)', fBlob(T.autotune([mixed], [blobLedger(IDs[0])], { blobElide: false })).status === 'leave-off');
+  /* Past the floor, a record with one pull-back and a clear gain: kept when on, and still never a turn-on when off. */
+  t('three firings, one pull-back, a clear gain: keep when on', fBlob(T.autotune([gainPastFloor], cleanLedger, { blobElide: true })).status === 'keep');
+  t('and leave-off when off, never turn-on', fBlob(T.autotune([gainPastFloor], cleanLedger, { blobElide: false })).status === 'leave-off');
 
   /* The two READ narrowings log ev:'read-delta' / 'read-reread', which backfireAudit counts as fired but never
      turns into a withhold (those come from ev:'post' rows, which carry a saved copy to price). So `withholds`
@@ -3644,6 +3701,16 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('a session where only read narrowings fired is not reported as nothing having fired',
     rrTune.withholds === 0 && rrTune.narrowings === 3, `withholds=${rrTune.withholds} narrowings=${rrTune.narrowings}`);
   t('a session with neither is still nothing withheld', (() => { const z = T.autotune([blobby(1, 100, 1)], [], {}); return z.withholds === 0 && z.narrowings === 0; })());
+  /* A read narrowing has no net to weigh, so its backfire counts only past the confidence floor (MIN_FIRE, 3). */
+  const deltaTune = (files, on = true) => T.autotune([{ sessionId: sid, cwd: '/w', requests: reqs(2), compactions: [],
+    results: [R({ id: 'rd', name: 'Read', file: '/w/a.js', readFrom: 150, at: 2000, tokens: 100 })] }],
+    files.map((f) => ({ ev: 'read-delta', session: sid, what: f, offset: 80, limit: 41, t: 1000 })), { readAfterEdit: on });
+  const fDelta = (x) => x.features.find((f) => f.key === 'readAfterEdit');
+  const twoDeltas = fDelta(deltaTune(['/w/a.js', '/w/b.js']));
+  t('a read narrowing that sent the model back once in two firings is kept: too few to judge',
+    twoDeltas.status === 'keep' && twoDeltas.measured.backfired === 1, twoDeltas.status);
+  t('past the floor, the same backfire is review', fDelta(deltaTune(['/w/a.js', '/w/b.js', '/w/c.js'])).status === 'review');
+  t('and with the feature off, the backfire below the floor is still leave-off, not try', fDelta(deltaTune(['/w/a.js', '/w/b.js'], false)).status === 'leave-off');
 
   /* guard.js toolConfig() shallow-merges cfg.tools[<tool>] over every knob, so a knob can be ON for one tool
      and absent at the top level. Reading only the top level called such a feature "off", credited it with the
@@ -4142,7 +4209,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     JSON.stringify({ type: 'assistant', uuid: 'r1', sessionId: sidBk, timestamp: '2026-01-01T00:00:00Z', cwd: '/work/bk', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: BK, name: 'Bash', input: { command: 'cat bundle.min.js' } }] } }),
     JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:01Z', message: { content: [{ type: 'tool_result', tool_use_id: BK, content: '[tokenbrake] withheld blob-like output' }] } }),
     JSON.stringify({ type: 'assistant', uuid: 'r2', sessionId: sidBk, timestamp: '2026-01-01T00:01:00Z', cwd: '/work/bk', message: { model: 'claude-opus-5', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: 'toolu_RB', name: 'Read', input: { file_path: outBk } }] } }),
-    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:01:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_RB', content: 'x'.repeat(30000) }] } }),
+    // The pull-back carries more back in (16,000 tokens) than the withhold kept out (7,450 over two requests): a net loss.
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:01:01Z', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_RB', content: 'x'.repeat(64000) }] } }),
   ].join('\n'));
   writeFileSync(join(cfgBk, 'tokenbrake', 'ledger.jsonl'),
     JSON.stringify({ ev: 'post', session: sidBk, id: BK, tool: 'Bash', chars: 30000, kept: 200, blob: true, saved: outBk }) + '\n');

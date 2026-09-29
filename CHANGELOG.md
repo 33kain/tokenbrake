@@ -8,6 +8,13 @@
   longer hides the cold rebuild that follows it. A compaction with nothing sized after it is listed with its size
   after unknown instead of dropped. Past the 8 the stage read, the count reads "10 automatic compactions; the stage
   2 rule read 8". Stage B's 8 counted compactions are unchanged (`AB-TASK.md`, 2026-09-29).
+- **`tune` weighs a backfire against the feature's own net.** One pull-back no longer marks a feature that is on
+  `[!!]`: it stays on when it saved more than its pull-backs cost, and only a loss or break-even is `reconsider`.
+  The saving is what the feature kept out beyond the always-on trim; a pull-back costs what it carried back in
+  plus the request that fetched it. The read narrowings, which have no net to weigh, count a backfire from three
+  firings. A backfire on a feature that is off is still `leave off`. A pull-back of an out/ file a dedup pointer
+  and a trim share now goes to the one the model had just seen. On the author's sessions `blobElide` and
+  `readAfterEdit` leave `[!!]`; `dedup` stays.
 
 ## 0.7.0 — 2026-09-29
 
