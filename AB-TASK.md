@@ -4399,3 +4399,29 @@ it directly.
 (`scripts/coldwarn-refresh.cjs`) follows in its own commit, before it is run.
 
 This is written before any of it is read.
+
+### coldWarn check 1 — read 2026-09-30: PASS
+
+`node scripts/coldwarn-refresh.cjs`, over 98 unstaged sessions. 16 have a late read.
+
+| | late reads | sessions |
+|---|---:|---:|
+| refreshed | 732 | 15 |
+| not refreshed | 1 | 1 |
+| undecided | 15 | 0 (only undecided) |
+| idle case (a gap of 40 to 55 minutes in the chain) | | 9 |
+
+- **Refreshed:** 15 sessions, against 5 needed.
+- **Not refreshed:** 1 of 16 decided sessions (6%), against at most 10%.
+- **Idle case:** 9 sessions, against 3. Examples:
+  - `fb888c78`: a 55-minute gap, then a read of 170,621 from cache with 1,557 written after the anchor;
+  - `c310b54d`: gaps of 44 and 42 minutes in one chain, then a read of 612,512.
+
+**The not-refreshed one** is the miss HANDOFF.md already listed as unexplained on 2026-09-25: `122def48`, 2026-09-19
+22:13:40 UTC. It came 38 minutes after the previous request and 69 after the anchor. It read only the 29,951-token
+system-and-tools prefix and wrote 151,656. The next request, 5 seconds later, read 181,607: what this one had just
+written. It was the first prompt after local midnight. Five other midnight crossings in the pool read from cache
+normally, so midnight alone does not explain it. It fits either reading, an expiry without a refresh or a change in
+the prompt. The rule counts it against, and the result passes with it.
+
+Check 1 passes. The pilot goes on to checks 2 and 3, which need the feature built (off by default).

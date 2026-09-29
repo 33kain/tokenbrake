@@ -1867,3 +1867,21 @@ Follow-up, not done: `tune`'s threshold advice for `readMaxBytes` weighs only th
 "Try 45,000". Pricing the send-back (the per-limit rate times the context of the reading request) would let it weigh
 a step the way `tune` now weighs a feature. The Read cap's own net at 60,000 is the same question. A first look mixed
 the source-file cap with the `persistedLimitLines` cap on saved outputs, so it has no number yet.
+
+## coldWarn check 1 passes, read from the transcripts — 2026-09-30
+
+Branch `claude/coldwarn-pilot`. The pilot's first check (does a cache read refresh the 1-hour life?) was read from
+the owner's transcripts instead of one staged session. The rule went into `AB-TASK.md` first ("Amendment: coldWarn's
+first check is read from the owner's transcripts"), then `scripts/coldwarn-refresh.cjs`, each in its own commit, and
+only then the run.
+
+- **PASS:** 15 sessions refreshed (5 needed), 1 not refreshed of 16 decided (at most 10%), and the idle case (a
+  message after 40 to 55 idle minutes kept the context past the hour) in 9 sessions (3 needed). 732 late reads
+  refreshed, 1 not.
+- **The one against** is `122def48`'s miss, already listed above as unexplained. The entry of 2026-09-25 says the next
+  request "read the old 181k cache again". It read 181,607, which is what the missing request had just written (29,951
+  read plus 151,656 written), not the old cache. It was the first prompt after local midnight, but five other midnight
+  crossings read from cache normally.
+
+Next: the `coldWarn` prototype, off by default, for checks 2 (the notification shows from a timer the hook started,
+and the hook returns at once) and 3 (a new prompt cancels it).
