@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.7.0 — 2026-09-29
+
+The compaction window passed its measurement, and `init` installs it. Stage B tracked 8 automatic compactions on
+the author's work, with Claude Code's `autoCompactWindow` at 300k and `compactPrep` on. They saved 47.2 points of
+the five-hour window. At most 13.7 came back: 0.9 in re-reads, and up to 12.8 in compaction's own charge. The work
+never felt worse (`AB-TASK.md`, "Stage B results"; `EVIDENCE.md`). What passed is the pair, so the pair is what
+ships (#133).
+
+- **The first user-scope `init` installs the pair**: `autoCompactWindow: 300000` in `settings.json` and
+  `compactPrep: true` in `tokenbrake.json`, recorded in `~/.claude/tokenbrake/init.json`. It installs neither half
+  beside a window you set (the key or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`) or a `compactPrep: false`. It decides
+  once, so a window you remove afterwards stays removed. Already installed? The first `init` after upgrading
+  decides.
+- **`init --project` writes neither half**, because a project file's window would override each teammate's own.
+  The plugin install writes no settings; with it, set `/autocompact 300k` and `compactPrep: true` yourself.
+- **`uninstall` removes the window only if `init` wrote it** and it still holds 300,000. A 300,000 you set by
+  hand stays.
+- **The guard's own `compactPrep` default stays off**, so no install gets the preparation step without the
+  window it was measured with.
+- **`status` names the window** (`set by init` or `yours`). It reads `compactPrep` the way the guard merges its
+  config, so it shows off under `enabled: false`, and it flags init's window running without it.
+- `report --compactions` no longer says the default stays off. The CLI's numbers are grouped en-US on every
+  locale, like the report's.
+- Headless `claude -p` compacts at 300k under the pair too; that was not measured.
+
 ## 0.6.0 — 2026-09-28
 
 `report` opens on a verdict. The default is now about twenty lines: what the context holds, what the session
