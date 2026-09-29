@@ -1849,3 +1849,21 @@ the pull-back's round trip out, so it reads higher than the per-feature lines; m
 would fix it and move those numbers. `byKind` is a count only, so a pooled loss does not say which kind lost (the
 plain trim has no feature line). Pricing a delta backfire (the delta shown, then the whole file) would give the
 read narrowings a net.
+
+## `tune`'s two held knobs decided — 2026-09-30
+
+The 2026-09-20 pair, unblocked when stage B closed.
+
+- **`dedup: false`, applied** in the owner's `tokenbrake.json`. Its one firing in 92 sessions saved ~7,360
+  token-reads beyond the trim, and its pull-back cost ~77,790 (the entry above). `tune` lists it under "Leave off".
+- **`readMaxBytes` stays 60,000; the step to 45,000 is rejected.** It would newly cap 6 reads: the same three source
+  files (`content.js`, `background.js`, `test.mjs`, 48 to 59 KB) in two sessions. `tune` estimates the step at up to
+  ~436,722 token-reads. If each capped read sends the model back, the round trips alone re-read ~587,480 (the
+  context of each reading request, summed), so the step breaks even at a 74% send-back rate. `report --reads` puts
+  the rate at 300 lines at 67% on the owner's ranged reads, before what the send-back carries back in. A trial would
+  not settle it: a Read cap's pull-back cannot be measured from transcripts.
+
+Follow-up, not done: `tune`'s threshold advice for `readMaxBytes` weighs only the withholding side, so it still says
+"Try 45,000". Pricing the send-back (the per-limit rate times the context of the reading request) would let it weigh
+a step the way `tune` now weighs a feature. The Read cap's own net at 60,000 is the same question. A first look mixed
+the source-file cap with the `persistedLimitLines` cap on saved outputs, so it has no number yet.
