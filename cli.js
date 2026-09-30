@@ -1128,9 +1128,12 @@ function compactionsReport() {
    checked labels, and every other string here is fixed text, a knob name from the guard's own DEFAULTS, the
    platform, or a version that passes safeVer -- never a path, a command, a file name, a session id or a line of a
    transcript. The pool is the other pooled views' (staged and unreadable sessions left out, and counted); --since
-   keeps the sessions that started on or after that day. */
+   keeps the sessions that started on or after that day. After init, the default is the moment init ran: sessions
+   from before it ran at a window the brake did not set, and blocks from several machines are pooled from then
+   (AB-TASK.md, 2026-09-30 pooling amendment). */
 function shareReport() {
-  const since = sinceOpt();
+  const mark = readJson(INIT_MARK, null), initAt = isObj(mark) && typeof mark.at === 'string' ? Date.parse(mark.at) : NaN;
+  const asked = sinceOpt(), since = asked != null ? asked : Number.isFinite(initAt) ? initAt : null;
   let staged = 0, unread = 0;
   function* pool() {
     for (const f of transcript.findTranscripts(CFG_DIR)) {   // newest first, as sharePool's version wants
@@ -1161,7 +1164,11 @@ function shareReport() {
   if (isObj(cfg)) {
     for (const [key, d] of Object.entries(transcript.GUARD_DEFAULTS)) {
       const v = cfg[key];
-      if (typeof d === 'boolean') { if (!d && transcript.isOnIn(cfg, key)) knobs.push(key + ' on'); else if (d && v === false) knobs.push(key + ' off'); }
+      if (typeof d === 'boolean') {
+        // compactPrep and coldWarn act per session, so the guard reads only their top level; the rest a tool can turn on
+        const on = key === 'compactPrep' || key === 'coldWarn' ? !!v : transcript.isOnIn(cfg, key);
+        if (!d && on) knobs.push(key + ' on'); else if (d && v === false) knobs.push(key + ' off');
+      }
       else if (typeof d === 'number') { if (Number.isFinite(v) && v !== d) knobs.push(key + ' ' + fmt(v)); }
       else if (Array.isArray(v) && JSON.stringify(v) !== JSON.stringify(d)) knobs.push(key + ' (' + pl(v.length, 'entry', 'entries') + ')');
     }
@@ -1169,13 +1176,14 @@ function shareReport() {
   }
 
   const out = [`tokenbrake ${safeVer(readJson(path.join(__dirname, 'package.json'), {}).version)} | Claude Code ${S.version || '?'} | ${process.platform}`,
-    `install: ${install} | compaction window ${windowNote(settings, readJson(INIT_MARK, null), base.why, true)}`
+    `install: ${install}${Number.isFinite(initAt) ? ' (init ' + day(initAt) + ')' : ''} | compaction window ${windowNote(settings, mark, base.why, true)}`
       + ` | tokenbrake.json: ${!cb ? 'none' : cb.why ? 'unreadable (it ' + cb.why + ')' : knobs.length ? knobs.join(', ') : 'defaults'}`];
   const left = staged || unread ? `; left out: ${staged} staged, ${unread} unreadable` : '';
-  if (!S.sessions) out.push(`sessions: none of your own work${since != null ? ' started since ' + day(since) : ''}${left}`);
+  const from = since == null ? '' : ' started since ' + (asked == null ? 'init' : day(since));
+  if (!S.sessions) out.push(`sessions: none of your own work${from}${left}`);
   else {
     const { use, draw, compactions: c, trims, back } = S;
-    out.push(`sessions: ${S.sessions} of your own work${since != null ? ' started since ' + day(since) : ''}, ${S.first == null ? 'undated' : day(S.first) + ' to ' + day(S.last)}, ${fmt(S.requests)} requests${left}`);
+    out.push(`sessions: ${S.sessions} of your own work${from}, ${S.first == null ? 'undated' : day(S.first) + ' to ' + day(S.last)}, ${fmt(S.requests)} requests${left}`);
     out.push(`tokens: ${k(use.processed)} context processed, ${pct(use.cacheRead, use.processed)} from cache | ${k(use.cacheWrite)} cache writes`
       + ` | ${k(use.input)} uncached input | ${k(use.out)} output`);
     const drawn = draw.read + draw.write + draw.output;
@@ -1188,9 +1196,10 @@ function shareReport() {
       const mid = (x) => x == null ? '?' : k(x);
       out.push(`  counted: context ${mid(c.pre)} -> ${mid(c.post)} (median) | saving ${c.saving.toFixed(1)} pts | recovery ${c.recovery.toFixed(1)} pts`
         + ` | charge ${(c.costHigh - c.recovery).toFixed(1)} pts at the bound`);
-      const verdict = (v) => `cost at the bound ${pct(v.costHigh, v.saving)} of the saving -- ${v.verdict || 'a verdict needs ' + transcript.STAGE2.n + ' counted'}`;
+      const verdict = (v) => `cost at the bound ${pct(v.costHigh, v.saving)} of the saving -- ${v.verdict || 'a verdict needs ' + transcript.STAGE2.n + ' counted, pooled across blocks'}`;
       out.push(`  ${verdict(c)} (the rule passes under ${Math.round(transcript.STAGE2.share * 100)}%)`);
-      if (c.byModel.length > 1) for (const m of c.byModel) out.push(`  ${m.label}: ${m.counted} counted, saving ${m.saving.toFixed(1)} pts, ${verdict(m)}`);
+      // every model, even one, so blocks from several machines add up per model (AB-TASK.md, 2026-09-30 pooling amendment)
+      for (const m of c.byModel) out.push(`  ${m.label}: ${m.counted} counted, saving ${m.saving.toFixed(1)} pts, recovery ${m.recovery.toFixed(1)} pts, ${verdict(m)}`);
     }
     const priced = S.net.guard != null, inPts = (x) => priced ? ', ~ ' + pts(x) + ' pts' : '';
     out.push(`guard: ran in at least ${S.guarded} of ${S.sessions} sessions | ${pl(trims.count, 'trim')}, ~ ${k(trims.saved)} tokens kept out,`
@@ -2075,9 +2084,9 @@ THE REPORT -- the brake's gauge. Nothing to install; it reads the transcripts Cl
       --compactions [--since=<date>]  every compaction, priced: what the drop in context saves until the next
                                       one, and what re-reading files afterwards cost. The measurement for an
                                       earlier autoCompactWindow (AB-TASK.md, stage 2)
-      --share [--since=<date>]        every session pooled into one block to paste where others read it:
-                                      tokens, points, compactions and what the guard kept out. Numbers
-                                      only -- no paths, commands, file names or transcript text.
+      --share [--since=<date>]        every session since init pooled into one block to paste where others
+                                      read it: tokens, points, compactions and what the guard kept out.
+                                      Numbers only -- no paths, commands, file names or transcript text.
                                       --since=YYYY-MM-DD keeps the sessions started on or after that day
       --compare <A> <B>               two sessions side by side in tokens and counts, with B's change
                                       against A -- the AB-TASK.md table

@@ -10,6 +10,13 @@
   (AB-TASK.md, amendment of 2026-09-30, which also fixes how a block from another machine is read).
 - The report's verdict without tokenbrake names ~266k, not ~267k, as where init's 300k window compacts: one of the
   author's compactions under it fired at 265.9k.
+- **`report --share` after `init` starts where `init` ran.** Sessions from before it ran at a window the brake did not
+  set, and their compactions were charged to the brake. The `sessions` line says `started since init`, the
+  `install` line gives the day, and `--since` still overrides it. The block also prints a line for every model it
+  counted, one model included, with its saving and recovery, so blocks from several machines can pool toward the 8
+  counted compactions the verdict needs (AB-TASK.md, pooling amendment of 2026-09-30).
+- `report --share` shows `compactPrep` and `coldWarn` as on only when their top-level key is, as the guard reads
+  them, not when a `tools` entry sets them.
 
 ## 0.9.1 — 2026-09-30
 
