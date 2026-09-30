@@ -7,33 +7,43 @@
 [![dependencies](https://img.shields.io/badge/dependencies-0-10B981)](https://github.com/33kain/tokenbrake/blob/main/package.json)
 [![license](https://img.shields.io/badge/license-MIT-52525B)](https://github.com/33kain/tokenbrake/blob/main/LICENSE)
 
-**Find out what ate your Claude Code context, then brake it if your report says there is anything to brake.**
+**Stop re-sending what your Claude Code session no longer needs.**
 
 ```
-npx tokenbrake report
+npx tokenbrake init
 ```
+
+tokenbrake has Claude Code compact at 300k tokens instead of near a million, hands the model its working set back
+after each compaction, and trims oversized tool output before it enters context. One user-scope install covers every
+project. On the author's work, 8 automatic compactions saved 47.2 points of the five-hour window (a point is 1% of
+it), and at most 13.7 came back
+([`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md#the-compaction-window--the-first-result-that-passed-2026-09-29)).
+
+`npx tokenbrake report` is the gauge. It needs no install: it reads the transcripts Claude Code already keeps and
+shows what a session carried, what ate it, and what the brake lowered, net of what the model pulled back.
 
 ![tokenbrake report on a real session: what ate the context, ranked by tokens carried](https://raw.githubusercontent.com/33kain/tokenbrake/main/site/report.svg)
-
-No install, no hooks, nothing written: the report reads the transcripts Claude Code already keeps and ranks every
-tool result by the tokens it was **carried** through, not by its size. The brake (`npx tokenbrake init`) is
-optional, and the report tells you whether it has anything to act on in work like yours. Often it does not.
 
 ## How it works
 
 A tool result's size is not what it cost. It is re-sent as context on every request until the session compacts,
 so what it took is its size times the number of later requests that re-read it: its **carried** tokens. A 4k-token
-file read at request 3 of 100 is about 400k token-reads, and the ranking puts results like that at the top where
-you can see them. Then the report tells you how much of that the brake could act on at all, and, when tokenbrake
-was not running, whether installing it is worth it for work like yours. Often it is not, and the report says so.
+file read at request 3 of 100 is about 400k token-reads. On a 1M-context model Claude Code compacts on its own only
+near 967k tokens, so a long session re-reads a growing context on every request, for hundreds of requests.
 
-The brake is step two: Claude Code hooks (`npx tokenbrake init`) that trim oversized shell output and cap
-unbounded reads of large files before they enter context. Its measured record, losses included, is in
-[`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md), and it is thinner than the report's:
-install it when your own report says there is something in its reach.
+The brake works on both factors. **Duration:** `init` sets Claude Code's own `autoCompactWindow` to 300,000 tokens,
+and after each compaction `compactPrep` puts the working set back as pointers, never file contents (the files
+edited and read with their ranges, the last failing command, the task's first words), so the model re-reads what
+its next step needs instead of searching for its place. The two ship together because each was measured only with
+the other. **Size:** the guard trims shell output over 6,000 characters and caps unbounded reads of files over
+60 KB before they enter context. That half's record is thinner, and the section below says how thin.
 
-**Built for long sessions.** Every tool result is re-sent with each request after it, so the longer the session,
-the more a trim at entry saves. It runs wherever Claude Code runs locally, from one user-scope install: the CLI,
+The report ranks every tool result by the tokens it carried and, when the brake ran, sets what it lowered against
+the whole session. When tokenbrake was not running, it says how much of what you carried the trim could reach at
+all. Often that is little, and the report says so.
+
+**Built for long sessions.** A session that never reaches 300k tokens is never compacted early, and one that reads
+little has little to trim. tokenbrake runs wherever Claude Code runs locally, from one user-scope install: the CLI,
 and the Claude Desktop app on Windows (a local Code session there loads the same `~/.claude/settings.json`).
 
 **Source:** everything that ships is three files at the root of this repository: `cli.js` (the installer and
@@ -41,40 +51,55 @@ the report), `guard.js` (the hooks) and `transcript.js` (the transcript reader).
 no build step, so what npm installs is those files as they are here. Tests: `npm test` (`test.mjs`), run in
 CI on Windows and Ubuntu with Node 18, 20 and 22.
 
-## Why there is no percentage on this page
+## What is measured, and what is not
 
-Anyone publishing a token-saving percentage for this category owes a control pair alongside it: the same task
-run twice with the tool **off** on both sides. Without one, a saving is indistinguishable from the agent reading
-differently on the day.
+**The compaction pair passed a pre-registered measurement in two stages**, each written down before its numbers
+were read, after a first version failed on cost and stayed failed. Stage A, controlled on Opus 5: with the working
+set put back, the same task drew a median 4.18 points of the five-hour window against 5.49, and every recall
+question was still answered, 15 of 15. Stage B, the author's real work from 2026-09-20 to 2026-09-29: 8 automatic
+compactions, 3 on Opus 5 and 5 on Opus 5.5, saved 47.2 points. Re-reading afterwards took back 0.9, and
+compaction's own charge 4.0 at its estimate and 12.8 at the pessimistic bound, so at worst 13.7 came back where
+the stage allowed half. The work never felt worse. The limits: one person's work, on Opus models with a 1M context.
+The recovery is inferred, the saving assumes the same requests would have run without the earlier compaction, and
+headless `claude -p` compacts at 300k too, which was not measured.
 
-This project ran those controls. In a 22-session pre-registered benchmark
+**The trim's saving is not quoted.** Anyone publishing a token-saving percentage for this category owes a control
+pair alongside it: the same task run twice with the tool **off** on both sides. Without one, a saving is
+indistinguishable from the agent reading differently on the day. This project ran those controls. In a 22-session
+pre-registered benchmark
 ([`AB-TASK.md`, "ab10 closed"](https://github.com/33kain/tokenbrake/blob/main/AB-TASK.md#ab10-closed--what-twenty-two-sessions-bought)), OFF-against-OFF pairs with identical
-configuration on both sides came out up to **42.6% apart on tokens entered**. The runs with the brake entered a
+configuration on both sides came out up to **42.6% apart on tokens entered**. The runs with the trim entered a
 median 35.7% fewer tool-result tokens, and that sits inside the noise. The sharper result is about tokens
-**carried**, the number that matters: tokens entering context fell in every pair with the brake, but tokens
+**carried**, the number that matters: tokens entering context fell in every pair with the trim, but tokens
 carried fell in only four of six pairs and rose in two, once by 72.6%, because a trim that sends the model back
 for what it cut lengthens the session. Five pairs cannot resolve an effect that size against variation that
 size, and neither can anyone else's handful of sessions.
 
-So tokenbrake does not quote a saving. It reports what your own sessions carried and how much of it the brake
-could reach, and it leaves the decision to that. The whole record, losses included, is in
-[`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md): read it before you install the brake.
+**On the author's machine the compactions carry the brake.** `report --share` over 100 sessions to 2026-09-30 puts
+the brake's net at about 55.6 points: 52.6 from the compactions, at the pessimistic bound, and 3.0 from the trim,
+less what the model pulled back. The whole record, losses included, is in
+[`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md).
+
+**Your numbers are the next measurement.** Everything above comes from one machine. After a few days with the brake
+installed, `npx tokenbrake report --share` prints one block of numbers, with no path, command, file name, session id
+or line of a transcript; paste it into an [issue](https://github.com/33kain/tokenbrake/issues).
 
 ## Install
 
-As a Claude Code plugin (0.9.0):
-
-```
-claude plugin marketplace add 33kain/tokenbrake
-claude plugin install tokenbrake@tokenbrake
-```
-
-or with npx, which writes the hooks into a settings file you own:
+With npx, which writes the hooks, and at user scope the compaction pair, into files you own:
 
 ```
 npx tokenbrake init            # user scope: ~/.claude/settings.json, applies to every project
 npx tokenbrake init --project  # this project only: .claude/settings.json (commit it to share with a team). One scope per
                                # machine: with both, the guard runs twice per call, and `status` says so
+```
+
+or as a Claude Code plugin (0.9.0), which installs the hooks but writes no settings, so the compaction pair is
+yours to set (below):
+
+```
+claude plugin marketplace add 33kain/tokenbrake
+claude plugin install tokenbrake@tokenbrake
 ```
 
 One or the other -- never both. User scope is the install; `--project` is for a team that commits the guard to a

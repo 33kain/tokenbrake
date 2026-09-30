@@ -2129,3 +2129,16 @@ product, and the pair is the first part of the brake that passed a measurement.
 - Checked in headless Edge: light, dark, and a 360px frame with no horizontal scroll.
 - **Open:** the README still opens on the report. The two should tell the same story; that is the owner's call, in
   its own PR.
+
+## README: the brake first — 2026-09-30
+
+Branch `claude/readme-brake-first`, stacked on the site branch (#146). The README now tells the site's story:
+`npx tokenbrake init` and stage B's figures at the top, `report` as the gauge with `report.svg`, "How it works" on
+both factors (duration: the pair; size: the trim), and "Why there is no percentage on this page" becomes "What is
+measured, and what is not": the pair's two stages and their limits, the trim's benchmark as before, the author's
+`--share` net, and `report --share` as the next measurement. Install lists npx before the plugin, since only a
+user-scope `init` writes the pair. `package.json`'s description and keywords follow (npm shows them from the next
+publish). Suite green.
+
+- **Open:** `cli.js help` still reads STEP ONE (report), STEP TWO (brake). It is `cli.js`, so it goes through the
+  review loop in its own change, and reaches users with the next release.

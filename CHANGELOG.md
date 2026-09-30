@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- README and the package description lead with the brake: `npx tokenbrake init`, the compaction pair and its stage B
+  figures first, the report as its gauge, and `report --share` as the next measurement. Install lists npx before the
+  plugin, because only a user-scope `init` writes the pair.
+
 ## 0.9.0 — 2026-09-30
 
 `report --share`: the numbers of every session on a machine in one block, to send back from machines other than
