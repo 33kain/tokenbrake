@@ -741,16 +741,23 @@ function sharePool(sessions, ledger, { since = null } = {}) {
   const pick = ({ n: c, saving, recovery, costHigh, verdict }) => ({ counted: c, saving, recovery, costHigh, verdict });
   const rows = ledger.filter((r) => r && ids.has(String(r.session)));
   const warned = rows.filter((r) => r.ev === 'coldwarn');
+  const pooled = compactionVerdict(counted);
   return {
     sessions: n, requests, guarded, version, models: [...models],
     first: Number.isFinite(first) ? first : null, last: Number.isFinite(last) ? last : null,
     use, draw, trims, back,
-    compactions: { found: compactions.length, auto: compactions.filter((r) => r.trigger === 'auto').length, ...pick(compactionVerdict(counted)),
+    compactions: { found: compactions.length, auto: compactions.filter((r) => r.trigger === 'auto').length, ...pick(pooled),
       pre: median(counted.map((r) => r.pre)), post: median(counted.map((r) => r.post)),
       // each model's verdict too (AB-TASK.md, 2026-09-22 amendment); a counted row's model is calibrated, so its label is one
       byModel: compactionVerdictByModel(counted).map((m) => ({ label: m.label, ...pick(m) })) },
     preps: rows.filter((r) => r.ev === 'compact-prep' && r.chars > 0).length,
     warnings: warned.length, shown: warned.filter((r) => r.shown === true).length,
+    /* The brake's two measured parts, each net of what it gave back (null when there is nothing to measure): the
+       counted compactions at the bound, and the priced trims less what was pulled back. Their savings do not overlap,
+       since a trim's carry stops at the next compaction; a pulled-back file read again after a compaction can count
+       on both cost sides, which only understates the sum. */
+    net: { compactions: counted.length ? pooled.saving - pooled.costHigh : null,
+      guard: trims.count > trims.unpriced ? trims.pts - back.recoveredPts : null },
   };
 }
 
@@ -2741,7 +2748,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, compactionRows, sharePool, safeVer, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { DEFAULT_COMPACT_WINDOW, parseTranscript, formatWarning, carry, limitDraw, compactionView, compactionRows, sharePool, safeVer, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, staged, stagedKind, stagedRow,

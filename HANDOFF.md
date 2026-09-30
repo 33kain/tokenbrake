@@ -2068,3 +2068,37 @@ people's machines, and this is the first step toward it.
 
 Next: a few people outside run `npx tokenbrake report --share` and send the block back. That is the measurement 9
 waits for. `Unreleased` holds `--share`, so it reaches them in the next release.
+
+## `report --share`: the brake's net in one line — 2026-09-30
+
+Branch `claude/share-net`. #143 is merged. The owner read the guard's "net ~ 3.0 pts" as the brake's whole saving,
+while the counted compactions held most of it on a line of their own. The block now ends with one sum:
+`brake net: ~ 54.6 pts = compactions 51.7 (cost at the bound) + guard 3.0 (pulled back taken off)` on the owner's
+machine.
+
+- **The two parts** come from `sharePool` as `net`, each net of what it gave back: the counted compactions' saving
+  less `costHigh` (recovery plus the charge at the bound, the stage 2 rule's side), and the priced trims' points
+  less the pulled-back points. Their savings do not overlap, because `carry` stops a trim's count at the next
+  compaction. A pulled-back file read again after a compaction can count on both cost sides, which only
+  understates the sum. A part with nothing measured is left out, and with neither the line says `nothing measured
+  yet`. A loss stays a loss: the test fixture's compaction saved 0.2 and cost 1.6, and its line reads `~ -1.3 pts`.
+- **The compactions count only under a window set below Claude Code's own** (`autoCompactWindow`, or the env
+  variable, under 967k). At Claude Code's own window a compaction saves about nothing, and its charge is not the
+  brake's to carry, so the part is left out and the line says so. An unreadable `settings.json` leaves it out too.
+- **One decimal** on this line, so the parts add up to the sum as printed.
+- **Display only:** nothing a stage measures changes, and nothing enters context.
+- **Review.** `/simplify`: the sum moved into `sharePool` (the leaf walk now covers it), and the guard's net is
+  computed once. `/code-review`: 13 findings. Fixed: the compactions under Claude Code's own window (above), the
+  overlap comment, the precision, the missing tests, the duplicated `priced`, and a shadowed name. Left as they are:
+  - **open for the stage 2 rule itself, not this line:** every session is measured against the 1M context's
+    967k window, so a model on a smaller context, which Claude Code compacts much earlier on its own, would be
+    credited with a saving. Both calibrated models run on the 1M context here; another machine may not;
+  - already in the block before this change: excerpt rows count as trims but are never pulled back through `out/`;
+    a trim on an uncalibrated model is unpriced while its pull-back on a calibrated one is priced; `backfireAudit`
+    runs whole per session;
+  - the line sums what the block measures: read caps and the read-side knobs are not in it, and the parts are
+    named;
+  - points of the five-hour window are the report's unit since the calibration (#90), and they are not money.
+- **`/security-review`:** no finding. The window only feeds a yes-or-no, and the printed figures pass through
+  arithmetic and `toFixed`. Below the bar and fixed anyway: an object in `settings.env`'s window made `Number()`
+  throw and the block not print; it now counts as no window set.
