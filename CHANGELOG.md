@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 — 2026-09-30
+
+The brake first: README, the package description and `help` lead with `npx tokenbrake init`, and the report's
+verdict on a session without tokenbrake weighs the compaction window, not only the trim. The hooks are unchanged
+since 0.8.0, so there is nothing to re-run after upgrading.
 
 - **The report's verdict without tokenbrake weighs the compaction window too.** A session with no sign of tokenbrake
   was told to install only when the trim could reach 10% of what it carried, and otherwise "nothing to brake in work

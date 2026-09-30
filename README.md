@@ -96,7 +96,7 @@ npx tokenbrake init --project  # this project only: .claude/settings.json (commi
                                # machine: with both, the guard runs twice per call, and `status` says so
 ```
 
-or as a Claude Code plugin (0.9.0), which installs the hooks but writes no settings, so the compaction pair is
+or as a Claude Code plugin (0.9.1), which installs the hooks but writes no settings, so the compaction pair is
 yours to set (below):
 
 ```
@@ -146,7 +146,7 @@ To have it in every cloud session, install it from the environment's **Setup scr
 
 ```bash
 #!/bin/bash
-npm i -g tokenbrake@0.9.0 || true
+npm i -g tokenbrake@0.9.1 || true
 tokenbrake init || true
 tokenbrake status || true
 ```

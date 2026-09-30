@@ -13,7 +13,7 @@
         "repo": "33kain/tokenbrake"
       },
       "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Six hooks from one guard.js, no dependencies.",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "author": {
         "name": "Mili"
       }
