@@ -2102,3 +2102,12 @@ machine.
 - **`/security-review`:** no finding. The window only feeds a yes-or-no, and the printed figures pass through
   arithmetic and `toFixed`. Below the bar and fixed anyway: an object in `settings.env`'s window made `Number()`
   throw and the block not print; it now counts as no window set.
+
+## Release 0.9.0 — 2026-09-30
+
+Branch `claude/release-0.9.0`. #144 is merged. 0.9.0 carries `report --share` (#143, #144): versions bumped in
+`package.json`, the plugin manifests and the README, and the CHANGELOG's Unreleased section becomes 0.9.0. Only
+`cli.js` and `transcript.js` changed since 0.8.0; `guard.js` and the hooks did not, so nobody re-runs `init`.
+
+Next: the owner's Publish run. Then `npx tokenbrake report --share` works everywhere, and the first outside block
+(the owner's friend) can come from it instead of `npx github:33kain/tokenbrake`.
