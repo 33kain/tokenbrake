@@ -1331,7 +1331,7 @@ function isPrompt(e) {
      request sets when the warning is due, from when it was sent: its cache was refreshed then.
    - Only a context cached for an hour is warned about: a request that wrote 5-minute cache is cold long before the
      warning, and a compaction leaves no context to keep warm.
-   - One warning per request, recorded by that request's send time. Repeat is a chain: a turn that answered a shown
+   - One warning per request, recorded by that request's send time. Repeat is a chain: a turn that answered a seen
      warning while its cache was warm keeps the chain's start, any other turn starts a new chain, and no warning is
      due 3 hours or more after its start. A session left alone is warned once, because a second warning after the
      cache expired would keep nothing warm.
@@ -1405,11 +1405,11 @@ function handleStop(input, cfg) {
   if (!file) return;
   const session = String(input.session_id), prev = coldState(session) || {}, now = Date.now();
   const live = prev.token && alive(prev.pid);
-  // Read only when it decides something: whether to arm, or whether this turn answered a warning shown since the
-  // last Stop (`shown`, which each Stop drops) before that request's cache expired.
-  const scan = !live || prev.shown ? coldScan(file, prev.stop || now) : null;
+  // Read only when it decides something: whether to arm, or whether this turn answered a warning seen since the
+  // last Stop (`seen`, which each Stop drops) before that request's cache expired.
+  const scan = !live || prev.seen ? coldScan(file, prev.stop || now) : null;
   const st = { transcript: file, folder: prepClean(path.basename(String(input.cwd || '')), 60), stop: now,
-    from: prev.shown && prev.warned + CACHE_LIFE > scan.first ? prev.from : now, warned: prev.warned || 0 };
+    from: prev.seen && prev.warned + CACHE_LIFE > scan.first ? prev.from : now, warned: prev.warned || 0 };
   if (live) return coldSave(session, { ...st, token: prev.token, pid: prev.pid });   // the live timer re-reads this
   if (!coldWorth(scan.last, cfg)) return coldSave(session, st);
   st.token = require('crypto').randomBytes(12).toString('hex');
@@ -1436,13 +1436,13 @@ async function coldTimer(session, token) {
     const scan = file ? coldScan(file, st.stop) : { last: null, active: false };
     const next = coldNext(st, scan, cfg, Date.now());
     if (typeof next === 'number') { await new Promise((r) => setTimeout(r, Math.min(next - Date.now(), COLD_POLL))); continue; }
-    const shown = next === 'warn' && coldNotify(session, st, scan.last);
+    const seen = next === 'warn' && coldNotify(session, st, scan.last);
     const cur = owned();   // re-read: a Stop may have rewritten it while this one looked
     if (!cur) return;
     if (next === 'warn') {
-      // the warned request, shown or not; only a shown warning can be answered. A state that did not take it would
-      // warn again, so then this timer stops. The next look lets go, or waits on a turn that ended meanwhile.
-      if (!coldSave(session, { ...cur, warned: scan.last.at, shown })) return;
+      // the warned request, seen or not; only a warning that could be seen can be answered. A state that did not take
+      // it would warn again, so then this timer stops. The next look lets go, or waits on a turn that ended meanwhile.
+      if (!coldSave(session, { ...cur, warned: scan.last.at, seen })) return;
       continue;
     }
     if (cur.stop !== st.stop) continue;   // a turn ended while this one decided: look again
@@ -1452,37 +1452,69 @@ async function coldTimer(session, token) {
 }
 
 /* The notification, through Windows PowerShell's own toast: no module, nothing installed. The script is constant;
-   the title and body reach it only as environment variables and are XML-escaped there. */
+   what varies reaches it only as environment variables, and the title and body are XML-escaped there.
+   - It is a reminder with a Dismiss button, so it stays on screen until dismissed: the warning comes after 50 idle
+     minutes, when the owner is likely away, and a banner gone in 5 seconds would be missed. It expires when the
+     cache does, when a message no longer keeps anything warm, and one per session replaces the one before (its tag:
+     the session id's first 16 characters, as many as Windows 10 before 1703 takes).
+   - With notifications off for Windows PowerShell (or for the user, or by policy) Windows drops it without an error,
+     so the script checks that first and exits 3 instead.
+   - After showing it, the script prints Focus assist's state (0 off, 1 priority only, 2 alarms only; nothing where
+     Windows cannot say, before Windows 10 2004). Windows takes the toast either way, but under priority only it may
+     hold it in the Action Center unless Windows PowerShell is on the priority list, and under alarms only it holds it.
+     Priority only counts as seen because the pilot puts PowerShell on that list first (AB-TASK.md, 2026-09-30). */
 const TOAST_PS = [
   "$ErrorActionPreference = 'Stop'",
   '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null',
   '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null',
   '$x = New-Object Windows.Data.Xml.Dom.XmlDocument',
-  "$x.LoadXml('<toast><visual><binding template=\"ToastGeneric\"><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_TITLE) + '</text><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_BODY) + '</text></binding></visual></toast>')",
-  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show((New-Object Windows.UI.Notifications.ToastNotification $x))"
+  "$x.LoadXml('<toast scenario=\"reminder\"><visual><binding template=\"ToastGeneric\"><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_TITLE) + '</text><text>' + [Security.SecurityElement]::Escape($env:TOKENBRAKE_BODY) + '</text></binding></visual><actions><action activationType=\"system\" arguments=\"dismiss\" content=\"\"/></actions></toast>')",
+  '$t = New-Object Windows.UI.Notifications.ToastNotification $x',
+  "$t.Tag = $env:TOKENBRAKE_TAG; $t.Group = 'tokenbrake'",
+  '$t.ExpirationTime = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$env:TOKENBRAKE_EXPIRES)',
+  "$n = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe')",
+  'if ([int]$n.Setting -ne 0) { exit 3 }',
+  '$n.Show($t)',
+  // a missing property reads as $null, which [int] would print as 0 (off)
+  'try { $m = [Windows.UI.Notifications.ToastNotificationManager]::GetDefault().NotificationMode; if ($null -ne $m) { [Console]::Out.Write([int]$m) } } catch {}',
+  'exit 0'   // or the exit code is the last statement's, a failed read above included
 ].join('\n');
-function toast(title, body) {
+/* Focus assist's state from what the script printed; null when it printed none. */
+function quietOf(out) {
+  const s = String(out || '').trim();
+  return /^[0-2]$/.test(s) ? +s : null;
+}
+/* Whether Windows took it, and Focus assist's state then. The tag is the session's; the toast expires at `expires`. */
+function toast(title, body, tag, expires) {
   /* Absolute, from the system root: a bare powershell.exe is looked up in the working directory first. */
   const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  return require('child_process').spawnSync(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(TOAST_PS, 'utf16le').toString('base64')],
-    { env: { ...process.env, TOKENBRAKE_TITLE: title, TOKENBRAKE_BODY: body }, stdio: 'ignore', windowsHide: true, timeout: 30000, cwd: os.homedir() }).status === 0;
+  const r = require('child_process').spawnSync(ps, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(TOAST_PS, 'utf16le').toString('base64')],
+    { env: { ...process.env, TOKENBRAKE_TITLE: title, TOKENBRAKE_BODY: body, TOKENBRAKE_TAG: tag, TOKENBRAKE_EXPIRES: String(expires) },
+      stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true, timeout: 30000, cwd: os.homedir() });
+  return { shown: r.status === 0, quiet: quietOf(r.stdout) };
 }
 /* Who shows a warning: the toast on Windows, nobody elsewhere (so nothing is armed there). TOKENBRAKE_NO_NOTIFY
-   stands in a notifier that shows nothing and reports it not shown, or shown when set to `shown`, so test.mjs runs
-   the whole lifecycle on any platform. */
-const NOTIFY = process.env.TOKENBRAKE_NO_NOTIFY ? () => process.env.TOKENBRAKE_NO_NOTIFY === 'shown'
+   stands in a notifier that shows nothing and reports it not shown; set to `shown` it reports it shown with Focus
+   assist off, and to `shown:<what the script printed>` shown with that state. So test.mjs runs the whole lifecycle
+   on any platform. */
+const NOTIFY = process.env.TOKENBRAKE_NO_NOTIFY
+  ? () => {
+    const v = process.env.TOKENBRAKE_NO_NOTIFY;
+    return v === 'shown' ? { shown: true, quiet: 0 } : v.startsWith('shown:') ? { shown: true, quiet: quietOf(v.slice(6)) } : { shown: false, quiet: null };
+  }
   : process.platform === 'win32' ? toast : null;
 
-/* Shows the warning and records it; whether it was shown. */
+/* Shows the warning and records it, with Focus assist's state; whether it could be seen (Windows took it, Focus
+   assist's state is known and not alarms only), so whether it can be answered. */
 function coldNotify(session, st, r) {
   const now = Date.now(), w = weightsOf(r.model), k = kfmt(r.ctx);
   const title = 'tokenbrake: ' + (st.folder || 'a session') + ' goes cold in ~' + Math.max(1, Math.round((r.at + CACHE_LIFE - now) / 60e3)) + ' min';
   const body = (w ? 'Writing its ' + k + ' context again would draw ~' + pfmt(r.ctx * w.write / 1e6) + ' points of the five-hour window.'
     : 'Its ' + k + ' context would be written again in full.') + ' Any message keeps it warm.';
-  let shown = false;
-  try { shown = NOTIFY(title, body); } catch { /* not shown */ }
-  log({ ev: 'coldwarn', session, ctx: r.ctx, model: r.model, idle: Math.round((now - r.at) / 60e3), shown });
-  return shown;
+  let shown = false, quiet = null;
+  try { ({ shown, quiet } = NOTIFY(title, body, session.slice(0, 16), r.at + CACHE_LIFE)); } catch { /* not shown */ }
+  log({ ev: 'coldwarn', session, ctx: r.ctx, model: r.model, idle: Math.round((now - r.at) / 60e3), shown, quiet });
+  return shown && (quiet === 0 || quiet === 1);
 }
 
 function main() {

@@ -4451,13 +4451,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const p0 = Date.now() - 2000, fw = write('warned', [prompt(p0), req(p0 + 1000, 150000)]);
     g('stop', stop('warned', fw), shownEnv);
     const w = await settled('warned', 1), row = rows('warned')[0];
-    t('cold: an idle session is warned, and the ledger records it',
-      rows('warned').length === 1 && row.ctx === 150000 && row.model === 'claude-opus-5-5' && row.shown === true, JSON.stringify(row));
-    t('cold: the timer lets go of the session once it has warned, and records the request it warned about', !!w && w.warned === p0 && w.shown === true && !w.token);
+    t('cold: an idle session is warned, and the ledger records it, with Focus assist\'s state (off, as the stand-in reports)',
+      rows('warned').length === 1 && row.ctx === 150000 && row.model === 'claude-opus-5-5' && row.shown === true && row.quiet === 0, JSON.stringify(row));
+    t('cold: the timer lets go of the session once it has warned, and records the request it warned about', !!w && w.warned === p0 && w.seen === true && !w.token);
     appendFileSync(fw, JSON.stringify(prompt(Date.now())) + '\n' + JSON.stringify(req(Date.now(), 151000)) + '\n');   // a message answering the warning
     g('stop', stop('warned', fw), shownEnv);
     const w2 = state('warned');
-    t('cold: a turn that answered a shown warning keeps its chain\'s start', !!w2 && w2.from === w.from && w2.stop > w.stop && !!w2.token);
+    t('cold: a turn that answered a seen warning keeps its chain\'s start', !!w2 && w2.from === w.from && w2.stop > w.stop && !!w2.token);
     await settled('warned', 2);
     t('cold: and is warned again when it goes idle', rows('warned').length === 2 && rows('warned')[1].ctx === 151000);
 
@@ -4465,20 +4465,33 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     g('stop', stop('unseen', fn));
     const n1 = await settled('unseen', 1);
     t('cold: a warning that could not be shown is recorded as not shown, and still only once per request',
-      rows('unseen').length === 1 && rows('unseen')[0].shown === false && !!n1 && n1.warned === p1 && !n1.token && n1.shown === false);
+      rows('unseen').length === 1 && rows('unseen')[0].shown === false && rows('unseen')[0].quiet === null
+      && !!n1 && n1.warned === p1 && !n1.token && n1.seen === false);
     appendFileSync(fn, JSON.stringify(prompt(Date.now())) + '\n' + JSON.stringify(req(Date.now(), 151000)) + '\n');
     g('stop', stop('unseen', fn));
     const n2 = state('unseen');
     t('cold: the turn after it starts a new chain: there was no warning to answer', !!n2 && n2.from === n2.stop && n2.from > n1.from);
     try { process.kill(n2.pid); } catch { /* already gone */ }
 
-    // A warning shown about a request sent at T, whose cache expired at T+60: a turn begun at T+55 answered it, one at
+    // Shown under Focus assist: priority only counts as seen (the pilot's precondition); alarms only, or a state the
+    // script did not print, does not.
+    const quietCases = [['fa-priority', '1', 1, true], ['fa-alarms', '2', 2, false], ['fa-unknown', '', null, false]];
+    for (const [id, out] of quietCases) {
+      const p = Date.now() - 2000;
+      g('stop', stop(id, write(id, [prompt(p), req(p + 1000, 150000)])), { ...e, TOKENBRAKE_NO_NOTIFY: 'shown:' + out });
+    }
+    const quietGot = [];
+    for (const [id] of quietCases) { const s = await settled(id, 1), row = rows(id)[0]; quietGot.push([id, row && row.shown, row && row.quiet, s && s.seen]); }
+    t('cold: a shown warning is seen under priority only, not under alarms only or when Focus assist\'s state is unknown',
+      quietCases.every(([id, , q, seen], i) => quietGot[i][1] === true && quietGot[i][2] === q && quietGot[i][3] === seen), JSON.stringify(quietGot));
+
+    // A warning seen about a request sent at T, whose cache expired at T+60: a turn begun at T+55 answered it, one at
     // T+150 did not.
     const T = Date.now() - 300 * MIN;
     const late = (id, began) => {
       const f = write(id, [prompt(T), req(T + 1000, 150000), prompt(began), req(began + 1000, 150000)]);
       mkdirSync(join(cfgC, 'tokenbrake', 'coldwarn'), { recursive: true });
-      writeFileSync(statePath(id), JSON.stringify({ transcript: f, stop: T + 2000, from: T - 100 * MIN, warned: T, shown: true, token: null }));
+      writeFileSync(statePath(id), JSON.stringify({ transcript: f, stop: T + 2000, from: T - 100 * MIN, warned: T, seen: true, token: null }));
       g('stop', stop(id, f));
       return state(id);
     };

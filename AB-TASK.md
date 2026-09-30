@@ -4458,3 +4458,29 @@ Added after the code review, the same day, still before any warning fires:
   refreshed, not from when its reply finished streaming.
 - **A request that wrote 5-minute cache** is not warned about: it is cold long before 50 minutes. Check 1 excluded
   those requests for the same reason.
+
+## Amendment: a coldWarn warning counts only if it could be seen — 2026-09-30, before any warning counts
+
+**Why.** Three test toasts sent at 00:30–00:45 all reached Windows (`shown: true`, and all three sit in the Action
+Center), but none appeared on the owner's screen. Focus assist was on "priority only" and Windows PowerShell, whose
+identity the toast uses, was not on the priority list, so Windows held them back. `shown` records that Windows took
+the notification, not that the owner could see it.
+
+**What changes:**
+- **The notification stays on screen until dismissed** (a reminder with a Dismiss button), instead of a banner that
+  leaves after about 5 seconds. The warning comes after 50 idle minutes, when the owner is likely away from the screen.
+  It expires when the cache does, when a message no longer keeps anything warm, and a session's next warning
+  replaces it.
+- **`shown` also needs notifications on for Windows PowerShell.** When they are off (for the app, for the user, or by
+  policy), Windows drops a toast without an error, so the script checks first and reports it not shown.
+- **The ledger row records Focus assist's state** as `quiet`: 0 off, 1 priority only, 2 alarms only, null when it
+  could not be read.
+- **Windows PowerShell is on the owner's priority list** since 2026-09-30, 01:55. That is a precondition of the pilot:
+  `quiet` cannot tell whether an app is on the list.
+
+**What counts toward the 20:** a warning with `shown: true` and `quiet` 0 or 1. Under alarms only (2) Windows shows
+nothing, and when `quiet` is unknown, whether it was seen is unknown; neither counts. The same rule decides whether a
+warning can be answered, which keeps a chain going. A locked screen is not read: the reminder waits on screen for the
+owner's return, and check 2 is where that is seen.
+
+Unchanged: the feature's purpose, the measurement, the pass rule and every other counting rule.

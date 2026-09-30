@@ -480,8 +480,14 @@ it for about 0.08. When a turn ends with at least `coldWarnMinContext` (default 
 (default 50; keep it under 60) minutes, one notification names the folder, the context and what writing it again
 would draw, and says any message keeps it warm. A new turn in that session moves the clock, and closing the session
 (`SessionEnd`) drops it. A session left alone is warned once, and one whose requests write 5-minute cache is not
-warned at all: it is cold long before. Each warning is a ledger row (`ev: "coldwarn"`). It is the pilot of a
-pre-registered test (`AB-TASK.md`, 2026-09-25), and stays off until that test measures it.
+warned at all: it is cold long before. The notification stays on screen until you dismiss it, expires with the
+cache, and a session's next warning replaces it. It comes from Windows PowerShell, so notifications must be on for
+that app. Under Focus assist's "priority only", put Windows PowerShell on the priority list (Windows 10: Settings →
+System → Focus assist → Customize your priority list; Windows 11: Settings → System → Notifications → Set priority
+notifications), or Windows may hold the notification unseen in the Action Center; under "alarms only" it holds it
+anyway. Each warning is a ledger row (`ev: "coldwarn"`) with `shown` (Windows took it) and Focus assist's state
+(`quiet`: 0 off, 1 priority only, 2 alarms only, null unknown). It is the pilot of a pre-registered test
+(`AB-TASK.md`, 2026-09-25), and stays off until that test measures it.
 
 `blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
 minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,
