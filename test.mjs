@@ -4023,6 +4023,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const rHelp = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'help'], { encoding: 'utf8', env: e2 });
   t('help lists tune --sweep', /--sweep/.test(spawnSync(process.execPath, ['cli.js', 'help'], { encoding: 'utf8' }).stdout));
   t('help lists the tune command', /tokenbrake tune/.test(rHelp.stdout));
+  /* The brake leads and the report is its gauge (README, site); a help that puts the report first again, or
+     names a cost row the tokens-only change took out of --compare, is the drift this pins. */
+  t('help puts the brake before the report and ends on init',
+    rHelp.stdout.indexOf('THE BRAKE') >= 0 && rHelp.stdout.indexOf('THE BRAKE') < rHelp.stdout.indexOf('THE REPORT --')
+    && /Start with npx tokenbrake init[^\n]*\n?$/.test(rHelp.stdout));
+  t('help\'s --compare line names no cost', !/\bcost\b/.test((rHelp.stdout.match(/--compare <A> <B>[^\n]*\n[^\n]*/) || [''])[0]));
 
   /* F5 (sessionId backfill): a transcript with no sessionId field of its own must not make autotune attribute
      ANOTHER session's ledger rows to it. Here a foreign read-delta row exists; tuneReport recovers the session
@@ -4882,7 +4888,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   rs = sv('--all=yes');
   t('a flag handed a value says so', rs.status === 1 && /--all takes no value/.test(rs.stdout));
   rs = sv('--help');
-  t('report --help prints the help, not a report', rs.status === 0 && /STEP ONE -- the report/.test(rs.stdout) && !/Sessions the guard kept something out of/.test(rs.stdout));
+  t('report --help prints the help, not a report', rs.status === 0 && /THE REPORT --/.test(rs.stdout) && !/Sessions the guard kept something out of/.test(rs.stdout));
   rs = spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'frobnicate'], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfgS } });
   t('an unknown command is refused, not answered with help at exit 0', rs.status === 1 && /Unknown command: frobnicate/.test(rs.stdout));
   rs = sv('--compare', 'savesess', 'quietsess');

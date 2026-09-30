@@ -2142,3 +2142,22 @@ publish). Suite green.
 
 - **Open:** `cli.js help` still reads STEP ONE (report), STEP TWO (brake). It is `cli.js`, so it goes through the
   review loop in its own change, and reaches users with the next release.
+
+## `help`: the brake first — 2026-09-30
+
+Branch `claude/help-brake-first`. Closes the README section's open item. `help` opened on "find out what ate your
+Claude Code context" with STEP ONE (report) and STEP TWO (brake); it now opens on the site's line, lists THE BRAKE
+first and THE REPORT second as its gauge, and ends on `Start with npx tokenbrake init, ...`, so a short terminal
+that shows only the tail still shows where to start. The `--compare` line named a cost row the tokens-only change
+took out of the table; it now says "in tokens and counts" without listing rows, so it cannot drift from
+`renderCompare` again. The README's `--compare` paragraph gains the compactions row it left out. Text only: no
+code path besides printing help changes.
+
+- **Review.** `/simplify`: 4 agents; fixed the heading (it read as user scope only) and a test pinned to heading
+  wording. `/code-review`: 6 findings, all fixed: the CHANGELOG wording (the table had a cost row, retired), this
+  section (the open item stays as written above), the tail line, tests for the order and for no cost on the
+  `--compare` line, the row list, the 119-column line. `/security-review`: no finding; the only interpolation is
+  `fmt(COMPACT_WINDOW)`, a constant, and no untrusted input reaches the text.
+- **Left, for the owner:** the no-guard verdict in `report` still gates `npx tokenbrake init` on the trim's reach
+  alone (`BRAKE_WORTH_PCT`, transcript.js), and below 10% says "nothing to brake in work like this", with no word
+  on whether the session passed the 300k window. That changes what the report recommends, so it is discussed first.
