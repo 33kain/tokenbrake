@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The report's verdict without tokenbrake weighs the compaction window too.** A session with no sign of tokenbrake
+  was told to install only when the trim could reach 10% of what it carried, and otherwise "nothing to brake in work
+  like this", whatever its context. Now a session whose context peaked at ~267k or more, where the 300k window `init`
+  sets compacts (stage B's eight compactions fired at 267k–275k), is told to install because of it, and one that
+  stayed under is told that too. The peak takes a compaction's own pre-compaction count when it is higher than the
+  request before it, and is compared at the k the report prints. The default report names the session's peak
+  context. Both reports apply one rule: `--detail` rounded 9.6% in reach up to 10 and said install where the default
+  report did not, and it gave no verdict on a session with no tool results. A share under 10% prints with one decimal
+  in both reports and never rounds up to 10.0%. Display only: nothing enters context, and nothing a stage measures
+  changes.
 - README and the package description lead with the brake: `npx tokenbrake init`, the compaction pair and its stage B
   figures first, the report as its gauge, and `report --share` as the next measurement. Install lists npx before the
   plugin, because only a user-scope `init` writes the pair.

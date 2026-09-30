@@ -39,10 +39,12 @@ the other. **Size:** the guard trims shell output over 6,000 characters and caps
 60 KB before they enter context. That half's record is thinner, and the section below says how thin.
 
 The report ranks every tool result by the tokens it carried and, when the brake ran, sets what it lowered against
-the whole session. When tokenbrake was not running, it says how much of what you carried the trim could reach at
-all. Often that is little, and the report says so.
+the whole session. When tokenbrake was not running, it says whether the session's context reached ~267k, where the
+300k window compacts, and how much of what it carried the trim could reach. Either is reason to install; a session
+that stayed under ~267k with little in the trim's reach has nothing to brake, and the report says so.
 
-**Built for long sessions.** A session that never reaches 300k tokens is never compacted early, and one that reads
+**Built for long sessions.** A session that never reaches ~267k tokens, where the 300k window compacts (stage B's
+eight compactions fired at 267k–275k), is never compacted early, and one that reads
 little has little to trim. tokenbrake runs wherever Claude Code runs locally, from one user-scope install: the CLI,
 and the Claude Desktop app on Windows (a local Code session there loads the same `~/.claude/settings.json`).
 

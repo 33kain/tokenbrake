@@ -1267,13 +1267,61 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     /* guardRan finds the guard by a ledger row or a trim marker, and a session it ran in can leave neither -- so
        the line reports what was seen, not a verdict on the install. */
     t('a session with no sign of the guard, with little in reach, says so instead of "Acted on: 0"',
-      /No sign of tokenbrake in this session \(no ledger row, no trim marker\), and 0% of what it carried is in the brake's reach -- too little/.test(tx) && !/Acted on:/.test(tx),
+      /No sign of tokenbrake in this session \(no ledger row, no trim marker\)\. The trim could have acted on 0 results, 0% of what it carried -- too little to install it/.test(tx) && !/Acted on:/.test(tx),
       tx.split('\n').find(l => /No sign|Acted on/.test(l)));
     const dumps = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 400)]);
     const td = T.renderReport(dumps, []);
-    t('a session with no sign of the guard, with plenty in reach, says what the brake could have acted on and how to install it',
-      /No sign of tokenbrake in this session \(no ledger row, no trim marker\)\. The brake could have acted on 1 result, \d+% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(td)
+    t('a session with no sign of the guard, with plenty in reach, says what the trim could have acted on and how to install it',
+      /No sign of tokenbrake in this session \(no ledger row, no trim marker\)\. The trim could have acted on 1 result, \d+% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(td)
       && !/Still within reach/.test(td), td.split('\n').find(l => /No sign/.test(l)));
+    /* The window is the other lever: a session whose context reached where init's 300k window compacts (~267k,
+       stage B's boundaries) is one the pair acts on, whatever the trim's reach, and one that stayed under it is
+       weighed on the trim alone -- and told so. */
+    const withCtxs = (s, ctxs) => ({ ...s, requests: ctxs.map((ctx) => ({ model: 'claude-opus-5', usage: { input_tokens: 10, cache_read_input_tokens: ctx, output_tokens: 5 } })) });
+    const withCtx = (s, ctx) => withCtxs(s, s.requests.map(() => ctx));
+    const tPast = T.renderReport(withCtx(excerptOnly, 350000), []);
+    t('detail: no guard, little in reach, but a context past where init compacts: install, and say why',
+      /Its context reached 350k, past ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(tPast)
+      && !/too little/.test(tPast), tPast.split('\n').find(l => /No sign/.test(l)));
+    const tUnder = T.renderReport(withCtx(excerptOnly, 120000), []);
+    t('detail: no guard, little in reach, a context under where init compacts: too little, and the window is named',
+      /Its context peaked at 120k, under ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- too little/.test(tUnder),
+      tUnder.split('\n').find(l => /No sign/.test(l)));
+    const bPast = T.renderBrief(withCtx(excerptOnly, 350000), []), bUnder = T.renderBrief(withCtx(excerptOnly, 120000), []), bNone = T.renderBrief(excerptOnly, []);
+    t('brief: no guard, a context past where init compacts: Next is init, because of the window',
+      /Its context peaked at 350k; the trim could have acted on 0 of 2 tool results/.test(bPast)
+      && /Next: `npx tokenbrake init` installs the brake: this session passed ~267k, where init's 300k window compacts \(unless you set your own\)\./.test(bPast), bPast.split('\n').slice(-3).join(' | '));
+    t('brief: no guard, under where init compacts and little in reach: nothing to brake, and the window is named',
+      /Next: nothing to brake in work like this: the context stayed under ~267k, where init's 300k window compacts, and little is in the trim's reach\./.test(bUnder), bUnder.split('\n').pop());
+    t('brief: with no usage reported, the verdict claims nothing about the context',
+      !/peaked at|267k/.test(bNone) && /Next: nothing to brake in work like this: little is in the trim's reach\./.test(bNone), bNone.split('\n').slice(-3).join(' | '));
+    // One rule for both renderers: at 9.6% in reach the detail report rounded to 10 and said install, the brief did not.
+    const near = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 188333)]);
+    const nearD = T.renderReport(near, []), nearB = T.renderBrief(near, []);
+    t('detail and brief give one verdict just under 10% in reach',
+      /-- too little to install it/.test(nearD) && /Next: nothing to brake/.test(nearB), [nearD.split('\n').find(l => /No sign/.test(l)), nearB.split('\n').pop()].join(' | '));
+    const noTools = T.renderReport(withCtx(mk([]), 350000), []);
+    t('detail: a session past where init compacts, with no tool results, still gets the verdict',
+      /Its context reached 350k, past ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed/.test(noTools),
+      noTools.split('\n').find(l => /No sign/.test(l)));
+    /* The peak, not the last request: a session compacted on its own ends small, and its peak is what init's window
+       would have met. A compaction's own preTokens counts too, since the request before it can read a little under. */
+    const bMid = T.renderBrief(withCtxs(excerptOnly, [90000, 280000, 60000, 70000, 80000, 90000]), []);
+    t('brief: the peak decides, not where the session ended',
+      /Its context peaked at 280k;/.test(bMid) && /Next: `npx tokenbrake init` installs the brake: this session passed/.test(bMid), bMid.split('\n').slice(-3).join(' | '));
+    const pre = T.usageTotals({ requests: withCtx(excerptOnly, 250000).requests, boundaries: [{ atReq: 3, trigger: 'auto', preTokens: 270000 }, { atReq: 5, preTokens: null }] });
+    t('the peak takes a compaction boundary\'s preTokens over the request before it', pre.peak === 270000 && pre.contextNow === 250010, JSON.stringify(pre));
+    /* Compared at the k the report prints: 266.6k reads 267k and is past, 266.4k reads 266k and is under. */
+    const edgeUp = T.renderBrief(withCtx(excerptOnly, 266600), []), edgeDown = T.renderBrief(withCtx(excerptOnly, 266400), []);
+    t('a peak printed as 267k is never called under 267k, and one printed as 266k is',
+      /peaked at 267k;/.test(edgeUp) && /this session passed ~267k/.test(edgeUp) && /peaked at 266k;/.test(edgeDown) && /stayed under ~267k/.test(edgeDown),
+      [edgeUp, edgeDown].map((x) => x.split('\n').pop()).join(' | '));
+    // 9.97% in reach: under 10 the verdict says too little, so no line may print 10.0%.
+    const edge = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 180600)]);
+    const edgeD = T.renderReport(edge, []), edgeB = T.renderBrief(edge, []);
+    t('a share just under 10% prints as 9.9% on every line, never 10.0%',
+      /9\.9% of all carried\)/.test(edgeD) && /9\.9% of what it carried -- too little/.test(edgeD) && /9\.9% of what they carried/.test(edgeB) && !/10\.0%/.test(edgeD + edgeB),
+      [edgeD.split('\n').find(l => /Within the guard/.test(l)), edgeB.split('\n').find(l => /No sign/.test(l))].join(' | '));
     t('and its advice line names the result in the window',
       /One result to have brakes on: Bash "node tools\/dump\.js"/.test(td), td.split('\n').find(l => /brakes on/.test(l)));
     t('the report takes the person\'s own maxChars, not the shipped default',
@@ -2082,7 +2130,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     const unguarded = briefOf(3000, [], {});
     const noGuard = T.renderBrief({ ...JSON.parse(JSON.stringify(base)), results: base.results.map((r) => ({ ...r, marker: false })) }, [], {});
     t('brief: a session the guard never ran in has no table, only what the brake could have reached',
-      !/What tokenbrake lowered/.test(noGuard) && /No sign of tokenbrake in this session\. The brake could have acted on \d+ of 4 tool results/.test(noGuard), noGuard.split('\n').slice(-3).join(' | '));
+      !/What tokenbrake lowered/.test(noGuard) && /No sign of tokenbrake in this session\. The trim could have acted on \d+ of 4 tool results/.test(noGuard), noGuard.split('\n').slice(-3).join(' | '));
     const cutR = { name: 'Bash', marker: true, chars: 10, tokens: 3, carried: 9 }, mention = { name: 'Bash', marker: true, chars: 10, tokens: 3, carried: 9 };
     const sm = T.smallResults({ results: [cutR, mention, { name: 'Bash', chars: 10, tokens: 3, carried: 9 }] }, undefined, [cutR]);
     t('small shell output leaves out a result the guard trimmed, not one that only mentions the guard', sm.shell === 3 && sm.n === 2 && sm.carried === 18, JSON.stringify(sm));
