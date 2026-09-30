@@ -486,8 +486,8 @@ that app. Under Focus assist's "priority only", put Windows PowerShell on the pr
 System → Focus assist → Customize your priority list; Windows 11: Settings → System → Notifications → Set priority
 notifications), or Windows may hold the notification unseen in the Action Center; under "alarms only" it holds it
 anyway. Each warning is a ledger row (`ev: "coldwarn"`) with `shown` (Windows took it) and Focus assist's state
-(`quiet`: 0 off, 1 priority only, 2 alarms only, null unknown). It is the pilot of a pre-registered test
-(`AB-TASK.md`, 2026-09-25), and stays off until that test measures it.
+(`quiet`: 0 off, 1 priority only, 2 alarms only, null unknown). What a warning saves depends on whether you
+answer it, so no test counts it (`AB-TASK.md`, 2026-09-30); it stays off until you turn it on.
 
 `blobElide` (default `false`) catches the other shape of waste: shell output that is one long **encoded or
 minified run** — a base64 dump, a minified bundle, a giant one-line JSON. As bytes it tells the model nothing,

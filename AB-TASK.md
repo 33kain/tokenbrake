@@ -4484,3 +4484,31 @@ warning can be answered, which keeps a chain going. A locked screen is not read:
 owner's return, and check 2 is where that is seen.
 
 Unchanged: the feature's purpose, the measurement, the pass rule and every other counting rule.
+
+## Amendment: coldWarn's pilot closes without a count — 2026-09-30, the owner's decision
+
+**Why.** What a warning saves is not coldWarn's to measure. A warning saves only when the owner answers it with a
+message, and whether they do is the owner's habit, which nothing in tokenbrake can change. A count of 20 warnings
+would measure that habit, not the feature. What the feature relies on is already settled: check 1 showed that a
+cache read keeps the context for another hour, and a message inside the hour reads it for about 0.08 points where a
+re-write after it costs about 3.8 (500k on Opus 5.5, the pre-registration's numbers). The owner decided on
+2026-09-30 to stop the pilot here.
+
+**Where the checks stand:**
+1. **PASS**, read from the transcripts (above).
+2. **PASS.**
+   - The first warning from a real session fired at 04:02:13 local: session `fb888c78`, 50 minutes after its last
+     request, 198,792 tokens in context.
+   - Windows took it (`shown: true`, `quiet` 1, with Windows PowerShell on the priority list).
+   - The owner was asleep and did not see it. They had seen the guard's reminder toasts earlier that night, and
+     confirm that they show.
+   - The `stop` hook returns at once (`status`'s spawn test).
+3. **Not staged.** The evidence so far was read after the ledger had already been seen to hold one warning. Since
+   coldWarn went on (02:38) there were 9 gaps of 1 to 50 minutes between requests in sessions of at least 100k, all
+   in one session, with no warning inside them. The one gap over 50 minutes holds the one warning.
+
+**What goes:** the count of 20, the saving and cost per warning, and the pass rule. No saving from coldWarn enters
+the report or any stage's number.
+
+**What stays:** the ledger row, as a record of what fired. coldWarn stays as shipped: off by default, turned on in
+`tokenbrake.json`. It changes nothing in context, so no measurement gates its default.
