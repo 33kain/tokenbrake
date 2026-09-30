@@ -4,10 +4,12 @@
 
 - **`coldWarn`, off by default and Windows only: a warning before an idle session's cache goes cold.** When a turn
   ends with at least 100k in context and the session then sits idle for 50 minutes, one notification names the
-  folder, the context and what writing it again would draw, and says any message keeps it warm. A new turn moves
-  the clock and closing the session drops it. `init` now also registers `Stop` and `SessionEnd` hooks, so re-run
-  it. This is the pilot of `AB-TASK.md`'s 2026-09-25 pre-registration. Its first check, that a cache read keeps
-  the cache alive for another hour, passed on the author's transcripts.
+  folder, the context and what writing it again would draw, and says any message keeps it warm. It stays on screen
+  until dismissed and expires with the cache. Under Focus assist's "priority only", add Windows PowerShell to the
+  priority list, or it may wait unseen in the Action Center; "alarms only" holds it anyway. A new turn moves the
+  clock and closing the session drops it. `init` now also registers `Stop` and `SessionEnd` hooks, so re-run it. This is the
+  pilot of `AB-TASK.md`'s 2026-09-25 pre-registration. Its first check, that a cache read keeps the cache alive for
+  another hour, passed on the author's transcripts.
 - **`report --compactions` reads only requests that report a context size.** A request with no usage, or one of
   Claude Code's all-zero synthetic replies, no longer reads as zero context after a compaction or takes a recovery
   slot. A missing timestamp or usage no longer reads as a cold rebuild, and a synthetic reply after an idle hour no

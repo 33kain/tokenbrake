@@ -1938,3 +1938,45 @@ Follow-ups, not done:
 - A timer's liveness is its PID. If a reboot kills it, the session is resumed under the same id, and another process
   of the owner's now has that PID, that session is not warned while that process lives. A missed warning, never a
   wrong one.
+
+## coldWarn's toast stays on screen, and Focus assist is recorded — 2026-09-30
+
+Branch `claude/coldwarn-reminder`, after #138. **A correction to the entry above:** the three test toasts did not
+reach the owner's screen. All three sit in the Action Center: Windows took them (`shown: true`), but Focus assist was
+on "priority only" (read at 01:53 from its WNF state), and Windows PowerShell, whose identity the toast uses, was not
+on the priority list, so no banner showed.
+
+- **The owner put Windows PowerShell on the priority list** at about 01:55. A plain test toast followed at 01:57:34,
+  then one warning through the whole path (Stop hook in 58 ms, detached timer, toast), logged `shown: true, quiet: 1`.
+  The owner saw both on screen, with Focus assist still on priority only, and the second (the reminder) stayed until
+  they dismissed it.
+- **`guard.js`.**
+  - The toast is a reminder with a Dismiss button, so it stays on screen until dismissed. A 5-second banner, 50
+    minutes into an idle stretch, would mostly be missed. It expires when the cache does, when a message no longer
+    keeps anything warm, and it carries a tag per session (the id's first 16 characters), so a session's next warning
+    replaces it.
+  - The script checks that notifications are on for Windows PowerShell (`ToastNotifier.Setting`) and exits 3 when
+    they are not: Windows would drop the toast without an error, and it would read as shown.
+  - After the toast, it prints Focus assist's state as Windows reports it
+    (`ToastNotificationManager.GetDefault().NotificationMode`, Windows 10 2004 and later; it read 1 here, as the WNF
+    state did at 01:53), and the ledger row records it as `quiet` (0 off, 1 priority only, 2 alarms only, null
+    unknown). A missing property prints nothing, not `[int]$null`'s 0, and the script ends with `exit 0`, because a
+    failed read as the last statement would otherwise make the exit code 1 and an accepted toast read as not shown.
+  - Only a warning that could be seen (`shown`, `quiet` 0 or 1) can be answered and keep a chain going. The state
+    file records that as `seen`, where it used to record `shown`. `TOKENBRAKE_NO_NOTIFY=shown:<printed>` lets
+    `test.mjs` check the rule for 1, 2 and nothing printed.
+  - Priority only counts as seen because of the pilot's precondition, not on its own: Windows shows the toast then
+    only with PowerShell on the priority list, which `quiet` does not tell.
+- **`AB-TASK.md`,** "a coldWarn warning counts only if it could be seen": the same rule for the 20, recorded before any
+  warning counts, with the priority list as a precondition of the pilot.
+- **Review, not taken:**
+  - Reading `seen` from whether the reminder was dismissed (it leaves the toast history): an owner who reads it and
+    just types in Claude Code never dismisses it, so that signal would miss answered warnings.
+  - Reading the old `shown` state field as `seen`: nothing released wrote it, and no warning counts yet.
+- **Not known yet:**
+  - Whether a reminder shows under priority only with PowerShell off the list, through Windows 10's "Show reminders,
+    regardless of the app used". The owner's two toasts after 01:55 were sent with PowerShell on it. If it does, the
+    precondition is not needed.
+  - Whether an expired reminder leaves the screen as well as the Action Center, and what a locked screen shows.
+
+Still to see for check 2: a warning from a real Claude Code session, with Claude Code as the parent.
