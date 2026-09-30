@@ -4512,3 +4512,40 @@ the report or any stage's number.
 
 **What stays:** the ledger row, as a record of what fired. coldWarn stays as shipped: off by default, turned on in
 `tokenbrake.json`. It changes nothing in context, so no measurement gates its default.
+
+## Amendment: a compaction counts only in a session past 200k, and how a block from another machine is read — 2026-09-30, before any outside block is read
+
+**Why.** The stage 2 saving runs until the uncompacted context would have passed Claude Code's own window, 967k on
+the 1M context. A model on a 200k context never gets there: Claude Code compacts it on its own near 167k. Such a
+compaction would be credited with every request after it, though it would have happened without the brake. The
+transcript does not say which context a session ran on: the model id is the same on both (this repo's own session
+of 2026-09-30 records `claude-opus-5-5` on all 421 of its requests). Only the sizes do: a context past 200k
+cannot be a 200k model's.
+
+**The amendment, from this date:** an automatic compaction counts only in a session whose context went past
+200,000 tokens somewhere: a request's size, or a compaction's `preTokens`. The session is the unit because the
+context size is the session's: once it went past 200k, a later compaction whose own size before it is unknown or
+read low still counts, with its charge. Otherwise it is listed with the reason "session never past 200k: may be
+the model's own limit", and `report --share` gives the count of those on its `compactions` line. This covers every
+view that uses the stage 2 rule: `report --compactions`, `report --share` and its brake net, and stage 2 / stage
+B's population.
+
+**What moves, and what does not.**
+- **Stage B and the author's figures do not move.** The 21 automatic compactions of the author's own work sat at
+  266k–275k, and 18 of them count, as before. `report --share` at `70204cd` and with this change, run one request
+  apart, gave the same counts.
+- **A 1M session with its own window under 200k drops out.** That undercounts, the safe side for a gate.
+- **Unchanged:** the weights, `compactionView`'s saving and recovery, the charge, the 50% rule, and the 8 counted.
+
+**Reading a block from another machine** (`report --share`, pasted into an issue or sent to the owner):
+1. **A block before `init` is a baseline.** Its sessions, tokens and window show the work; it holds no verdict on
+   the brake, and none is drawn from it.
+2. **A block after `init` is read with `--since=<the day of install>`.** It counts toward the brake's 9 when:
+   - its `install` line shows a compaction window below Claude Code's own, with `compactPrep on`;
+   - its `compactions` line shows at least 8 counted;
+   - the cost at the bound is under 50% of the saving (PASS), pooled and for each model that reached 8 on its own.
+3. **Recording.** Each block is recorded here with its date and its lines as sent, whether it passes or not.
+   Points are at the author's calibration (the block says so); another plan may weigh the kinds differently.
+4. **The guard's part stays out of the verdict.** A block's guard line is recorded and read as its own figure.
+
+This is written before the change merges and before any block from another machine is read.

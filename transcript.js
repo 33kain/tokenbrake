@@ -526,7 +526,11 @@ function formatWarning(p) {
    token counts are written: the guard's, because coldWarn's notification prices a re-write with them. */
 const { weightsOf, usageCtx, pfmt, kfmt } = GUARD;
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
-const INIT_COMPACTS_AT = 267000;         // where the 300k window user-scope init sets (cli.js) compacts: stage B's eight boundaries sat at 267k-275k (AB-TASK.md)
+const INIT_COMPACTS_AT = 266000;         // where the 300k window user-scope init sets (cli.js) compacts: the author's compactions under it sat at 265.9k-274.6k
+/* A 200k-context model compacts on its own near 167k, never at the 1M context's window, and the model id does not say
+   which ran: only a session whose context went past this size counts toward stage 2 (AB-TASK.md, 2026-09-30 amendment). */
+const SMALL_CONTEXT = 200000;
+const SMALL_WHY = `session never past ${kfmt(SMALL_CONTEXT)}: may be the model's own limit`;
 const INIT_COMPACTS = `~${kfmt(INIT_COMPACTS_AT)}, where init's 300k window compacts`;
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
 /* A result's price: written once, then re-read on each request that carries it. */
@@ -647,7 +651,8 @@ function compactionView(parsed, { defaultWindow = DEFAULT_COMPACT_WINDOW, recove
 
 /* Stage 2's rules (AB-TASK.md, "An earlier compaction window"), in one pure place: which compactions count, and
    the verdict once enough have. A compaction counts when it was automatic, on a calibrated model (from its
-   countsFrom day, if it has one), and outside staged work (STAGED: benchmark, calibration, headless). The stage passes when recovery
+   countsFrom day, if it has one), outside staged work (STAGED: benchmark, calibration, headless), and in a session
+   whose context went past SMALL_CONTEXT (2026-09-30 amendment). The stage passes when recovery
    plus compaction's own charge, at the bound, stays under half the saving across STAGE2.n counted compactions. */
 const STAGE2 = { n: 8, share: 0.5 };
 /* Staged work: a benchmark fixture, a calibration arm, or a headless `claude -p` run -- driven by a script, not
@@ -666,13 +671,17 @@ const STAGED = [
 const stagedRow = (session) => STAGED.find((r) => r.test(session || {})) || null;
 const stagedKind = (session) => (stagedRow(session) || { kind: '' }).kind;
 const staged = (session) => !!stagedRow(session);
-function compactionWhy(row, session) {
+/* `ranPast`: the session's context went past SMALL_CONTEXT somewhere, a request's size or a compaction's preTokens.
+   A 1M session proves it once, so a later compaction whose own size before it is unknown or read low still counts;
+   without the session, the row's own size is all there is. */
+function compactionWhy(row, session, ranPast = row.pre > SMALL_CONTEXT) {
   const st = stagedRow(session);
   if (st) return st.label;
   if (row.trigger !== 'auto') return (row.trigger || '?') + ' trigger';
   const w = weightsOf(row.model);
   if (!w) return 'model ' + (row.model || '?');
   if (w.countsFrom && !(row.at >= Date.parse(w.countsFrom))) return w.label + ' before ' + w.countsFrom;
+  if (!ranPast) return SMALL_WHY;
   return '';
 }
 function compactionVerdict(counted, [chargeLow, chargeHigh] = COMPACT_CHARGE) {
@@ -699,7 +708,8 @@ function compactionVerdictByModel(counted) {
    the rows `report --compactions` lists and `report --share` pools. */
 function compactionRows(parsed, since) {
   if (!parsed.boundaries.length) return [];   // compactionView would still normalize every result's path
-  return compactionView(parsed).filter((r) => since == null || (r.at || 0) >= since).map((r) => ({ ...r, why: compactionWhy(r, parsed) }));
+  const ranPast = usageTotals(parsed).peak > SMALL_CONTEXT;
+  return compactionView(parsed).filter((r) => since == null || (r.at || 0) >= since).map((r) => ({ ...r, why: compactionWhy(r, parsed, ranPast) }));
 }
 
 /* `report --share`'s numbers: a fold over the sessions the caller pooled, newest first (any iterable, so they are
@@ -749,6 +759,7 @@ function sharePool(sessions, ledger, { since = null } = {}) {
     first: Number.isFinite(first) ? first : null, last: Number.isFinite(last) ? last : null,
     use, draw, trims, back,
     compactions: { found: compactions.length, auto: compactions.filter((r) => r.trigger === 'auto').length, ...pick(pooled),
+      small: compactions.filter((r) => r.why === SMALL_WHY).length,   // the one reason a qualifying install line cannot show
       pre: median(counted.map((r) => r.pre)), post: median(counted.map((r) => r.post)),
       // each model's verdict too (AB-TASK.md, 2026-09-22 amendment); a counted row's model is calibrated, so its label is one
       byModel: compactionVerdictByModel(counted).map((m) => ({ label: m.label, ...pick(m) })) },
@@ -809,7 +820,7 @@ const pctOf = (x, of) => (of ? 100 * x / of : 0);
 /* Whether a session with no sign of tokenbrake has anything for it to act on, one rule for both renderers. Two
    levers answer it: init's window acts on a session whose context reached where it compacts, the trim on what sits
    in its reach, and either is reason enough to install. The peak is compared at the k the report prints, so a
-   peak shown as 267k is never called under 267k. With no context known the trim decides alone. */
+   peak shown as 266k is never called under 266k. With no context known the trim decides alone. */
 function installVerdict(u, rc) {
   const ctxKnown = u.peak > 0;
   const past = Math.round(u.peak / 1000) * 1000 >= INIT_COMPACTS_AT;
@@ -2769,7 +2780,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { DEFAULT_COMPACT_WINDOW, parseTranscript, formatWarning, carry, limitDraw, compactionView, compactionRows, sharePool, safeVer, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { DEFAULT_COMPACT_WINDOW, SMALL_WHY, parseTranscript, formatWarning, carry, limitDraw, compactionView, compactionRows, sharePool, safeVer, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, staged, stagedKind, stagedRow,

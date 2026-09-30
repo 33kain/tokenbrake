@@ -39,13 +39,13 @@ the other. **Size:** the guard trims shell output over 6,000 characters and caps
 60 KB before they enter context. That half's record is thinner, and the section below says how thin.
 
 The report ranks every tool result by the tokens it carried and, when the brake ran, sets what it lowered against
-the whole session. When tokenbrake was not running, it says whether the session's context reached ~267k, where the
+the whole session. When tokenbrake was not running, it says whether the session's context reached ~266k, where the
 300k window compacts, and how much of what it carried the trim could reach. Either is reason to install; a session
-that stayed under ~267k with little in the trim's reach has nothing to brake, and the report says so.
+that stayed under ~266k with little in the trim's reach has nothing to brake, and the report says so.
 
-**Built for long sessions.** A session that never reaches ~267k tokens, where the 300k window compacts (stage B's
-eight compactions fired at 267k–275k), is never compacted early, and one that reads
-little has little to trim. tokenbrake runs wherever Claude Code runs locally, from one user-scope install: the CLI,
+**Built for long sessions.** A session that never reaches ~266k tokens, where the 300k window compacts (the
+author's 21 compactions under it fired at 266k–275k), is never compacted early, and one that reads little has little
+to trim. tokenbrake runs wherever Claude Code runs locally, from one user-scope install: the CLI,
 and the Claude Desktop app on Windows (a local Code session there loads the same `~/.claude/settings.json`).
 
 **Source:** everything that ships is three files at the root of this repository: `cli.js` (the installer and
@@ -510,7 +510,9 @@ first error line, and the first words of the task. It's built from the session's
 `compactPrepMaxChars` (default 8,000, about 2,000 tokens). The point is that the model re-reads only what its
 next step needs instead of searching for its place. It pairs with an earlier compaction window
 (`autoCompactWindow` 300k, Claude Code's own setting), and `report --compactions` prices every compaction: what the
-drop in context saves, and what re-reading afterwards costs. The pair passed the two-stage measurement in
+drop in context saves, and what re-reading afterwards costs. It counts an automatic compaction only in a session whose
+context went past 200k: a model on a 200k context compacts near 167k on its own, and would otherwise be credited with
+every request after it. The pair passed the two-stage measurement in
 `AB-TASK.md` ("The compaction window, v2" and "Stage B results", 2026-09-29), so the first user-scope `init` writes
 both: the window into `settings.json` and `compactPrep: true` into `tokenbrake.json`. It installs neither half
 beside a window or a `compactPrep: false` you set yourself, because each half was measured only with the other.

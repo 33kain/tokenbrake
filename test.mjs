@@ -1274,27 +1274,27 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     t('a session with no sign of the guard, with plenty in reach, says what the trim could have acted on and how to install it',
       /No sign of tokenbrake in this session \(no ledger row, no trim marker\)\. The trim could have acted on 1 result, \d+% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(td)
       && !/Still within reach/.test(td), td.split('\n').find(l => /No sign/.test(l)));
-    /* The window is the other lever: a session whose context reached where init's 300k window compacts (~267k,
-       stage B's boundaries) is one the pair acts on, whatever the trim's reach, and one that stayed under it is
+    /* The window is the other lever: a session whose context reached where init's 300k window compacts (~266k,
+       the author's boundaries) is one the pair acts on, whatever the trim's reach, and one that stayed under it is
        weighed on the trim alone -- and told so. */
     const withCtxs = (s, ctxs) => ({ ...s, requests: ctxs.map((ctx) => ({ model: 'claude-opus-5', usage: { input_tokens: 10, cache_read_input_tokens: ctx, output_tokens: 5 } })) });
     const withCtx = (s, ctx) => withCtxs(s, s.requests.map(() => ctx));
     const tPast = T.renderReport(withCtx(excerptOnly, 350000), []);
     t('detail: no guard, little in reach, but a context past where init compacts: install, and say why',
-      /Its context reached 350k, past ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(tPast)
+      /Its context reached 350k, past ~266k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed, `npx tokenbrake init` installs it\./.test(tPast)
       && !/too little/.test(tPast), tPast.split('\n').find(l => /No sign/.test(l)));
     const tUnder = T.renderReport(withCtx(excerptOnly, 120000), []);
     t('detail: no guard, little in reach, a context under where init compacts: too little, and the window is named',
-      /Its context peaked at 120k, under ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- too little/.test(tUnder),
+      /Its context peaked at 120k, under ~266k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- too little/.test(tUnder),
       tUnder.split('\n').find(l => /No sign/.test(l)));
     const bPast = T.renderBrief(withCtx(excerptOnly, 350000), []), bUnder = T.renderBrief(withCtx(excerptOnly, 120000), []), bNone = T.renderBrief(excerptOnly, []);
     t('brief: no guard, a context past where init compacts: Next is init, because of the window',
       /Its context peaked at 350k; the trim could have acted on 0 of 2 tool results/.test(bPast)
-      && /Next: `npx tokenbrake init` installs the brake: this session passed ~267k, where init's 300k window compacts \(unless you set your own\)\./.test(bPast), bPast.split('\n').slice(-3).join(' | '));
+      && /Next: `npx tokenbrake init` installs the brake: this session passed ~266k, where init's 300k window compacts \(unless you set your own\)\./.test(bPast), bPast.split('\n').slice(-3).join(' | '));
     t('brief: no guard, under where init compacts and little in reach: nothing to brake, and the window is named',
-      /Next: nothing to brake in work like this: the context stayed under ~267k, where init's 300k window compacts, and little is in the trim's reach\./.test(bUnder), bUnder.split('\n').pop());
+      /Next: nothing to brake in work like this: the context stayed under ~266k, where init's 300k window compacts, and little is in the trim's reach\./.test(bUnder), bUnder.split('\n').pop());
     t('brief: with no usage reported, the verdict claims nothing about the context',
-      !/peaked at|267k/.test(bNone) && /Next: nothing to brake in work like this: little is in the trim's reach\./.test(bNone), bNone.split('\n').slice(-3).join(' | '));
+      !/peaked at|266k/.test(bNone) && /Next: nothing to brake in work like this: little is in the trim's reach\./.test(bNone), bNone.split('\n').slice(-3).join(' | '));
     // One rule for both renderers: at 9.6% in reach the detail report rounded to 10 and said install, the brief did not.
     const near = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 188333)]);
     const nearD = T.renderReport(near, []), nearB = T.renderBrief(near, []);
@@ -1302,7 +1302,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       /-- too little to install it/.test(nearD) && /Next: nothing to brake/.test(nearB), [nearD.split('\n').find(l => /No sign/.test(l)), nearB.split('\n').pop()].join(' | '));
     const noTools = T.renderReport(withCtx(mk([]), 350000), []);
     t('detail: a session past where init compacts, with no tool results, still gets the verdict',
-      /Its context reached 350k, past ~267k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed/.test(noTools),
+      /Its context reached 350k, past ~266k, where init's 300k window compacts\. The trim could have acted on 0 results, 0% of what it carried -- if it is not installed/.test(noTools),
       noTools.split('\n').find(l => /No sign/.test(l)));
     /* The peak, not the last request: a session compacted on its own ends small, and its peak is what init's window
        would have met. A compaction's own preTokens counts too, since the request before it can read a little under. */
@@ -1311,10 +1311,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
       /Its context peaked at 280k;/.test(bMid) && /Next: `npx tokenbrake init` installs the brake: this session passed/.test(bMid), bMid.split('\n').slice(-3).join(' | '));
     const pre = T.usageTotals({ requests: withCtx(excerptOnly, 250000).requests, boundaries: [{ atReq: 3, trigger: 'auto', preTokens: 270000 }, { atReq: 5, preTokens: null }] });
     t('the peak takes a compaction boundary\'s preTokens over the request before it', pre.peak === 270000 && pre.contextNow === 250010, JSON.stringify(pre));
-    /* Compared at the k the report prints: 266.6k reads 267k and is past, 266.4k reads 266k and is under. */
-    const edgeUp = T.renderBrief(withCtx(excerptOnly, 266600), []), edgeDown = T.renderBrief(withCtx(excerptOnly, 266400), []);
-    t('a peak printed as 267k is never called under 267k, and one printed as 266k is',
-      /peaked at 267k;/.test(edgeUp) && /this session passed ~267k/.test(edgeUp) && /peaked at 266k;/.test(edgeDown) && /stayed under ~267k/.test(edgeDown),
+    /* Compared at the k the report prints: 265.6k reads 266k and is past, 265.4k reads 265k and is under. */
+    const edgeUp = T.renderBrief(withCtx(excerptOnly, 265600), []), edgeDown = T.renderBrief(withCtx(excerptOnly, 265400), []);
+    t('a peak printed as 266k is never called under 266k, and one printed as 265k is',
+      /peaked at 266k;/.test(edgeUp) && /this session passed ~266k/.test(edgeUp) && /peaked at 265k;/.test(edgeDown) && /stayed under ~266k/.test(edgeDown),
       [edgeUp, edgeDown].map((x) => x.split('\n').pop()).join(' | '));
     // 9.97% in reach: under 10 the verdict says too little, so no line may print 10.0%.
     const edge = mk([R('d1', 'Bash', 20000, { what: 'node tools/dump.js' }), R('o1', 'Agent', 180600)]);
@@ -4753,7 +4753,21 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const mid = edgesOf('mid', [req(300000, 500, 2), cb(300000), synth(4), cb(null, 5), req(40000, 40000, 6)]);
   t('compactions: one with only synthetic replies before the next compaction keeps its row; the next reads no size from before the first',
     mid.length === 2 && mid[0].post === null && mid[1].pre === 0 && mid[1].drop === 0, JSON.stringify(mid));
-  const preOf = (c) => { const [r] = edgesOf('pre', [req(200000, 500, 2), synth(2), c, req(40000, 40000, 4)]); return r; };
+  /* The 200k rule is the session's: once its context went past 200k it is not a 200k model, so a later compaction
+     whose own size is unknown (pre 0) still counts, charge and all, and a session that never went past counts none. */
+  const whysOf = (name, lines) => {
+    writeFileSync(join(dir, name + '.jsonl'), lines.map(e => JSON.stringify({ sessionId: name, cwd: '/w', ...e })).join('\n') + '\n');
+    const rows = TR.compactionRows(TR.parseTranscript(join(dir, name + '.jsonl')), null);
+    rmSync(join(dir, name + '.jsonl'));
+    return rows.map((r) => r.why);
+  };
+  const smallWhy = 'session never past 200k: may be the model\'s own limit';
+  t('stage 2: in a session past 200k, a compaction with no size before it still counts',
+    whysOf('midwhy', [req(300000, 500, 2), cb(300000), synth(4), cb(null, 5), req(40000, 40000, 6)]).join('|') === '|');
+  t('stage 2: in a session never past 200k, a compaction near 167k does not count, and says why',
+    whysOf('smallwhy', [req(150000, 500, 2), cb(167000), req(40000, 40000, 4), req(41000, 500, 5)]).join('|') === smallWhy
+    && TR.SMALL_WHY === smallWhy);
+  const preOf =(c) => { const [r] = edgesOf('pre', [req(200000, 500, 2), synth(2), c, req(40000, 40000, 4)]); return r; };
   t('compactions: with no preTokens (absent or null), the context before is the last sized request',
     preOf(cb()).pre === 200000 && preOf(cb()).drop === 160000 && preOf(cb(null)).pre === 200000, JSON.stringify(preOf(cb(null))));
   const [rw] = edgesOf('window', [readUse('a', '/w/app.js', 1), readRes('a', 1), req(300000, 500, 2), cb(300000),
@@ -4775,6 +4789,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     TR.parseTranscript(join(dir, 'hl.jsonl')).headless === true && TR.parseTranscript(join(dir, 'hl-side.jsonl')).headless === true
     && p.headless === false);
   rmSync(join(dir, 'hl.jsonl')); rmSync(join(dir, 'hl-side.jsonl'));
+  /* A 200k-context model compacts on its own near 167k and never reaches 967k, so a compaction there would be
+     credited with every later request. Without the session, the row's own size is the evidence. */
+  t('stage 2: given no session evidence, a compaction from 200k or under does not count; one from just past it does',
+    TR.compactionWhy({ ...row, pre: 167000 }, { cwd: '/w' }) === smallWhy && TR.compactionWhy({ ...row, pre: 200000 }, { cwd: '/w' }) === smallWhy
+    && TR.compactionWhy({ ...row, pre: 0 }, { cwd: '/w' }) === smallWhy && TR.compactionWhy({ ...row, pre: 200001 }, { cwd: '/w' }) === ''
+    && TR.compactionWhy({ ...row, pre: 0 }, { cwd: '/w' }, true) === '');
   t('stage 2: manual, other models and bench or calibration sessions do not',
     TR.compactionWhy({ ...row, trigger: 'manual' }, { cwd: '/w' }) === 'manual trigger' && /^model/.test(TR.compactionWhy({ ...row, model: 'claude-fable-5-1' }, { cwd: '/w' }))
     && TR.compactionWhy(row, { cwd: '/x/tokenbrake-bench' }) === 'benchmark/calibration' && TR.compactionWhy(row, { cwd: '/tmp/calibration' }) === 'benchmark/calibration');
@@ -4810,6 +4830,13 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('report --compactions: only the automatic Opus 5 one outside the bench counts', /Counted: 1 of the 8/.test(r.stdout) && /no -- manual trigger/.test(r.stdout) && /no -- benchmark\/calibration/.test(r.stdout));
   t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2099-01-01/.test(rep('--since=2099-01-01').stdout));
   t('report --compactions --since: a non-date is refused, exit 1', rep('--since=someday').status === 1);
+  n = 0;
+  writeFileSync(join(dir, 'small1.jsonl'), [req(150000, 500, 2), { type: 'system', subtype: 'compact_boundary', timestamp: at(3), compactMetadata: { trigger: 'auto', preTokens: 167000 } },
+    req(40000, 40000, 4), req(41000, 500, 5)].map(e => JSON.stringify({ sessionId: 'small1', cwd: '/w', ...e })).join('\n') + '\n');
+  const rSmall = rep();
+  rmSync(join(dir, 'small1.jsonl'));
+  t('report --compactions: a compaction in a session never past 200k is listed with its reason and not counted',
+    /Compactions -- 4 found/.test(rSmall.stdout) && /no -- session never past 200k: may be the model's own limit/.test(rSmall.stdout) && /Counted: 1 of the 8/.test(rSmall.stdout), rSmall.stdout);
 
   /* report --share pools the same sessions into numbers a person can paste anywhere. A session full of things that
      must not leave the machine -- a path in its cwd and command, a session id, a version that is a path, a noTrim
@@ -4848,6 +4875,12 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   lower.boundaries[0].preTokens = 200000;
   t('sharePool: the median of an even count is the mean of the middle two',
     TR.sharePool([TR.parseTranscript(join(dir, 'auto1.jsonl')), lower], []).compactions.pre === 250000);
+  const small = TR.parseTranscript(join(dir, 'auto1.jsonl'));
+  small.boundaries[0].preTokens = 167000;
+  small.requests.forEach((q) => { if (q.usage && q.usage.cache_read_input_tokens > 200000) q.usage.cache_read_input_tokens = 166000; });
+  const smallPool = TR.sharePool([small], []);
+  t('sharePool: a compaction where a 200k-context model compacts on its own is found, not counted, and adds nothing to the net',
+    smallPool.compactions.found === 1 && smallPool.compactions.counted === 0 && smallPool.compactions.small === 1 && smallPool.net.compactions === null, JSON.stringify(smallPool.compactions));
   writeFileSync(join(cfgC, 'tokenbrake.json'), JSON.stringify({ compactPrep: true, maxChars: 8000, noTrim: ['secret-cmd'], tools: { Bash: { noTrim: ['secret-too'] } } }));
   writeFileSync(join(cfgC, 'settings.json'), JSON.stringify({ autoCompactWindow: 300000 }));
   const share = (...a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--share', ...a], { encoding: 'utf8', env: { ...env, CLAUDE_CONFIG_DIR: cfgC }, cwd: cfgC });
