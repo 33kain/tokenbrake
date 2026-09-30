@@ -2111,3 +2111,21 @@ Branch `claude/release-0.9.0`. #144 is merged. 0.9.0 carries `report --share` (#
 
 Next: the owner's Publish run. Then `npx tokenbrake report --share` works everywhere, and the first outside block
 (the owner's friend) can come from it instead of `npx github:33kain/tokenbrake`.
+
+## Site: the brake first — 2026-09-30
+
+Branch `claude/site-brake-first`. 0.9.0 is on npm, so everything the site names runs from the registry. The site
+still told the 0.4.0 story (PR #86): the report first, "two hooks", no compaction window, a hand-typed report in the
+pre-0.6.0 layout, and no `--share`. The owner's own view since 2026-09-18 is that the report is the gauge, not the
+product, and the pair is the first part of the brake that passed a measurement.
+
+- **Order:** `npx tokenbrake init` at the top; stage B's frozen numbers as three figures (8 compactions, 47.2 points
+  saved, at most 13.7 back; a point is 1% of the five-hour window); carried vs. size as the reason; the four things
+  `init` installs; what was measured and the limits (one person's work, Opus on the 1M context, `claude -p`
+  unmeasured), the trim's noise-band record, and the author's `--share` net of 2026-09-30 (55.6 = 52.6 compactions +
+  3.0 trim); the report as the gauge with `report.svg` (the real 0.6.0 layout, which the README already uses) in place
+  of the typed excerpt; `report --share` into an issue as the last step.
+- `og-image.png` re-rendered from `og-image.html` with headless Edge (the command is in that file's header).
+- Checked in headless Edge: light, dark, and a 360px frame with no horizontal scroll.
+- **Open:** the README still opens on the report. The two should tell the same story; that is the owner's call, in
+  its own PR.
