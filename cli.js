@@ -1190,12 +1190,22 @@ function shareReport() {
       out.push(`  ${verdict(c)} (the rule passes under ${Math.round(transcript.STAGE2.share * 100)}%)`);
       if (c.byModel.length > 1) for (const m of c.byModel) out.push(`  ${m.label}: ${m.counted} counted, saving ${m.saving.toFixed(1)} pts, ${verdict(m)}`);
     }
-    const priced = trims.count > trims.unpriced, inPts = (x) => priced ? ', ~ ' + pts(x) + ' pts' : '';
+    const priced = S.net.guard != null, inPts = (x) => priced ? ', ~ ' + pts(x) + ' pts' : '';
     out.push(`guard: ran in at least ${S.guarded} of ${S.sessions} sessions | ${pl(trims.count, 'trim')}, ~ ${k(trims.saved)} tokens kept out,`
       + ` ~ ${k(trims.savedCarried)} token-reads not carried${inPts(trims.pts)}`);
     if (trims.count) out.push(`  pulled back: ${back.backfired ? back.backfired + ', ~ ' + k(back.recoveredCarried) + ' token-reads' + inPts(back.recoveredPts) : 'none'}`
-      + ` | net ~ ${k(trims.savedCarried - back.recoveredCarried)} token-reads${inPts(trims.pts - back.recoveredPts)}`);
+      + ` | net ~ ${k(trims.savedCarried - back.recoveredCarried)} token-reads${inPts(S.net.guard)}`);
     out.push(`compactPrep: ${pl(S.preps, 'working set')} injected | coldWarn: ${pl(S.warnings, 'warning')}, ${S.shown} shown`);
+    /* The compactions are the brake's only under a window set below Claude Code's own: at that window the saving is
+       about nil, and charging the compaction to the brake would book a loss it did not cause. One decimal throughout,
+       so the parts add up to the sum as printed. */
+    const ev = envWindow(settings);   // settings.env may hold any JSON; Number() of an odd object throws
+    const w = settings.autoCompactWindow != null ? settings.autoCompactWindow : typeof ev === 'string' || typeof ev === 'number' ? Number(ev) : NaN;
+    const ours = !base.why && Number.isFinite(w) && w > 0 && w < transcript.DEFAULT_COMPACT_WINDOW;
+    const cn = ours ? S.net.compactions : null, gn = S.net.guard, p1 = (x) => (Math.round(x * 10) / 10 || 0).toFixed(1);
+    const parts = [cn != null && `compactions ${p1(cn)} (cost at the bound)`, gn != null && `guard ${p1(gn)} (pulled back taken off)`].filter(Boolean);
+    out.push((parts.length ? `brake net: ~ ${p1((cn || 0) + (gn || 0))} pts = ${parts.join(' + ')}` : 'brake net: nothing measured yet')
+      + (S.net.compactions != null && !ours ? " | compactions left out: the window is not set below Claude Code's own" : ''));
     out.push('Points: the five-hour window at the author\'s calibration (AB-TASK.md). ~ = estimated at 4 chars a token.');
   }
   console.log('Numbers only: no paths, commands, file names, session ids or transcript text. Paste the block where you');

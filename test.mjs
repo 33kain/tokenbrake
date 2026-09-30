@@ -4786,6 +4786,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const later = TR.sharePool(pair, shareLedger, { since: Date.parse('2026-09-21') }), both = TR.sharePool(pair, shareLedger);
   t('sharePool: --since keeps the sessions that started on or after it; the version is the first one recorded; an id comes from the file',
     later.sessions === 0 && later.compactions.found === 0 && both.sessions === 2 && both.version === '2.1.9' && pair[1].sessionId === 'man1');
+  const manOnly = TR.sharePool([TR.parseTranscript(join(dir, 'man1.jsonl'))], shareLedger);
+  t('sharePool: a net part is null with nothing to measure -- no counted compaction, no priced trim',
+    later.net.compactions === null && later.net.guard === null && manOnly.net.compactions === null && manOnly.net.guard === null
+    && Number.isFinite(pooled.net.compactions) && Number.isFinite(pooled.net.guard), JSON.stringify([later.net, manOnly.net, pooled.net]));
   const lower = TR.parseTranscript(join(dir, 'auto1.jsonl'));
   lower.boundaries[0].preTokens = 200000;
   t('sharePool: the median of an even count is the mean of the middle two',
@@ -4803,6 +4807,10 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   ts('report --share: the guard\'s trim, and the ledger rows of pooled sessions only',
     /guard: ran in at least 2 of 3 sessions \| 1 trim, ~ 10k tokens kept out/.test(so) && /coldWarn: 1 warning, 1 shown/.test(so)
     && /compactPrep: 1 working set injected/.test(so) && /pulled back: none \| net ~ 29k token-reads/.test(so));
+  // saving 0.2 less 1.6 at the bound, plus the trim's 0.09: a compaction that cost more than it saved counts against
+  ts('report --share: one net for the brake, the compactions at the bound plus the guard, a loss kept as a loss',
+    /brake net: ~ -1\.3 pts = compactions -1\.4 \(cost at the bound\) \+ guard 0\.1 \(pulled back taken off\)\n/.test(so)
+    && /net ~ 29k token-reads, ~ 0\.09 pts/.test(so));
   ts('report --share: settings as knob names and numbers, a list only counted',
     /compaction window 300,000 \(yours; init leaves it\)/.test(so) && /maxChars 8,000/.test(so) && /noTrim \(1 entry\)/.test(so) && /compactPrep on/.test(so)
     && /per-tool settings \(1 tool\)/.test(so) && /Claude Code \? \|/.test(so));
@@ -4821,6 +4829,8 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   const odd = share().stdout;
   writeFileSync(join(cfgC, 'settings.json'), '{ "autoCompactWindow": 300000, }');
   const broken = share().stdout;
+  t('report --share: under Claude Code\'s own window (or an unknown one) the compactions are not the brake\'s; the guard still is',
+    [odd, broken].every((o) => /brake net: ~ 0\.1 pts = guard 0\.1 \(pulled back taken off\) \| compactions left out: the window is not set below Claude Code's own/.test(o)));
   t('report --share: an unreadable tokenbrake.json, a window that is not a number, an unreadable settings.json',
     /tokenbrake\.json: unreadable \(it is not valid JSON\)/.test(odd) && /CLAUDE_CODE_AUTO_COMPACT_WINDOW=\(not a whole number\)/.test(odd)
     && !/secret/.test(odd) && /install: unknown \(settings\.json unreadable\) \| compaction window unknown/.test(broken));

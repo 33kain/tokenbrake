@@ -198,7 +198,10 @@ Staged sessions are left out, as in the other pooled views, and counted. The blo
 - the points of the five-hour window, split into re-reads, writes and output;
 - the compactions, counted as `--compactions` counts them;
 - what the guard kept out, and what was pulled back;
-- how many `compactPrep` working sets and `coldWarn` warnings there were.
+- how many `compactPrep` working sets and `coldWarn` warnings there were;
+- the brake's net in points: the counted compactions' saving less their cost at the bound (only under a window set
+  below Claude Code's own, since at its own window a compaction is not the brake's), plus the guard's saving less
+  what was pulled back.
 
 It is numbers only: no path, command, file name, session id or line of a transcript. A `noTrim` or `alwaysCap`
 list shows only how many entries it has. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
