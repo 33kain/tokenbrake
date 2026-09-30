@@ -1999,9 +1999,40 @@ function tuneReport() {
 }
 
 function help() {
-  console.log(`tokenbrake -- find out what ate your Claude Code context, then brake it if there is anything to brake
+  console.log(`tokenbrake -- stop re-sending what your Claude Code session no longer needs
 
-STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code already keeps.
+THE BRAKE
+
+  npx tokenbrake init [--project] [--node=<path>]
+                                      install hooks (user scope, or this project's .claude/); the first
+                                      user-scope init also sets autoCompactWindow ${fmt(COMPACT_WINDOW)} with
+                                      compactPrep on, unless you set either yourself;
+                                      --node pins the executable the hook spawns (default: this node,
+                                      or plain 'node' for --project so the file stays shareable)
+  npx tokenbrake uninstall [--project]
+                                      remove the hooks, and init's ${fmt(COMPACT_WINDOW)} window if it is unchanged
+  npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
+  npx tokenbrake doctor [--project] [--fix]
+                                      a health check as a prioritized problem list, each with a remedy;
+                                      exits non-zero when an ERROR remains. --fix re-copies a stale guard
+  npx tokenbrake preset <name>        apply a named config profile: off | minimal | balanced | aggressive
+                                      (merged into ~/.claude/tokenbrake.json); preset list shows them
+  npx tokenbrake outputs              list the full outputs the guard saved when it trimmed a result
+  npx tokenbrake show <id>            print one saved full output whole (id from 'outputs'; a prefix works)
+  npx tokenbrake tune                 read your recent sessions and recommend which off-by-default features to
+      [--cwd=<text>]                  turn on: each feature's real record where it has fired (fired / pulled
+      [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
+                                      where it has not, plus the Read cap's health and a per-person grid and
+                                      advice for maxChars and readMaxBytes (recommend-only). Prints the exact
+                                      knob to set. Staged sessions skipped
+      --sweep                         the stateful features (dedup, reReadElide, readAfterEdit) replayed over your
+                                      transcripts at several values of each knob, your own marked. Data only
+      --write                         turn ON the features with a clean MEASURED record (estimates, and features
+                                      that backfired, are left for you to decide). Merges into tokenbrake.json,
+                                      never replaces; aborts rather than overwrite a malformed config
+  npx tokenbrake clean [--days=7]     delete saved full outputs older than N days
+
+THE REPORT -- the brake's gauge. Nothing to install; it reads the transcripts Claude Code already keeps.
 
   npx tokenbrake report               what ate your tokens last session, in about twenty lines: context,
                                       where the tool output went, the heaviest results, and -- when the
@@ -2046,39 +2077,10 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
                                       tokens, points, compactions and what the guard kept out. Numbers
                                       only -- no paths, commands, file names or transcript text.
                                       --since=YYYY-MM-DD keeps the sessions started on or after that day
-      --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
-                                      and was carried, what the guard trimmed -- the AB-TASK.md table
+      --compare <A> <B>               two sessions side by side in tokens and counts, with B's change
+                                      against A -- the AB-TASK.md table
 
-STEP TWO -- the brake, if your report says there is something in its reach.
-
-  npx tokenbrake init [--project] [--node=<path>]
-                                      install hooks (user scope, or this project's .claude/); the first
-                                      user-scope init also sets autoCompactWindow ${fmt(COMPACT_WINDOW)} with
-                                      compactPrep on, unless you set either yourself;
-                                      --node pins the executable the hook spawns (default: this node,
-                                      or plain 'node' for --project so the file stays shareable)
-  npx tokenbrake uninstall [--project]
-                                      remove the hooks, and init's ${fmt(COMPACT_WINDOW)} window if it is unchanged
-  npx tokenbrake status               shows what is installed and spawns each hook once, as Claude Code would
-  npx tokenbrake doctor [--project] [--fix]
-                                      a health check as a prioritized problem list, each with a remedy;
-                                      exits non-zero when an ERROR remains. --fix re-copies a stale guard
-  npx tokenbrake preset <name>        apply a named config profile: off | minimal | balanced | aggressive
-                                      (merged into ~/.claude/tokenbrake.json); preset list shows them
-  npx tokenbrake outputs              list the full outputs the guard saved when it trimmed a result
-  npx tokenbrake show <id>            print one saved full output whole (id from 'outputs'; a prefix works)
-  npx tokenbrake tune                 read your recent sessions and recommend which off-by-default features to
-      [--cwd=<text>]                  turn on: each feature's real record where it has fired (fired / pulled
-      [--session=<prefix>]            back / saved, from the backfire audit) or a labelled opportunity estimate
-                                      where it has not, plus the Read cap's health and a per-person grid and
-                                      advice for maxChars and readMaxBytes (recommend-only). Prints the exact
-                                      knob to set. Staged sessions skipped
-      --sweep                         the stateful features (dedup, reReadElide, readAfterEdit) replayed over your
-                                      transcripts at several values of each knob, your own marked. Data only
-      --write                         turn ON the features with a clean MEASURED record (estimates, and features
-                                      that backfired, are left for you to decide). Merges into tokenbrake.json,
-                                      never replaces; aborts rather than overwrite a malformed config
-  npx tokenbrake clean [--days=7]     delete saved full outputs older than N days`);
+Start with npx tokenbrake init, work as usual, then npx tokenbrake report shows what the brake lowered.`);
 }
 
 const cmds = { init, uninstall, status, doctor, report, tune: tuneReport, preset, show: showOutput, outputs, ls: outputs, clean, help };

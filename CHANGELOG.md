@@ -5,6 +5,8 @@
 - README and the package description lead with the brake: `npx tokenbrake init`, the compaction pair and its stage B
   figures first, the report as its gauge, and `report --share` as the next measurement. Install lists npx before the
   plugin, because only a user-scope `init` writes the pair.
+- `help` lists the brake first and the report second, as its gauge. It ends on where to start, and its `--compare`
+  line no longer names the cost row the tokens-only change took out of the table.
 
 ## 0.9.0 — 2026-09-30
 

@@ -355,7 +355,7 @@ npx tokenbrake report --compare <A> <B>
 Each argument is a session-id prefix (`tokenbrake report --all` lists them) or a transcript path. The output is
 the table `AB-TASK.md` built by hand, in tokens and counts only: requests, context processed, cache reads and
 writes, output, what tool results entered and were carried (split by tool class), what the guard trimmed, repeat
-reads, with B's change against A.
+reads and compactions, with B's change against A.
 
 Two sessions differ by more than their configuration. Identical OFF/OFF arms have come out up to 42.6% apart on
 tokens entered, on nothing but how the model planned; the table says what happened, the protocol in
