@@ -83,7 +83,7 @@ less what the model pulled back. The whole record, losses included, is in
 [`EVIDENCE.md`](https://github.com/33kain/tokenbrake/blob/main/EVIDENCE.md).
 
 **Your numbers are the next measurement.** Everything above comes from one machine. After a few days with the brake
-installed, `npx tokenbrake report --share` prints one block of numbers, with no path, command, file name, session id
+installed, `npx tokenbrake report --share` prints one block of numbers from the sessions since, with no path, command, file name, session id
 or line of a transcript; paste it into an [issue](https://github.com/33kain/tokenbrake/issues).
 
 ## Install
@@ -218,12 +218,14 @@ lowered: tool output carried, all context processed and the five-hour window, ea
 with, then the pull-backs subtracted and a **Net against the whole session**, which can go below zero and then
 says so. `report --detail` is everything below.
 
-`report --share` pools every session of your own work into one block to paste into an issue or a message.
+`report --share` pools every session of your own work since `init` ran (every session, without `init`) into one
+block to paste into an issue or a message.
 Staged sessions are left out, as in the other pooled views, and counted. The block holds:
-- the versions, the install, the compaction window, and `tokenbrake.json` as knob names and numbers;
+- the versions, the install and the day `init` ran, the compaction window, and `tokenbrake.json` as knob names and
+  numbers;
 - the tokens processed and the share from cache;
 - the points of the five-hour window, split into re-reads, writes and output;
-- the compactions, counted as `--compactions` counts them;
+- the compactions, counted as `--compactions` counts them, with each model's saving and recovery;
 - what the guard kept out, and what was pulled back;
 - how many `compactPrep` working sets and `coldWarn` warnings there were;
 - the brake's net in points: the counted compactions' saving less their cost at the bound (only under a window set
@@ -231,9 +233,11 @@ Staged sessions are left out, as in the other pooled views, and counted. The blo
   what was pulled back.
 
 It is numbers only: no path, command, file name, session id or line of a transcript. A `noTrim` or `alwaysCap`
-list shows only how many entries it has. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
+list shows only how many entries it has. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day instead.
 So far the brake is measured on its author's work alone, so a block from another machine is the evidence it needs
-next ([issues](https://github.com/33kain/tokenbrake/issues)).
+next ([issues](https://github.com/33kain/tokenbrake/issues)). Send it within 30 days of `init`: Claude Code
+deletes older transcripts by default. Blocks from several machines pool toward the 8 counted compactions the verdict
+needs, so a block with fewer still counts.
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
 compacts, so a 30k-token test dump at request 3 of 60 is read 57 times. `report` reads the Claude Code

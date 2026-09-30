@@ -2218,3 +2218,54 @@ move: 21 compactions, 18 counted; weights, saving, recovery, charge, the 50% rul
   rule, the row fallback, `--compactions` and `--share`. Skipped: rounding the listing's size against 200k, since
   the rule is per session and the listing shows no session figure. `/security-review`: no finding; the share line
   adds a count and a constant, and the transcript's sizes are only compared.
+
+## Blocks from other machines pool toward the 8 — 2026-09-30
+
+Branch `claude/pool-outside-blocks`. #151 is merged. The owner set the first outside block aside: the person asked
+is very busy and not expected to send one. The path to 9 is now several people's blocks, and one block rarely holds
+8 counted compactions (the author's took ten days). The AB-TASK amendment of the same date replaces rule 2 of how an
+outside block is read. It is written before any outside block is read.
+- **Entry.** A block counts when its version is later than 0.9.1 and its install shows the hooks and init's own
+  pair: the window marked `(set by init)` and `compactPrep on`, with no `enabled off`. Its sessions must start at init.
+  The author's machines never count. Only the latest block from each machine enters.
+- **Verdict.** The pool sums the blocks' per-model lines as printed, adding a charge of 1.6 per counted compaction.
+  The pooled verdict is read once, at 8 counted; each model's verdict is read once, when that model reaches 8.
+  A FAIL or NOT YET stands until a new amendment.
+- **Exclusions stated.** A window set by hand (the plugin path) is recorded and not pooled: nothing shows when it
+  took effect. Stage B's "felt worse" log is the author's own and has no counterpart in an outside block.
+
+The code follows so the block can be read that way.
+- **Default `--since`.** After init, `report --share` starts at the moment init ran (`init.json`'s `at`), says
+  `started since init`, and gives the day on its install line. Before, it pooled every session, so compactions
+  from before init, at Claude Code's own window, were charged to the brake. The plain `npx tokenbrake report --share`
+  on the site and in the README now makes a block that can enter the pool.
+- **Per-model lines.** One line per counted model, with its recovery.
+- **Knobs.** `compactPrep` and `coldWarn` show as on only from their top-level key, as the guard reads them.
+- **Verdict wording.** It says a verdict needs 8 counted "pooled across blocks", so a small block still gets sent.
+- **Docs.** README, site and `help` say the block covers the sessions since init.
+
+The owner's own block does not move, since the owner has no `init.json` (plugin install).
+
+- **Review.**
+  - `/simplify`: 4 agents. Fixed: the pool sums one source (the per-model lines), and the tie rule is "computed from
+    the printed figures". A model's FAIL has one consequence whenever it is read. Also fixed: the superseded-block
+    wording, the version wording, and the transcript cleanup (30 days: the latest block wins, undercount accepted).
+    The "felt worse" condition is now stated, and the init day is shown in the block.
+  - `/code-review`: 13 findings. Fixed:
+    - the plain command made blocks the pool could not take (default `since` = init);
+    - the day's granularity let in sessions from before init (the exact time);
+    - `compactPrep on` from a tool entry;
+    - no hooks condition;
+    - the init day not being the pair's (`(set by init)` required);
+    - "a verdict needs 8" discouraging a small block;
+    - tests for no mark, an unreadable `at` and a tool-level `compactPrep`;
+    - stale README, site and `help`.
+
+    Handled in the amendment's text: the plugin path (recorded, not pooled) and machine identity (per sender).
+    Skipped: two-decimal figures (the amendment defines the sum of printed figures), a two-model CLI test (sharePool's
+    per-model unit test covers the fold), and the single-model line repeating the pooled one (one uniform rule to
+    read).
+  - `/security-review`: no finding. `init.json`'s `at` is read only through `Date.parse` and printed as an ISO day,
+    and every new word is fixed.
+
+Next: a release, since blocks count only from the release after 0.9.1. Then the post asking for blocks.

@@ -4549,3 +4549,55 @@ B's population.
 4. **The guard's part stays out of the verdict.** A block's guard line is recorded and read as its own figure.
 
 This is written before the change merges and before any block from another machine is read.
+
+## Amendment: blocks from other machines pool toward the 8 — 2026-09-30, before any outside block is read
+
+**Why.** The reading above counts a block toward the brake's 9 only when it holds 8 counted compactions on its own.
+The author's work took ten days at the 300k window to reach 8 (2026-09-19 to 2026-09-29), few people run that many
+long sessions, and the first person asked is not expected to send a block. Eight counted compactions from several
+people's work test the same rule on work that is not the author's, which is what 9 asks. One block with 8 stays
+enough, as before: it is a pool of one.
+
+**The amendment, from this date.** Rule 2 of "Reading a block from another machine" is replaced by the three rules
+below. Rules 1, 3 and 4 stand, and rule 3's record adds the pool's totals after each block.
+- **A block after `init` enters the outside pool** when:
+  - its first line names a tokenbrake later than 0.9.1 (the release after 0.9.1 is the first with the 200k rule
+    above, a line for each counted model, and a block that starts where init ran);
+  - its `install` line shows tokenbrake's hooks, the day init ran, and a compaction window below Claude Code's own
+    `(set by init)`: init installs the window and `compactPrep` together and records when, so the day is the
+    pair's. A window set by hand, as the plugin install asks, cannot show when it took effect; such a block is
+    recorded and not pooled;
+  - its `tokenbrake.json` shows `compactPrep on` and not `enabled off`;
+  - its `sessions` line shows `started since init`: the block's default after init, which leaves out every
+    session started before init ran;
+  - it comes from a machine that is not the author's (the author's cloud sessions are the author's).
+
+  From each machine only its latest block is in the pool, since blocks from one install overlap. The block carries
+  no machine identity: blocks from one sender are one machine, the later replacing the earlier, unless the sender
+  says they come from different machines. Claude Code deletes transcripts after `cleanupPeriodDays` (30 by
+  default), so a later block can have lost an earlier one's sessions; the pool still takes the latest and accepts
+  that undercount, rather than choosing between blocks by what they hold. No block that meets these conditions is
+  left out, except one replaced by a later block from the same machine.
+- **The pool** adds up its blocks' per-model lines, as printed: counted compactions, saving and recovery for each
+  model, and the pooled figures are their sum. The charge is added as `compactionVerdict` adds it: 1.6 points per
+  counted compaction at the bound, 0.5 at the estimate.
+- **The verdict.** The pooled verdict is read once, when the pool first holds 8 counted; each model's verdict is read
+  once, when that model first holds 8, at that reading or later. Each is PASS when recovery plus the charge at the
+  bound is under 50% of the saving, computed from the printed figures. The brake's 9 needs the pooled PASS and a
+  PASS for every model read; a model's FAIL or NOT YET withdraws it whenever it is read, as rule 2 did. A FAIL, or a
+  NOT YET (under 50% only at the estimate), is recorded and stands: later blocks are still recorded and pooled, and
+  a verdict already read is read again only under an amendment written before that reading.
+
+**What the block carries for this.** Until this change `report --share` printed a line per model only when the
+counted compactions spanned two models, and without their recovery; it pooled every session unless `--since` said
+otherwise, and did not say when init ran. It now prints one line for every model counted, with its count, saving and
+recovery; after init it starts at the moment init ran (from `init.json`), says so on its `sessions` line, and gives
+the day on its `install` line; and it shows `compactPrep` and `coldWarn` as on only when their top-level key is,
+as the guard reads them, not when a tool entry sets them.
+
+**Unchanged:** the stage 2 rule (the weights, the 200k rule, `compactionView`'s saving and recovery, the charge, the
+50% rule, the 8 counted), stage B and the author's figures. Stage B's "no more than one felt worse" is the author's
+own log; a block from another machine carries no such log, so it is not part of the outside verdict, as it was not
+in rule 2.
+
+This is written before the change merges and before any block from another machine is read.

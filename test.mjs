@@ -4883,14 +4883,19 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     smallPool.compactions.found === 1 && smallPool.compactions.counted === 0 && smallPool.compactions.small === 1 && smallPool.net.compactions === null, JSON.stringify(smallPool.compactions));
   writeFileSync(join(cfgC, 'tokenbrake.json'), JSON.stringify({ compactPrep: true, maxChars: 8000, noTrim: ['secret-cmd'], tools: { Bash: { noTrim: ['secret-too'] } } }));
   writeFileSync(join(cfgC, 'settings.json'), JSON.stringify({ autoCompactWindow: 300000 }));
+  writeFileSync(join(cfgC, 'tokenbrake', 'init.json'), JSON.stringify({ autoCompactWindow: false, at: '2026-09-19T21:30:00.000Z' }));
   const share = (...a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--share', ...a], { encoding: 'utf8', env: { ...env, CLAUDE_CONFIG_DIR: cfgC }, cwd: cfgC });
   const sh = share(), so = sh.stdout;
   const ts = (name, cond) => t(name, cond, cond ? '' : sh.stderr + so);   // the block, only when a check fails
   ts('report --share: exit 0, one fenced block', sh.status === 0 && (so.match(/^```/gm) || []).length === 2);
   ts('report --share: the sessions of your own work, the staged one left out and counted',
-    /sessions: 3 of your own work, 2026-09-20 to 2026-09-20, /.test(so) && /left out: 1 staged, 0 unreadable/.test(so));
+    /sessions: 3 of your own work started since init, 2026-09-20 to 2026-09-20, /.test(so) && /left out: 1 staged, 0 unreadable/.test(so));
   ts('report --share: compactions as report --compactions counts them, the bench one not in the pool',
     /compactions: 2, 1 automatic; 1 counted by the stage 2 rule/.test(so) && /a verdict needs 8 counted/.test(so));
+  ts('report --share: the day init ran, which a block after it is read --since',
+    /\ninstall: [^|\n]*\(init 2026-09-19\) \| compaction window/.test(so));
+  ts('report --share: a line for the one model counted, with its recovery, so blocks from several machines add up per model',
+    /\n  Opus 5(\.5)?: 1 counted, saving \d+\.\d pts, recovery \d+\.\d pts, cost at the bound \d+% of the saving -- a verdict needs 8 counted, pooled across blocks\n/.test(so));
   ts('report --share: the guard\'s trim, and the ledger rows of pooled sessions only',
     /guard: ran in at least 2 of 3 sessions \| 1 trim, ~ 10k tokens kept out/.test(so) && /coldWarn: 1 warning, 1 shown/.test(so)
     && /compactPrep: 1 working set injected/.test(so) && /pulled back: none \| net ~ 29k token-reads/.test(so));
@@ -4909,6 +4914,22 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('report --share --since: only a calendar day; "9/19" (which Date.parse reads as 2001) and a non-date are refused',
     share('--since=9/19').status === 1 && share('--since=someday').status === 1 && rep('--since=9/19').status === 1
     && /started since 2026-09-20/.test(share('--since=2026-09-20').stdout));
+  /* After init the block starts where init ran, unless --since says otherwise; a mark with no readable time, or
+     none, keeps every session. compactPrep set on a tool is not on: the guard reads only the top level. */
+  const initJson = join(cfgC, 'tokenbrake', 'init.json'), mark = (x) => writeFileSync(initJson, JSON.stringify(x));
+  mark({ autoCompactWindow: true, at: '2026-09-21T00:00:00.000Z' });
+  const afterAll = share().stdout;
+  mark({ autoCompactWindow: true, at: 'yesterday' });
+  const oddMark = share().stdout;
+  rmSync(initJson);
+  writeFileSync(join(cfgC, 'tokenbrake.json'), JSON.stringify({ tools: { Bash: { compactPrep: true } } }));
+  const noMark = share().stdout;
+  t('report --share: after init the block starts where init ran; an unreadable time, or no mark, keeps every session',
+    /\(init 2026-09-21\)/.test(afterAll) && /sessions: none of your own work started since init/.test(afterAll)
+    && [oddMark, noMark].every((o) => /sessions: 3 of your own work, 2026-09-20/.test(o) && !/\(init /.test(o)), afterAll + oddMark + noMark);
+  t('report --share: compactPrep set on a tool is not shown as on, since the guard reads only the top level',
+    /tokenbrake\.json: per-tool settings \(1 tool\)/.test(noMark) && !/compactPrep on/.test(noMark), noMark);
+  mark({ autoCompactWindow: false, at: '2026-09-19T21:30:00.000Z' });
   /* What a broken or odd setup says: an unreadable tokenbrake.json is named, not read as "none"; a window set in the
      environment is shown only as a whole number; an unreadable settings.json leaves the install unknown. */
   writeFileSync(join(cfgC, 'tokenbrake.json'), '{ "compactPrep": true, }');
@@ -4920,7 +4941,7 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
     [odd, broken].every((o) => /brake net: ~ 0\.1 pts = guard 0\.1 \(pulled back taken off\) \| compactions left out: the window is not set below Claude Code's own/.test(o)));
   t('report --share: an unreadable tokenbrake.json, a window that is not a number, an unreadable settings.json',
     /tokenbrake\.json: unreadable \(it is not valid JSON\)/.test(odd) && /CLAUDE_CODE_AUTO_COMPACT_WINDOW=\(not a whole number\)/.test(odd)
-    && !/secret/.test(odd) && /install: unknown \(settings\.json unreadable\) \| compaction window unknown/.test(broken));
+    && !/secret/.test(odd) && /install: unknown \(settings\.json unreadable\) \(init 2026-09-19\) \| compaction window unknown/.test(broken));
   rmSync(cfgC, { recursive: true, force: true });
 }
 
