@@ -181,6 +181,7 @@ npx tokenbrake report --reads             # every file you read whole -- the evi
 npx tokenbrake report --reach             # how much of what your tools deliver the trim can act on at all
 npx tokenbrake report --backfire          # what the guard withheld vs. what the model pulled back -- the net
 npx tokenbrake report --compactions       # every compaction priced: what the drop saves, what re-reading cost
+npx tokenbrake report --share             # every session pooled into one block of numbers, to paste where others read it
 npx tokenbrake tune                       # read your recent sessions and recommend which off-by-default features to turn on
 ```
 
@@ -189,6 +190,20 @@ cache, where the tool output went, the five heaviest results, and -- when the gu
 lowered: tool output carried, all context processed and the five-hour window, each without (an estimate) and
 with, then the pull-backs subtracted and a **Net against the whole session**, which can go below zero and then
 says so. `report --detail` is everything below.
+
+`report --share` pools every session of your own work into one block to paste into an issue or a message.
+Staged sessions are left out, as in the other pooled views, and counted. The block holds:
+- the versions, the install, the compaction window, and `tokenbrake.json` as knob names and numbers;
+- the tokens processed and the share from cache;
+- the points of the five-hour window, split into re-reads, writes and output;
+- the compactions, counted as `--compactions` counts them;
+- what the guard kept out, and what was pulled back;
+- how many `compactPrep` working sets and `coldWarn` warnings there were.
+
+It is numbers only: no path, command, file name, session id or line of a transcript. A `noTrim` or `alwaysCap`
+list shows only how many entries it has. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
+So far the brake is measured on its author's work alone, so a block from another machine is the evidence it needs
+next ([issues](https://github.com/33kain/tokenbrake/issues)).
 
 A tool result is not paid for once. It is re-sent as context on every later request until the session
 compacts, so a 30k-token test dump at request 3 of 60 is read 57 times. `report` reads the Claude Code

@@ -2034,3 +2034,21 @@ is deleted: `status` and `doctor` read the plugin alone and pass.
 Next: `Unreleased` holds coldWarn and #140; 0.7.0 is on npm. A version bump to 0.8.0 (`package.json`,
 `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`), then the owner's Publish run. Then tokenbrake parks
 again, and the owner's work goes back to contexa.
+
+## `report --share`: a block of numbers to paste — 2026-09-30
+
+Branch `claude/report-share`. 0.8.0 is on npm (published 2026-09-30, `latest`), and the owner's machine runs the
+plugin at 0.8.0 with the leftover guard copy and the old plugin cache folders deleted. The brake is at 8 on the
+owner's scale: measured outside the noise band on the owner's work (stage B). 9 needs the same measurement on other
+people's machines, and this is the first step toward it.
+
+- **What it prints:** one fenced block, pooled over every session of the person's own work (staged ones left out
+  and counted, as in the other pooled views). It holds the versions, the install, the compaction window,
+  `tokenbrake.json` as knob names and numbers, the tokens processed and from cache, the five-hour window by kind,
+  the compactions as `--compactions` counts them (with the stage 2 verdict once 8 count), what the guard kept out
+  and what was pulled back, and the `compactPrep` and `coldWarn` counts. `--since=<date>` narrows it.
+- **Numbers only, by construction:** every string printed is fixed text, a knob name from the guard's `DEFAULTS`, a
+  calibrated model's label, the platform, or a version that passes a strict pattern. A `noTrim` or `alwaysCap` list
+  is only counted. `test.mjs` runs it over a session whose cwd, command, version and ledger row carry a path, and
+  checks that none of it, and no session or tool id, is in the output.
+- **Points** are the author's calibration, and the block says so. Another plan may weigh the kinds differently.

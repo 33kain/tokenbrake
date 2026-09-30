@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **`report --share`: every session pooled into one block of numbers to paste where others read it.** It holds
+  the versions, the install and the compaction window, `tokenbrake.json` as knob names and numbers, the tokens
+  processed and from cache, the five-hour window by kind, the compactions as `--compactions` counts them, what the
+  guard kept out and what was pulled back, and the `compactPrep` and `coldWarn` counts. No path, command, file
+  name, session id or line of a transcript: every string it prints is fixed text, a knob name, a model label or a
+  checked version. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
+- `report --compactions --since` takes a calendar day (YYYY-MM-DD) and refuses anything else: `9/19` used to read
+  as 2001-09-19 and widen the view without a word.
+
 ## 0.8.0 — 2026-09-30
 
 A warning before an idle session's cache goes cold (`coldWarn`, off by default, Windows only), and `status` and

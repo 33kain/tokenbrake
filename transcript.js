@@ -693,6 +693,66 @@ function compactionVerdictByModel(counted) {
   }
   return [...by].map(([label, rs]) => ({ label, ...compactionVerdict(rs) }));
 }
+/* A session's compactions from `since` (a time, or null for all), each with why it does not count ('' when it does):
+   the rows `report --compactions` lists and `report --share` pools. */
+function compactionRows(parsed, since) {
+  if (!parsed.boundaries.length) return [];   // compactionView would still normalize every result's path
+  return compactionView(parsed).filter((r) => since == null || (r.at || 0) >= since).map((r) => ({ ...r, why: compactionWhy(r, parsed) }));
+}
+
+/* `report --share`'s numbers: a fold over the sessions the caller pooled, newest first (any iterable, so they are
+   parsed one at a time), and the ledger. With `since`, only the sessions that started on or after it count, so
+   every figure covers the same stretch. The block it feeds leaves the machine, so everything this returns is a
+   number, a calibrated model's label, a verdict word, or a version shaped like one -- never a path, a command or an
+   id. test.mjs walks every leaf to hold it to that. */
+const safeVer = (v) => /^\d{1,4}(\.\d{1,6}){0,3}([-+][0-9A-Za-z.]{1,20})?$/.test(String(v || '')) ? String(v) : '?';
+function sharePool(sessions, ledger, { since = null } = {}) {
+  const add = (acc, x) => { for (const k in acc) acc[k] += x[k]; };
+  const use = { processed: 0, cacheRead: 0, cacheWrite: 0, input: 0, out: 0 };
+  const draw = { read: 0, write: 0, output: 0, priced: 0, unpriced: 0 };
+  const trims = { count: 0, unpriced: 0, saved: 0, savedCarried: 0, pts: 0 };
+  const back = { backfired: 0, recoveredCarried: 0, recoveredPts: 0 };
+  const models = new Set(), ids = new Set(), compactions = [];
+  let n = 0, requests = 0, guarded = 0, first = Infinity, last = -Infinity, version = null;
+  for (const p of sessions) {
+    const at = p.requests.map((q) => Date.parse(q.at)).filter(Number.isFinite);
+    const start = Math.min(...at);   // Infinity when undated, which no --since keeps
+    if (since != null && !(start >= since)) continue;
+    // Without its id, the ledger joins below would credit every session's rows to this one.
+    if (!p.sessionId) p.sessionId = path.basename(p.file || '', '.jsonl') || null;
+    n++; ids.add(String(p.sessionId));
+    if (version == null && p.version) version = safeVer(p.version);
+    requests += p.requests.length;
+    first = Math.min(first, start); last = Math.max(last, ...at);
+    add(use, usageTotals(p));
+    const d = limitDraw(p);
+    add(draw, d); d.models.forEach((m) => models.add(m));
+    compactions.push(...compactionRows(p, null));
+    if (guardRan(p, ledger, String(p.sessionId)).ran) guarded++;
+    if (p.results.some((r) => r.marker)) {   // only a result carrying the marker can be a trim
+      carry(p); add(trims, trimSavings(p, ledger)); add(back, backfireAudit(p, ledger));
+    }
+  }
+  const counted = compactions.filter((r) => !r.why);
+  const median = (xs) => {
+    const m = xs.filter(Number.isFinite).sort((a, b) => a - b), h = m.length >> 1;
+    return !m.length ? null : m.length % 2 ? m[h] : (m[h - 1] + m[h]) / 2;
+  };
+  const pick = ({ n: c, saving, recovery, costHigh, verdict }) => ({ counted: c, saving, recovery, costHigh, verdict });
+  const rows = ledger.filter((r) => r && ids.has(String(r.session)));
+  const warned = rows.filter((r) => r.ev === 'coldwarn');
+  return {
+    sessions: n, requests, guarded, version, models: [...models],
+    first: Number.isFinite(first) ? first : null, last: Number.isFinite(last) ? last : null,
+    use, draw, trims, back,
+    compactions: { found: compactions.length, auto: compactions.filter((r) => r.trigger === 'auto').length, ...pick(compactionVerdict(counted)),
+      pre: median(counted.map((r) => r.pre)), post: median(counted.map((r) => r.post)),
+      // each model's verdict too (AB-TASK.md, 2026-09-22 amendment); a counted row's model is calibrated, so its label is one
+      byModel: compactionVerdictByModel(counted).map((m) => ({ label: m.label, ...pick(m) })) },
+    preps: rows.filter((r) => r.ev === 'compact-prep' && r.chars > 0).length,
+    warnings: warned.length, shown: warned.filter((r) => r.shown === true).length,
+  };
+}
 
 /* The carried cost of each result: size x the number of later requests that re-read it, stopping at
    the first compaction after it. Requests after the last result are what "later" means, so the newest
@@ -2681,7 +2741,7 @@ function renderSummaryLine(parsed, marks) {
   return `  ${sid}...  ${String(parsed.requests.length).padStart(4)} req  ${kfmt(u.processed).padStart(6)} processed  ${kfmt(carried).padStart(7)} carried${sv}${cols}  ${(parsed.cwd || '').slice(-40)}`;
 }
 
-module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
+module.exports = { parseTranscript, formatWarning, carry, limitDraw, compactionView, compactionRows, sharePool, safeVer, renderBrief, lookupOf, compactionWhy, compactionVerdict, compactionVerdictByModel, STAGE2, weightsOf, COMPACT_CHARGE, kfmt, guardRan, repeatReads, recoveryReads, backfireAudit, backfireVerdict, readFileOf, readTargets,
   normReadPath, readCapIndex, classifyRangedReads, capBandSpike, startHistogram, readCapFiles,
   unboundedReads, readDepths, triggerGrid, readsWholeFile, fileShape, wholeReadIndex, eofLength,
   reachPooled, commandTool, trimmedResults, trimSavings, pfmt, staged, stagedKind, stagedRow,
