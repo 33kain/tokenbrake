@@ -8,8 +8,8 @@
   until dismissed and expires with the cache. Under Focus assist's "priority only", add Windows PowerShell to the
   priority list, or it may wait unseen in the Action Center; "alarms only" holds it anyway. A new turn moves the
   clock and closing the session drops it. `init` now also registers `Stop` and `SessionEnd` hooks, so re-run it.
-  This is the pilot of `AB-TASK.md`'s 2026-09-25 pre-registration. Its first check, that a cache read keeps the
-  cache alive for another hour, passed on the author's transcripts.
+  A cache read keeps the cache alive for another hour (checked on the author's transcripts), so a message inside
+  the hour keeps it warm. What a warning saves depends on whether you answer it, so no count measures it.
 - **`status` and `doctor` read the plugin install.** They read only the hooks `init` writes to settings.json, so a
   working plugin install showed every hook "missing", and a guard copy an earlier `init` left behind, which nothing
   runs, as STALE. Now they read the plugin's own `hooks.json` too: whether it is enabled, one real spawn of each of

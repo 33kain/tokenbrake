@@ -2014,3 +2014,23 @@ runs it.
   screen on its own. That settles one "not known yet" of the entry above.
 
 Still to see: check 2 from a real session, then check 3. The leftover guard copy on the owner's machine can go.
+
+## coldWarn's pilot closes without a count — 2026-09-30
+
+Branch `claude/coldwarn-close`. #140 is merged, and the leftover `~/.claude/hooks/tokenbrake/` on the owner's machine
+is deleted: `status` and `doctor` read the plugin alone and pass.
+
+- **The first real-session warning** fired at 04:02:13 in this session (`fb888c78`), 50 minutes after its last
+  request, with 198,792 tokens in context. Windows took it (`shown: true`, `quiet` 1). The owner was asleep.
+- **The owner's decision:** what a warning saves depends on whether the person answers it, which tokenbrake cannot
+  change, so it is not counted. The count of 20 and the pass rule are dropped (`AB-TASK.md`, "Amendment: coldWarn's
+  pilot closes without a count"). Check 2 passes on that warning and the owner's word. Check 3 is not staged: 9
+  worked-in gaps since 02:38, all in one session, and no warning inside them.
+- **Unchanged:** coldWarn stays off by default and on in the owner's `tokenbrake.json`. Its ledger row stays as a
+  record.
+- **Stale, left for the next `guard.js` change:** the `coldWarn` default's comment still calls it "the pilot of
+  AB-TASK.md, 2026-09-25". A comment alone does not justify the review loop and a new guard build.
+
+Next: `Unreleased` holds coldWarn and #140; 0.7.0 is on npm. A version bump to 0.8.0 (`package.json`,
+`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`), then the owner's Publish run. Then tokenbrake parks
+again, and the owner's work goes back to contexa.
