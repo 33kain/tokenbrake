@@ -80,6 +80,15 @@ function count(name, def, min) {
   if (!/^\d+$/.test(v) || Number(v) < min) throw new Refusal(name + '=' + v + ' is not a whole number of ' + min + ' or more. Nothing done.');
   return Number(v);
 }
+/* --since=<YYYY-MM-DD>: that day's start (UTC), or null when absent or empty; anything else is refused the same way.
+   A calendar day only, because Date.parse reads "9/19" as 2001-09-19 and would widen the view without a word. */
+function sinceOpt() {
+  const v = opt('--since');
+  if (!v) return null;
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(v) ? Date.parse(v) : NaN;
+  if (!Number.isFinite(since)) throw new Refusal('--since takes a date, like --since=2026-09-19');
+  return since;
+}
 function writeJson(p, obj) {
   /* Write a sibling temp file and rename it over the target, rather than writing p directly: fs.writeFileSync
      opens with O_TRUNC, emptying an existing config before the write runs, so a failed write (full disk, quota,
@@ -125,10 +134,11 @@ const COMPACT_WINDOW = 300000;
 const INIT_MARK = path.join(TB_DIR, 'init.json');
 const envWindow = (settings) => (isObj(settings.env) && settings.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || null;
 const initWindow = (w, mark) => !PROJECT && !!(mark && mark.autoCompactWindow) && w === COMPACT_WINDOW;
-function windowNote(settings, mark) {
+function windowNote(settings, mark, why, masked = false) {
+  if (why) return 'unknown (the settings file ' + why + ')';
   const w = settings.autoCompactWindow, env = envWindow(settings);
-  if (w != null) return (Number.isFinite(w) ? fmt(w) : JSON.stringify(w)) + (initWindow(w, mark) ? ' (set by init)' : ' (yours; init leaves it)');
-  if (env) return `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${env} (yours; init leaves it)`;
+  if (w != null) return (Number.isFinite(w) ? fmt(w) : masked ? 'set, not a number' : JSON.stringify(w)) + (initWindow(w, mark) ? ' (set by init)' : ' (yours; init leaves it)');
+  if (env) return `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${!masked || /^\d+$/.test(env) ? env : '(not a whole number)'} (yours; init leaves it)`;
   if (PROJECT) return `not set at project scope (user-scope init sets ${fmt(COMPACT_WINDOW)})`;
   return 'Claude Code\'s own' + (mark ? ' (init decides once, and has)' : ` (init sets ${fmt(COMPACT_WINDOW)})`);
 }
@@ -390,7 +400,7 @@ function status() {
   if (other && (settingsHas || pluginHas)) console.log(`  also installed at ${otherScope} scope (${other}): the guard runs twice per call here; uninstall one scope`);
   else if (other) console.log(`  installed at ${otherScope} scope instead (${other}): the guard runs once, from there`);
   const mark = readJson(INIT_MARK, null);
-  console.log(`  compaction window: ${base.why ? 'unknown (the settings file ' + base.why + ')' : windowNote(settings, mark)}`);
+  console.log(`  compaction window: ${windowNote(settings, mark, base.why)}`);
   const cfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), null);
   const eff = { ...transcript.GUARD_DEFAULTS, ...(isObj(cfg) ? cfg : {}) };   // merged the way the guard's loadConfig merges it
   const prep = !!(eff.enabled && eff.compactPrep);
@@ -1070,26 +1080,20 @@ function readsReport() {
    staged work (benchmark, calibration and headless sessions), from --since. When the counted ones span models, each model's verdict is
    given too (AB-TASK.md, 2026-09-22 amendment). */
 function compactionsReport() {
-  const sinceArg = opt('--since');
-  const since = sinceArg ? Date.parse(sinceArg) : null;
-  if (sinceArg && !Number.isFinite(since)) { console.log('--since takes a date, like --since=2026-09-19'); process.exitCode = 1; return; }
+  const since = sinceOpt();
   const [chargeLow, chargeHigh] = transcript.COMPACT_CHARGE;
   const rows = [];
   for (const f of transcript.findTranscripts(CFG_DIR)) {
-    if (since && f.mtime < since) continue;   // untouched since then: no later compaction in it
+    if (since != null && f.mtime < since) continue;   // untouched since then: no later compaction in it
     let p;
     try {
       if (!fs.readFileSync(f.file, 'utf8').includes('"compact_boundary"')) continue;   // the cheap test before the full parse
       p = transcript.parseTranscript(f.file);
     } catch { continue; }
-    for (const r of transcript.compactionView(p)) {
-      if (since && (r.at || 0) < since) continue;
-      r.why = transcript.compactionWhy(r, p);
-      rows.push(r);
-    }
+    rows.push(...transcript.compactionRows(p, since));
   }
   const k = transcript.kfmt;
-  console.log('Compactions -- ' + rows.length + ' found' + (since ? ' since ' + sinceArg : '')
+  console.log('Compactions -- ' + rows.length + ' found' + (since != null ? ' since ' + opt('--since') : '')
     + '. Points of the five-hour window, each priced with its model\'s calibrated weights (AB-TASK.md).');
   if (!rows.length) { console.log('\n  None yet. A compaction is recorded in the transcript when Claude Code compacts a session.'); return; }
   console.log('\n  when              trigger  context       later  saving  recovery (files re-read)   counts');
@@ -1118,6 +1122,87 @@ function compactionsReport() {
   console.log('\n  Recovery is inferred: a file read again after a compaction may be one the next step needed anyway.');
 }
 
+/* `--share`: this machine's numbers pooled into one block a person can paste where others read it -- the brake's
+   evidence from machines other than its author's. Numbers only, by construction: sharePool returns numbers and
+   checked labels, and every other string here is fixed text, a knob name from the guard's own DEFAULTS, the
+   platform, or a version that passes safeVer -- never a path, a command, a file name, a session id or a line of a
+   transcript. The pool is the other pooled views' (staged and unreadable sessions left out, and counted); --since
+   keeps the sessions that started on or after that day. */
+function shareReport() {
+  const since = sinceOpt();
+  let staged = 0, unread = 0;
+  function* pool() {
+    for (const f of transcript.findTranscripts(CFG_DIR)) {   // newest first, as sharePool's version wants
+      if (since != null && f.mtime < since) continue;   // untouched since then: it started before
+      const { p, unread: why } = pooledParse(f.file);
+      if (why) unread++;
+      else if (poolSkip(p)) staged++;
+      else yield p;
+    }
+  }
+  const S = transcript.sharePool(pool(), loadLedger(), { since });
+  const { safeVer, pfmt } = transcript;
+  const signed = (f) => (n) => (n < 0 ? '-' : '') + f(Math.abs(n));
+  const k = signed(transcript.kfmt), pts = signed(pfmt);
+  const pct = (x, of) => of > 0 ? Math.round(100 * x / of) + '%' : 'n/a';
+  const pl = (n, one, many = one + 's') => fmt(n) + ' ' + (n === 1 ? one : many);
+  const day = (t) => new Date(t).toISOString().slice(0, 10);
+
+  const base = mergeBase(settingsPath), settings = base.value || {};
+  const { settingsHas, pluginHas, plugin } = installState(settings, !!base.why);
+  const install = settingsHas && pluginHas ? 'settings.json and the plugin (the guard runs twice)'
+    : pluginHas ? 'plugin ' + safeVer(plugin.version) + (base.why ? ', settings.json unreadable' : '')
+    : base.why ? 'unknown (settings.json unreadable)' : settingsHas ? 'settings.json' : 'no hooks found';
+  /* tokenbrake.json as knob names and numbers: a list (noTrim, alwaysCap) is counted, since its entries are
+     commands and paths, and a per-tool entry only by how many tools have one. */
+  const cfgPath = path.join(CFG_DIR, 'tokenbrake.json'), cb = fs.existsSync(cfgPath) ? mergeBase(cfgPath) : null;
+  const cfg = cb && cb.value, knobs = [];
+  if (isObj(cfg)) {
+    for (const [key, d] of Object.entries(transcript.GUARD_DEFAULTS)) {
+      const v = cfg[key];
+      if (typeof d === 'boolean') { if (!d && transcript.isOnIn(cfg, key)) knobs.push(key + ' on'); else if (d && v === false) knobs.push(key + ' off'); }
+      else if (typeof d === 'number') { if (Number.isFinite(v) && v !== d) knobs.push(key + ' ' + fmt(v)); }
+      else if (Array.isArray(v) && JSON.stringify(v) !== JSON.stringify(d)) knobs.push(key + ' (' + pl(v.length, 'entry', 'entries') + ')');
+    }
+    if (isObj(cfg.tools)) knobs.push('per-tool settings (' + pl(Object.keys(cfg.tools).length, 'tool') + ')');
+  }
+
+  const out = [`tokenbrake ${safeVer(readJson(path.join(__dirname, 'package.json'), {}).version)} | Claude Code ${S.version || '?'} | ${process.platform}`,
+    `install: ${install} | compaction window ${windowNote(settings, readJson(INIT_MARK, null), base.why, true)}`
+      + ` | tokenbrake.json: ${!cb ? 'none' : cb.why ? 'unreadable (it ' + cb.why + ')' : knobs.length ? knobs.join(', ') : 'defaults'}`];
+  const left = staged || unread ? `; left out: ${staged} staged, ${unread} unreadable` : '';
+  if (!S.sessions) out.push(`sessions: none of your own work${since != null ? ' started since ' + day(since) : ''}${left}`);
+  else {
+    const { use, draw, compactions: c, trims, back } = S;
+    out.push(`sessions: ${S.sessions} of your own work${since != null ? ' started since ' + day(since) : ''}, ${S.first == null ? 'undated' : day(S.first) + ' to ' + day(S.last)}, ${fmt(S.requests)} requests${left}`);
+    out.push(`tokens: ${k(use.processed)} context processed, ${pct(use.cacheRead, use.processed)} from cache | ${k(use.cacheWrite)} cache writes`
+      + ` | ${k(use.input)} uncached input | ${k(use.out)} output`);
+    const drawn = draw.read + draw.write + draw.output;
+    out.push(!draw.priced ? 'window: unpriced -- no request on a calibrated model'
+      : `window: ~ ${pfmt(drawn)} points over ${fmt(draw.priced)} requests on ${S.models.join(', ')}: re-reads ${pct(draw.read, drawn)},`
+        + ` writes ${pct(draw.write, drawn)}, output ${pct(draw.output, drawn)}` + (draw.unpriced ? ` | ${fmt(draw.unpriced)} requests on other models, unpriced` : ''));
+    out.push(`compactions: ${c.found}, ${c.auto} automatic; ${c.counted} counted by the stage 2 rule`);
+    if (c.counted) {
+      const mid = (x) => x == null ? '?' : k(x);
+      out.push(`  counted: context ${mid(c.pre)} -> ${mid(c.post)} (median) | saving ${c.saving.toFixed(1)} pts | recovery ${c.recovery.toFixed(1)} pts`
+        + ` | charge ${(c.costHigh - c.recovery).toFixed(1)} pts at the bound`);
+      const verdict = (v) => `cost at the bound ${pct(v.costHigh, v.saving)} of the saving -- ${v.verdict || 'a verdict needs ' + transcript.STAGE2.n + ' counted'}`;
+      out.push(`  ${verdict(c)} (the rule passes under ${Math.round(transcript.STAGE2.share * 100)}%)`);
+      if (c.byModel.length > 1) for (const m of c.byModel) out.push(`  ${m.label}: ${m.counted} counted, saving ${m.saving.toFixed(1)} pts, ${verdict(m)}`);
+    }
+    const priced = trims.count > trims.unpriced, inPts = (x) => priced ? ', ~ ' + pts(x) + ' pts' : '';
+    out.push(`guard: ran in at least ${S.guarded} of ${S.sessions} sessions | ${pl(trims.count, 'trim')}, ~ ${k(trims.saved)} tokens kept out,`
+      + ` ~ ${k(trims.savedCarried)} token-reads not carried${inPts(trims.pts)}`);
+    if (trims.count) out.push(`  pulled back: ${back.backfired ? back.backfired + ', ~ ' + k(back.recoveredCarried) + ' token-reads' + inPts(back.recoveredPts) : 'none'}`
+      + ` | net ~ ${k(trims.savedCarried - back.recoveredCarried)} token-reads${inPts(trims.pts - back.recoveredPts)}`);
+    out.push(`compactPrep: ${pl(S.preps, 'working set')} injected | coldWarn: ${pl(S.warnings, 'warning')}, ${S.shown} shown`);
+    out.push('Points: the five-hour window at the author\'s calibration (AB-TASK.md). ~ = estimated at 4 chars a token.');
+  }
+  console.log('Numbers only: no paths, commands, file names, session ids or transcript text. Paste the block where you');
+  console.log('share it; an issue at https://github.com/33kain/tokenbrake/issues reaches the author.\n');
+  console.log(['```text', ...out, '```'].join('\n'));
+}
+
 function report(plain) {
   if (flag('--ledger')) return ledgerReport();
   if (flag('--where')) return whereReport();
@@ -1129,6 +1214,7 @@ function report(plain) {
   if (flag('--cost')) { console.log('report --cost was removed: tokenbrake reports tokens only (entered, carried, cache), never money. The plain report and report --backfire carry the token figures.'); process.exitCode = 1; return; }
   if (flag('--backfire')) return auditReport();
   if (flag('--compactions')) return compactionsReport();
+  if (flag('--share')) return shareReport();
   const top = count('--top', flag('--detail') ? 10 : 5, 1);
   const ledger = loadLedger();
   let file = opt('--transcript');
@@ -1946,6 +2032,10 @@ STEP ONE -- the report. Nothing to install; it reads the transcripts Claude Code
       --compactions [--since=<date>]  every compaction, priced: what the drop in context saves until the next
                                       one, and what re-reading files afterwards cost. The measurement for an
                                       earlier autoCompactWindow (AB-TASK.md, stage 2)
+      --share [--since=<date>]        every session pooled into one block to paste where others read it:
+                                      tokens, points, compactions and what the guard kept out. Numbers
+                                      only -- no paths, commands, file names or transcript text.
+                                      --since=YYYY-MM-DD keeps the sessions started on or after that day
       --compare <A> <B>               two sessions side by side: cost, requests, cache reads, what entered
                                       and was carried, what the guard trimmed -- the AB-TASK.md table
 
@@ -1997,7 +2087,7 @@ const SPEC = {
   doctor:    { flags: ['--project', '--fix'] },
   /* --cost and its --model are retired (2026-09-18, tokens never money) and stay listed so the refusal
      report() prints is what a script that still passes them reads, instead of an unknown-argument error. */
-  report:    { flags: ['--detail', '--all', '--saved', '--ledger', '--where', '--caps', '--reach', '--reads', '--backfire', '--compactions', '--compare', '--cost'],
+  report:    { flags: ['--detail', '--all', '--saved', '--ledger', '--where', '--caps', '--reach', '--reads', '--backfire', '--compactions', '--share', '--compare', '--cost'],
                opts: ['--session', '--transcript', '--top', '--since', '--cwd', '--model'], plainWith: { '--compare': 2 } },
   tune:      { flags: ['--sweep', '--write'], opts: ['--cwd', '--session'] },
   preset:    { plain: 1 },

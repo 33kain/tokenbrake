@@ -4756,6 +4756,74 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   t('report --compactions: only the automatic Opus 5 one outside the bench counts', /Counted: 1 of the 8/.test(r.stdout) && /no -- manual trigger/.test(r.stdout) && /no -- benchmark\/calibration/.test(r.stdout));
   t('report --compactions --since: earlier compactions are left out', /Compactions -- 0 found since 2099-01-01/.test(rep('--since=2099-01-01').stdout));
   t('report --compactions --since: a non-date is refused, exit 1', rep('--since=someday').status === 1);
+
+  /* report --share pools the same sessions into numbers a person can paste anywhere. A session full of things that
+     must not leave the machine -- a path in its cwd and command, a session id, a version that is a path, a noTrim
+     entry -- and none of them may appear in what it prints. */
+  n = 0;
+  const secret = [asst(1, [{ type: 'tool_use', id: 'toolu_secret1', name: 'Bash', input: { command: 'cat /home/secret-owner/notes.txt' } }], 100000, 10000),
+    { type: 'user', timestamp: at(1), message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_secret1', content: 'secret line\n[tokenbrake] trimmed' }] } },
+    req(101000, 500, 2), req(102000, 500, 3)];
+  writeFileSync(join(dir, 'leak1.jsonl'), secret.map(e => JSON.stringify({ sessionId: 'leak1', cwd: '/home/secret-owner/project', version: '/home/secret-owner', ...e })).join('\n') + '\n');
+  mkdirSync(join(cfgC, 'tokenbrake'), { recursive: true });
+  const shareLedger = [
+    { ev: 'post', session: 'leak1', id: 'toolu_secret1', tool: 'Bash', what: 'cat /home/secret-owner/notes.txt', chars: 40000, kept: 2000 },
+    { ev: 'coldwarn', session: 'auto1', shown: true }, { ev: 'coldwarn', session: 'bench1', shown: true },
+    { ev: 'compact-prep', session: 'auto1', chars: 500 }].map(x => ({ t: t0, ...x }));
+  writeFileSync(join(cfgC, 'tokenbrake', 'ledger.jsonl'), shareLedger.map(x => JSON.stringify(x)).join('\n') + '\n');
+  /* The guarantee at the data: every leaf sharePool returns is a number, null, a model label, a verdict word or a
+     version safeVer let through -- here '?', since the fixture's version is a path. */
+  const pooled = TR.sharePool(['leak1', 'auto1', 'man1'].map(x => TR.parseTranscript(join(dir, x + '.jsonl'))), shareLedger);
+  const leaves = (o) => o && typeof o === 'object' ? Object.values(o).flatMap(leaves) : [o];
+  const bad = leaves(pooled).filter(v => !(v === null || typeof v === 'number' || /^(Opus 5(\.5)?|PASS|NOT YET|FAIL|\?)$/.test(v)));
+  t('sharePool: every leaf is a number, a model label, a verdict word or a checked version', !bad.length && pooled.sessions === 3, JSON.stringify(bad));
+  t('safeVer: a version passes; a path, an id, a name or nothing does not', TR.safeVer('2.1.282') === '2.1.282' && TR.safeVer('1.0.0-beta.2') === '1.0.0-beta.2'
+    && TR.safeVer('/home/x') === '?' && TR.safeVer('6f1c2a9e-0b1d-4c2e-9f3a-2b7d8e1c0a45') === '?' && TR.safeVer('379290d') === '?'
+    && TR.safeVer('mili') === '?' && TR.safeVer(undefined) === '?');
+  const pair = [TR.parseTranscript(join(dir, 'auto1.jsonl')), TR.parseTranscript(join(dir, 'man1.jsonl'))];
+  pair[0].version = '2.1.9';
+  pair[1].sessionId = null;
+  const later = TR.sharePool(pair, shareLedger, { since: Date.parse('2026-09-21') }), both = TR.sharePool(pair, shareLedger);
+  t('sharePool: --since keeps the sessions that started on or after it; the version is the first one recorded; an id comes from the file',
+    later.sessions === 0 && later.compactions.found === 0 && both.sessions === 2 && both.version === '2.1.9' && pair[1].sessionId === 'man1');
+  const lower = TR.parseTranscript(join(dir, 'auto1.jsonl'));
+  lower.boundaries[0].preTokens = 200000;
+  t('sharePool: the median of an even count is the mean of the middle two',
+    TR.sharePool([TR.parseTranscript(join(dir, 'auto1.jsonl')), lower], []).compactions.pre === 250000);
+  writeFileSync(join(cfgC, 'tokenbrake.json'), JSON.stringify({ compactPrep: true, maxChars: 8000, noTrim: ['secret-cmd'], tools: { Bash: { noTrim: ['secret-too'] } } }));
+  writeFileSync(join(cfgC, 'settings.json'), JSON.stringify({ autoCompactWindow: 300000 }));
+  const share = (...a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), 'report', '--share', ...a], { encoding: 'utf8', env: { ...env, CLAUDE_CONFIG_DIR: cfgC }, cwd: cfgC });
+  const sh = share(), so = sh.stdout;
+  const ts = (name, cond) => t(name, cond, cond ? '' : sh.stderr + so);   // the block, only when a check fails
+  ts('report --share: exit 0, one fenced block', sh.status === 0 && (so.match(/^```/gm) || []).length === 2);
+  ts('report --share: the sessions of your own work, the staged one left out and counted',
+    /sessions: 3 of your own work, 2026-09-20 to 2026-09-20, /.test(so) && /left out: 1 staged, 0 unreadable/.test(so));
+  ts('report --share: compactions as report --compactions counts them, the bench one not in the pool',
+    /compactions: 2, 1 automatic; 1 counted by the stage 2 rule/.test(so) && /a verdict needs 8 counted/.test(so));
+  ts('report --share: the guard\'s trim, and the ledger rows of pooled sessions only',
+    /guard: ran in at least 2 of 3 sessions \| 1 trim, ~ 10k tokens kept out/.test(so) && /coldWarn: 1 warning, 1 shown/.test(so)
+    && /compactPrep: 1 working set injected/.test(so) && /pulled back: none \| net ~ 29k token-reads/.test(so));
+  ts('report --share: settings as knob names and numbers, a list only counted',
+    /compaction window 300,000 \(yours; init leaves it\)/.test(so) && /maxChars 8,000/.test(so) && /noTrim \(1 entry\)/.test(so) && /compactPrep on/.test(so)
+    && /per-tool settings \(1 tool\)/.test(so) && /Claude Code \? \|/.test(so));
+  ts('report --share: no path, command, session id, tool id or file name leaves the machine',
+    !/secret|home|app\.js|auto1|man1|leak1|toolu_/.test(so) && !so.includes(cfgC) && !so.includes(tmpdir()));
+  const on21 = share('--since=2026-09-21').stdout;
+  t('report --share --since: a session touched after the day but started before it is not in the block',
+    /sessions: none of your own work started since 2026-09-21/.test(on21));
+  t('report --share --since: only a calendar day; "9/19" (which Date.parse reads as 2001) and a non-date are refused',
+    share('--since=9/19').status === 1 && share('--since=someday').status === 1 && rep('--since=9/19').status === 1
+    && /started since 2026-09-20/.test(share('--since=2026-09-20').stdout));
+  /* What a broken or odd setup says: an unreadable tokenbrake.json is named, not read as "none"; a window set in the
+     environment is shown only as a whole number; an unreadable settings.json leaves the install unknown. */
+  writeFileSync(join(cfgC, 'tokenbrake.json'), '{ "compactPrep": true, }');
+  writeFileSync(join(cfgC, 'settings.json'), JSON.stringify({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '/home/secret-owner' } }));
+  const odd = share().stdout;
+  writeFileSync(join(cfgC, 'settings.json'), '{ "autoCompactWindow": 300000, }');
+  const broken = share().stdout;
+  t('report --share: an unreadable tokenbrake.json, a window that is not a number, an unreadable settings.json',
+    /tokenbrake\.json: unreadable \(it is not valid JSON\)/.test(odd) && /CLAUDE_CODE_AUTO_COMPACT_WINDOW=\(not a whole number\)/.test(odd)
+    && !/secret/.test(odd) && /install: unknown \(settings\.json unreadable\) \| compaction window unknown/.test(broken));
   rmSync(cfgC, { recursive: true, force: true });
 }
 
