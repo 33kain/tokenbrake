@@ -2185,3 +2185,13 @@ measures changes.
   the report reads a transcript, not settings, and the default report says "unless you set your own" while
   `--detail` says "if it is not installed". `/security-review`: no finding; every new value printed is numeric
   (`kfmt`, `pctFmt`) or a constant, and `peak` does not enter `report --share`.
+
+## Release 0.9.1 — 2026-09-30
+
+Branch `claude/release-0.9.1`. #149 is merged. 0.9.1 carries the brake-first README and package description (#147),
+`help` (#148) and the report's no-guard verdict that weighs the ~267k point where init's 300k window compacts (#149):
+versions bumped in `package.json`, the plugin manifests and the README, and the CHANGELOG's Unreleased section
+becomes 0.9.1. Only `cli.js` and `transcript.js` changed since 0.9.0 (the site ships through pages.yml, not npm);
+`guard.js` and the hooks did not, so nobody re-runs `init`.
+
+Next: the owner's Publish run. Then `npx tokenbrake` shows the brake-first `help` and the new verdict everywhere.
