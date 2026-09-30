@@ -2269,3 +2269,17 @@ The owner's own block does not move, since the owner has no `init.json` (plugin 
     and every new word is fixed.
 
 Next: a release, since blocks count only from the release after 0.9.1. Then the post asking for blocks.
+
+## Release 0.9.2 — 2026-09-30
+
+Branch `claude/release-0.9.2`. #151 and #152 are merged. 0.9.2 carries three changes:
+- the stage 2 rule that counts a compaction only in a session past 200k (#151);
+- `report --share` starting where `init` ran, with a line per counted model (#152);
+- the AB-TASK amendments that pool blocks from other machines.
+
+Versions are bumped in `package.json`, the plugin manifests and the README, and the CHANGELOG's Unreleased section
+becomes 0.9.2. Since 0.9.1 only `cli.js` and `transcript.js` changed; the site ships through pages.yml. `guard.js`
+and the hooks did not change, so nobody re-runs `init`.
+
+Next: the owner's Publish run. Blocks from other machines count only from 0.9.2 (AB-TASK, pooling amendment), so the
+post asking for them goes out after it.
