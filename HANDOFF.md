@@ -2195,3 +2195,26 @@ becomes 0.9.1. Only `cli.js` and `transcript.js` changed since 0.9.0 (the site s
 `guard.js` and the hooks did not, so nobody re-runs `init`.
 
 Next: the owner's Publish run. Then `npx tokenbrake` shows the brake-first `help` and the new verdict everywhere.
+
+## Stage 2 counts a compaction only in a session past 200k — 2026-09-30
+
+Branch `claude/count-over-200k`. 0.9.1 is on the registry (Publish run succeeded). The owner's own `report --share`
+showed the hole this closes: a model on a 200k context compacts near 167k on its own and never reaches the 1M
+context's 967k window, so `compactionView` credited such a compaction with every request after it. The transcript's
+model id does not say which context ran (this session records `claude-opus-5-5` on all its requests); the sizes do.
+An automatic compaction now counts only in a session whose context went past 200k somewhere, a request's size or a
+compaction's `preTokens`; otherwise `--compactions` lists it with the reason "session never past 200k: may be the
+model's own limit" and `--share` gives the count of those on its `compactions` line. The AB-TASK amendment of the same
+date records the rule before any block from another machine is read, and how such a block is read. `INIT_COMPACTS_AT`
+moves 267k → 266k: one of the author's compactions under init's window fired at 265.9k. The author's figures do not
+move: 21 compactions, 18 counted; weights, saving, recovery, charge, the 50% rule and n = 8 are unchanged.
+
+- **Review.** `/simplify`: 4 agents; the reason text is built from the constant, and one comment is shorter. Skipped:
+  splitting the amendment's reading protocol into its own change (the owner approved both together), a test helper,
+  the numbers in the `INIT_COMPACTS_AT` comment, a loop in the tests. `/code-review`: 10 findings. Fixed: a row with
+  `preTokens` 0, or read low from the request before it, dropped out and leaned the verdict toward PASS, so the rule
+  is per session (`ranPast`), not per row; the share line gave no reason, so it counts them; 266k; the stage 2
+  comments in transcript.js and cli.js; the `installVerdict` comment; the README's 22 → 21; tests for the session
+  rule, the row fallback, `--compactions` and `--share`. Skipped: rounding the listing's size against 200k, since
+  the rule is per session and the listing shows no session figure. `/security-review`: no finding; the share line
+  adds a count and a constant, and the transcript's sizes are only compared.

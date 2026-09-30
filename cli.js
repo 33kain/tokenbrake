@@ -1077,7 +1077,8 @@ function readsReport() {
    stage 2 of "An earlier compaction window" (AB-TASK.md). Per compaction: the saving the drop in context buys
    until the next one, and the recovery, files re-read in the 30 requests after it that were read before. The
    stage counts automatic compactions on a calibrated model (Opus 5.5 from the day its weights merged), outside
-   staged work (benchmark, calibration and headless sessions), from --since. When the counted ones span models, each model's verdict is
+   staged work (benchmark, calibration and headless sessions), in a session whose context went past 200k, from
+   --since. When the counted ones span models, each model's verdict is
    given too (AB-TASK.md, 2026-09-22 amendment). */
 function compactionsReport() {
   const since = sinceOpt();
@@ -1181,7 +1182,8 @@ function shareReport() {
     out.push(!draw.priced ? 'window: unpriced -- no request on a calibrated model'
       : `window: ~ ${pfmt(drawn)} points over ${fmt(draw.priced)} requests on ${S.models.join(', ')}: re-reads ${pct(draw.read, drawn)},`
         + ` writes ${pct(draw.write, drawn)}, output ${pct(draw.output, drawn)}` + (draw.unpriced ? ` | ${fmt(draw.unpriced)} requests on other models, unpriced` : ''));
-    out.push(`compactions: ${c.found}, ${c.auto} automatic; ${c.counted} counted by the stage 2 rule`);
+    out.push(`compactions: ${c.found}, ${c.auto} automatic; ${c.counted} counted by the stage 2 rule`
+      + (c.small ? `; ${c.small} not counted (${transcript.SMALL_WHY})` : ''));
     if (c.counted) {
       const mid = (x) => x == null ? '?' : k(x);
       out.push(`  counted: context ${mid(c.pre)} -> ${mid(c.post)} (median) | saving ${c.saving.toFixed(1)} pts | recovery ${c.recovery.toFixed(1)} pts`
