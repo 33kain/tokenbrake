@@ -2161,3 +2161,27 @@ code path besides printing help changes.
 - **Left, for the owner:** the no-guard verdict in `report` still gates `npx tokenbrake init` on the trim's reach
   alone (`BRAKE_WORTH_PCT`, transcript.js), and below 10% says "nothing to brake in work like this", with no word
   on whether the session passed the 300k window. That changes what the report recommends, so it is discussed first.
+
+## `report`: the no-guard verdict weighs the window — 2026-09-30
+
+Branch `claude/verdict-window`. Closes the `help` section's "Left, for the owner" item, which the owner approved in
+chat: a session with no sign of tokenbrake is now told to install when its context peaked at ~267k or more, where
+init's 300k window compacts (stage B's eight boundaries sat at 267k–275k, `INIT_COMPACTS_AT` in transcript.js), or
+when the trim's reach is 10% of what it carried or more, as before. One rule (`installVerdict`) serves both
+renderers. `--detail` used to round 9.6% up to 10 and say install where the default report did not, and it gave no
+verdict on a session with no tool results. The peak is the highest request context or compaction `preTokens`,
+compared at the k the report prints. One formatter (`pctFmt`) prints every share under 10% with one decimal and
+never rounds up to 10.0%, the savings table included. Display only: nothing enters context, and nothing a stage
+measures changes.
+
+- **Review.** `/simplify`: 4 agents; one verdict helper and one formatter for both renderers. Skipped: a
+  share-based window signal instead of the peak, window advice for sessions the guard ran in, a peak column in
+  `--all`. `/code-review`: 12 findings. Fixed: the trigger point (267k, not 300k); the peak rounding (266.6k
+  printed as 267k beside "under 267k"); the [9.95, 10) edge printing 10.0%; `--detail`'s reach lines on the same
+  formatter; cli.js owns `COMPACT_WINDOW` again (the report no longer exports the install value); boundary
+  `preTokens` in the peak; tests for a mid-session peak, `preTokens` and both rounding edges; this section; one
+  `pctOf`; the redundant arguments. Skipped: a crossing late in the session still counts, since the verdict
+  describes the kind of work and a share-based signal is the skip above; a person's own window above 300k, since
+  the report reads a transcript, not settings, and the default report says "unless you set your own" while
+  `--detail` says "if it is not installed". `/security-review`: no finding; every new value printed is numeric
+  (`kfmt`, `pctFmt`) or a constant, and `peak` does not enter `report --share`.

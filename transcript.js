@@ -526,6 +526,8 @@ function formatWarning(p) {
    token counts are written: the guard's, because coldWarn's notification prices a re-write with them. */
 const { weightsOf, usageCtx, pfmt, kfmt } = GUARD;
 const DEFAULT_COMPACT_WINDOW = 967000;   // where Opus 5 on the 1M context compacts on its own (Claude Code model-config docs)
+const INIT_COMPACTS_AT = 267000;         // where the 300k window user-scope init sets (cli.js) compacts: stage B's eight boundaries sat at 267k-275k (AB-TASK.md)
+const INIT_COMPACTS = `~${kfmt(INIT_COMPACTS_AT)}, where init's 300k window compacts`;
 const COMPACT_CHARGE = [0.5, 1.6];       // compaction's own draw is in no transcript: the calibration's estimate and its bound
 /* A result's price: written once, then re-read on each request that carries it. */
 const resultPts = (tokens, carriedTurns, weights) => tokens * (weights.write + (carriedTurns || 0) * weights.read) / 1e6;
@@ -803,6 +805,22 @@ const TRIM_CHARS = GUARD.DEFAULTS.maxChars;   // the guard's own default maxChar
    was 11.6% of carried over 55 sessions (7.5% over the 24 the guard ran in) -- so 10% sits at about a typical
    session, and a session under it has less than usual for the brake to do. */
 const BRAKE_WORTH_PCT = 10;
+const pctOf = (x, of) => (of ? 100 * x / of : 0);
+/* Whether a session with no sign of tokenbrake has anything for it to act on, one rule for both renderers. Two
+   levers answer it: init's window acts on a session whose context reached where it compacts, the trim on what sits
+   in its reach, and either is reason enough to install. The peak is compared at the k the report prints, so a
+   peak shown as 267k is never called under 267k. With no context known the trim decides alone. */
+function installVerdict(u, rc) {
+  const ctxKnown = u.peak > 0;
+  const past = Math.round(u.peak / 1000) * 1000 >= INIT_COMPACTS_AT;
+  return { ctxKnown, past, install: past || pctOf(rc.window.carried, rc.total.carried) >= BRAKE_WORTH_PCT };
+}
+/* A share for a person to read: whole from 10 up, one decimal under it and never rounded up to 10.0, so 9.6% or
+   9.97% never prints as the 10% the verdict did not reach. */
+const pctFmt = (x, of) => {
+  const p = pctOf(x, of), a = Math.abs(p);
+  return (a >= 10 || p === 0 ? String(Math.round(p)) : (Math.sign(p) * Math.min(a, 9.9)).toFixed(1)) + '%';
+};
 /* Shell results the guard leaves alone: Bash and PowerShell results at or under maxChars (TRIM_CHARS, the
    guard's default, when not given). Counted with their carried cost so the untouched share of a session is a
    number, not a guess. A result carrying the trim marker is left out: it sits under the threshold only because
@@ -1250,16 +1268,19 @@ function readReReads(ledgerRecs, parsed) {
    of that was served at the cached rate. Missing counters read as 0 here because this is a sum -- the
    per-call null-vs-0 distinction the extension keeps does not survive addition. */
 function usageTotals(parsed) {
-  let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0, lastModel = null;
+  let processed = 0, cacheRead = 0, cacheWrite = 0, input = 0, out = 0, requestsWithUsage = 0, last = 0, peak = 0, lastModel = null;
   for (const q of parsed.requests) {
     const u = q.usage;
     if (!reachedApi(u)) continue;
     requestsWithUsage++;
     const inp = u.input_tokens || 0, cr = u.cache_read_input_tokens || 0, cw = u.cache_creation_input_tokens || 0;
     last = usageCtx(u); lastModel = q.model;
+    if (last > peak) peak = last;
     processed += last; cacheRead += cr; cacheWrite += cw; input += inp; out += u.output_tokens || 0;
   }
-  return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last, lastModel };
+  // A compaction's own count of the context it compacted: the last request before it can read a little under.
+  for (const b of parsed.boundaries || []) if (b.preTokens > peak) peak = b.preTokens;
+  return { processed, cacheRead, cacheWrite, input, out, requestsWithUsage, contextNow: last, peak, lastModel };
 }
 
 /* The session's draw on the five-hour limit, in points of the window, each request priced with its model's
@@ -2415,27 +2436,28 @@ function renderReport(parsed, ledger, { top = 10, readLimitLines = 300, maxChars
   /* The denominator. Everything above says what the guard did; this says what it could ever have done,
      which on most sessions is the more useful number and is usually smaller than anyone expects. */
   const rc = reach(parsed, trimmed, { maxChars });
-  const pct = (x) => (carried ? Math.round(100 * x / carried) : 0);
   if (rc.total.n) {
-    lines.push(`  Within the guard's reach: ${rc.window.n} of ${rc.total.n} tool results (~ ${kfmt(rc.window.tokens)} tokens entered, ~ ${kfmt(rc.window.carried)} carried, ${pct(rc.window.carried)}% of all carried) -- shell, exit 0, over ${kfmt(baseChars / CHARS_PER_TOKEN)} tokens${typeof maxChars === 'function' ? ' (or your per-tool maxChars)' : ''} and under Claude Code's own ceiling`);
+    lines.push(`  Within the guard's reach: ${rc.window.n} of ${rc.total.n} tool results (~ ${kfmt(rc.window.tokens)} tokens entered, ~ ${kfmt(rc.window.carried)} carried, ${pctFmt(rc.window.carried, carried)} of all carried) -- shell, exit 0, over ${kfmt(baseChars / CHARS_PER_TOKEN)} tokens${typeof maxChars === 'function' ? ' (or your per-tool maxChars)' : ''} and under Claude Code's own ceiling`);
     const oor = [];
     if (rc.under.n) oor.push(`${rc.under.n} under the threshold`);
     if (rc.excerpt.n) oor.push(`${rc.excerpt.n} single-file excerpts (read like a Read: capped over readMaxBytes, never head/tail-trimmed)`);
     if (rc.nonShell.n) oor.push(`${rc.nonShell.n} not shell results`);
     if (rc.failed.n) oor.push(`${rc.failed.n} failed (the host ignores the replacement)`);
     if (rc.persisted.n) oor.push(`${rc.persisted.n} past the host's ceiling (persisted, replacement never applied)`);
-    if (oor.length) lines.push(`  Out of reach: ${oor.join('; ')} -- ~ ${kfmt(rc.total.carried - rc.window.carried)} carried, ${pct(rc.total.carried - rc.window.carried)}% of all carried`);
-    if (!ran) {
-      lines.push(pct(rc.window.carried) >= BRAKE_WORTH_PCT
-        ? `  No sign of tokenbrake in this session (no ledger row, no trim marker). The brake could have acted on ${rc.window.n} result${rc.window.n === 1 ? '' : 's'}, ${pct(rc.window.carried)}% of what it carried -- if it is not installed, \`npx tokenbrake init\` installs it.`
-        : `  No sign of tokenbrake in this session (no ledger row, no trim marker), and ${pct(rc.window.carried)}% of what it carried is in the brake's reach -- too little to install it for work like this.`);
-    } else lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` -- ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
+    if (oor.length) lines.push(`  Out of reach: ${oor.join('; ')} -- ~ ${kfmt(rc.total.carried - rc.window.carried)} carried, ${pctFmt(rc.total.carried - rc.window.carried, carried)} of all carried`);
+    if (ran) lines.push(`  Acted on: ${trimmed.length} of those${rc.window.n ? ` -- ${Math.round(100 * trimmed.length / rc.window.n)}% of what it could reach` : ''}`);
     /* What is left on the table, in token-reads. The share of *carried* is the honest weight: ab10 found the
        count of trims does not predict the saving -- two trims beat seven -- because which result is cut,
        and how early, decides how many later requests re-read it. */
     if (ran && rc.untouched.n) {
       lines.push(`  Still within reach: ${rc.untouched.n} result${rc.untouched.n === 1 ? '' : 's'} the guard could have trimmed and did not (~ ${kfmt(rc.untouched.carried)} carried)`);
     }
+  }
+  if (!ran) {
+    const v = installVerdict(u, rc);
+    const ctx = !v.ctxKnown ? '' : `Its context ${v.past ? `reached ${kfmt(u.peak)}, past` : `peaked at ${kfmt(u.peak)}, under`} ${INIT_COMPACTS}. `;
+    lines.push(`  No sign of tokenbrake in this session (no ledger row, no trim marker). ${ctx}The trim could have acted on ${rc.window.n} result${rc.window.n === 1 ? '' : 's'}, ${pctFmt(rc.window.carried, carried)} of what it carried -- `
+      + (v.install ? 'if it is not installed, `npx tokenbrake init` installs it.' : 'too little to install it for work like this.'));
   }
 
   /* The guard's own cost, reported next to its saving and never omitted when the saving is shown. */
@@ -2546,8 +2568,6 @@ function renderBrief(parsed, ledger, { top = 5, maxChars: maxCharsOpt, toolMaxCh
   const drawn = draw.priced ? draw.read + draw.write + draw.output : null;
   const entered = parsed.results.reduce((s, r) => s + r.tokens, 0);
   const carried = parsed.results.reduce((s, r) => s + r.carried, 0);
-  const pctOf = (x, of) => (of ? 100 * x / of : 0);
-  const pct = (x, of) => { const p = pctOf(x, of); return (Math.abs(p) >= 10 || p === 0 ? Math.round(p) : p.toFixed(1)) + '%'; };
   const lines = [];
 
   const sid = String(parsed.sessionId || path.basename(parsed.file, '.jsonl')).slice(0, 8);
@@ -2599,12 +2619,13 @@ function renderBrief(parsed, ledger, { top = 5, maxChars: maxCharsOpt, toolMaxCh
   const rc = reach(parsed, cutList, { maxChars });
   if (!ran) {
     /* No guard here: no table to fill, only the question a person asks before installing anything. */
+    const v = installVerdict(u, rc);
     lines.push('');
-    lines.push(`  No sign of tokenbrake in this session. The brake could have acted on ${rc.window.n} of ${parsed.results.length} tool results, ${pct(rc.window.carried, carried)} of what they carried.`);
+    lines.push(`  No sign of tokenbrake in this session. ${v.ctxKnown ? `Its context peaked at ${kfmt(u.peak)}; the trim` : 'The trim'} could have acted on ${rc.window.n} of ${parsed.results.length} tool results, ${pctFmt(rc.window.carried, carried)} of what they carried.`);
     lines.push('');
-    lines.push(pctOf(rc.window.carried, carried) >= BRAKE_WORTH_PCT
-      ? `Next: \`npx tokenbrake init\` installs the brake. report --detail shows what it would reach.`
-      : `Next: nothing to brake in work like this. report --detail shows where the rest went.`);
+    lines.push(v.install
+      ? `Next: \`npx tokenbrake init\` installs the brake${v.past ? `: this session passed ${INIT_COMPACTS} (unless you set your own)` : ''}. report --detail shows what the trim would reach.`
+      : `Next: nothing to brake in work like this: ${v.ctxKnown ? `the context stayed under ${INIT_COMPACTS}, and ` : ''}little is in the trim's reach. report --detail shows where the rest went.`);
     return lines.join('\n');
   }
 
@@ -2616,14 +2637,14 @@ function renderBrief(parsed, ledger, { top = 5, maxChars: maxCharsOpt, toolMaxCh
   const withoutProc = u.processed + sv.savedCarried, withoutPts = priced ? drawn + sv.pts : null;
   const col = (s, n) => String(s).padStart(n);
   const row = (label, without, withv, lowered, share, indent = '  ') => `${indent}${label.padEnd(35)}${col(without, 14)}  ${col(withv, 10)}  ${col(lowered, 10)}   ${share}`.trimEnd();
-  const netRow = (label, x, f, of) => { const s = x < 0 ? G.minus : ''; return (x < 0 ? red : green)(row(label, '', '', s + f(Math.abs(x)), s + pct(Math.abs(x), of))); };
+  const netRow = (label, x, f, of) => { const s = x < 0 ? G.minus : ''; return (x < 0 ? red : green)(row(label, '', '', s + f(Math.abs(x)), s + pctFmt(Math.abs(x), of))); };
   lines.push('');
   lines.push(row('What tokenbrake lowered', 'without (est.)', 'with', 'lowered', '', ''));
   // savedCarried counts a kept-out token on entry and on every later request; `carried` counts only the later ones.
   const savedLater = sv.savedCarried - sv.saved;
-  lines.push(row('Tool output carried', kfmt(carried + savedLater), kfmt(carried), kfmt(savedLater), pct(savedLater, carried + savedLater)));
-  if (u.requestsWithUsage) lines.push(row('All context processed', kfmt(withoutProc), kfmt(u.processed), kfmt(sv.savedCarried), pct(sv.savedCarried, withoutProc)));
-  if (priced) lines.push(row('Five-hour window', pfmt(withoutPts) + ' pts', pfmt(drawn) + ' pts', pfmt(sv.pts) + ' pts', pct(sv.pts, withoutPts)));
+  lines.push(row('Tool output carried', kfmt(carried + savedLater), kfmt(carried), kfmt(savedLater), pctFmt(savedLater, carried + savedLater)));
+  if (u.requestsWithUsage) lines.push(row('All context processed', kfmt(withoutProc), kfmt(u.processed), kfmt(sv.savedCarried), pctFmt(sv.savedCarried, withoutProc)));
+  if (priced) lines.push(row('Five-hour window', pfmt(withoutPts) + ' pts', pfmt(drawn) + ' pts', pfmt(sv.pts) + ' pts', pctFmt(sv.pts, withoutPts)));
   lines.push(row('Pulled back (model re-read a trim)', '', '', pulled ? G.minus + kfmt(pulled) : '0', pulled && priced ? G.minus + pfmt(pulledPts) + ' pts' : ''));
   lines.push('  ' + G.rule.repeat(78));
   // Against the whole session when the API reported usage; without it, only the tool output is known.
