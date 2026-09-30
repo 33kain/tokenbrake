@@ -1,7 +1,7 @@
 {
   "name": "tokenbrake",
   "description": "Trims oversized shell output and caps unbounded file reads before they reach Claude's context window. Six hooks from one guard.js, no dependencies.",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "author": {
     "name": "Mili",
     "url": "https://github.com/33kain"

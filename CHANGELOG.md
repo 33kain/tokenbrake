@@ -1,13 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.9.2 — 2026-09-30
+
+Blocks from other machines: `report --share` after `init` covers the sessions since `init` ran, and blocks from
+several machines pool toward the brake's verdict. A compaction counts toward the brake only in a session whose
+context went past 200k. The hooks are unchanged since 0.8.0, so there is nothing to re-run after upgrading.
 
 - **A compaction counts toward the brake only in a session whose context went past 200k.** A model on a 200k
   context compacts near 167k on its own and never reaches the 1M context's 967k window, so `--compactions` and
   `--share` credited such a compaction with every request after it. Now it is listed as "session never past 200k: may
   be the model's own limit", adds nothing to the saving or the brake net, and `--share` counts it on its
-  `compactions` line. The transcript's model id does not say which context ran; the sizes do. The author's own figures do not move: every counted compaction there sat at 266k–275k
-  (AB-TASK.md, amendment of 2026-09-30, which also fixes how a block from another machine is read).
+  `compactions` line. The transcript's model id does not say which context ran; the sizes do. The author's own
+  figures do not move: every counted compaction there sat at 266k–275k (AB-TASK.md, amendment of 2026-09-30, which
+  also fixes how a block from another machine is read).
 - The report's verdict without tokenbrake names ~266k, not ~267k, as where init's 300k window compacts: one of the
   author's compactions under it fired at 265.9k.
 - **`report --share` after `init` starts where `init` ran.** Sessions from before it ran at a window the brake did not
