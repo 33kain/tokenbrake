@@ -1,15 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-09-30
+
+`report --share`: the numbers of every session on a machine in one block, to send back from machines other than
+the author's. The hooks are unchanged since 0.8.0, so there is nothing to re-run after upgrading.
 
 - **`report --share`: every session pooled into one block of numbers to paste where others read it.** It holds
   the versions, the install and the compaction window, `tokenbrake.json` as knob names and numbers, the tokens
   processed and from cache, the five-hour window by kind, the compactions as `--compactions` counts them, what the
   guard kept out and what was pulled back, the `compactPrep` and `coldWarn` counts, and the brake's net in points
   (the compactions at the bound, under a window below Claude Code's own, plus the guard, each less what it gave
-  back). No path, command, file
-  name, session id or line of a transcript: every string it prints is fixed text, a knob name, a model label or a
-  checked version. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
+  back). No path, command, file name, session id or line of a transcript: every string it prints is fixed text, a
+  knob name, a model label or a checked version. `--since=YYYY-MM-DD` keeps the sessions that started on or after that day.
 - `report --compactions --since` takes a calendar day (YYYY-MM-DD) and refuses anything else: `9/19` used to read
   as 2001-09-19 and widen the view without a word.
 
