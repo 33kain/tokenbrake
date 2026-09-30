@@ -7,9 +7,16 @@
   folder, the context and what writing it again would draw, and says any message keeps it warm. It stays on screen
   until dismissed and expires with the cache. Under Focus assist's "priority only", add Windows PowerShell to the
   priority list, or it may wait unseen in the Action Center; "alarms only" holds it anyway. A new turn moves the
-  clock and closing the session drops it. `init` now also registers `Stop` and `SessionEnd` hooks, so re-run it. This is the
-  pilot of `AB-TASK.md`'s 2026-09-25 pre-registration. Its first check, that a cache read keeps the cache alive for
-  another hour, passed on the author's transcripts.
+  clock and closing the session drops it. `init` now also registers `Stop` and `SessionEnd` hooks, so re-run it.
+  This is the pilot of `AB-TASK.md`'s 2026-09-25 pre-registration. Its first check, that a cache read keeps the
+  cache alive for another hour, passed on the author's transcripts.
+- **`status` and `doctor` read the plugin install.** They read only the hooks `init` writes to settings.json, so a
+  working plugin install showed every hook "missing", and a guard copy an earlier `init` left behind, which nothing
+  runs, as STALE. Now they read the plugin's own `hooks.json` too: whether it is enabled, one real spawn of each of
+  its hooks, and whether its `guard.js` is this version's. A leftover copy is named as one, and settings.json plus
+  the plugin together are reported as running the guard twice per call. `init` says so too when it installs next
+  to an enabled plugin. The spawn tests start from an empty folder, so on Windows a `node.exe` in the folder
+  `status` runs from is never the `node` they start.
 - **`report --compactions` reads only requests that report a context size.** A request with no usage, or one of
   Claude Code's all-zero synthetic replies, no longer reads as zero context after a compaction or takes a recovery
   slot. A missing timestamp or usage no longer reads as a cold rebuild, and a synthetic reply after an idle hour no

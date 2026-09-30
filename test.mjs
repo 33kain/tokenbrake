@@ -11,7 +11,7 @@ import { createRequire } from 'node:module';
    that; this file pins the shape so it cannot regress unnoticed. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, statSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, existsSync, rmSync, statSync, readdirSync, renameSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 
@@ -3093,6 +3093,92 @@ const noisy = Array.from({ length: 400 }, (_, i) => {
   r = cli2(['doctor']);
   t('doctor flags invalid tokenbrake.json, exit non-zero', r.status === 1 && /not valid JSON/.test(r.stdout));
 
+  rmSync(cfg, { recursive: true, force: true });
+}
+
+/* ---- the plugin install: status and doctor read it ------------------------
+   The plugin writes no hooks to settings.json. Claude Code records it in plugins/installed_plugins.json and runs
+   the plugin's own hooks/hooks.json, so status and doctor, reading settings alone, called a working plugin
+   "missing" and an earlier init's leftover guard copy STALE. */
+{
+  console.log('\n-- cli: the plugin install');
+  const cfg = mkdtempSync(join(tmpdir(), 'tokenbrake-plugin-'));
+  const proj = join(cfg, 'proj'); mkdirSync(proj, { recursive: true });
+  const root = join(cfg, 'plugins', 'cache', 'tokenbrake', 'tokenbrake', '9.9.9');
+  mkdirSync(join(root, 'hooks'), { recursive: true });
+  const guardSrc = readFileSync('./guard.js', 'utf8');
+  writeFileSync(join(root, 'guard.js'), guardSrc);
+  // a prompt hook beside ours has no command to spawn; status must pass over it, not crash on it
+  const pluginHooks = JSON.parse(readFileSync('./hooks/hooks.json', 'utf8'));
+  pluginHooks.hooks.Stop[0].hooks.push({ type: 'prompt', prompt: 'x' });
+  writeFileSync(join(root, 'hooks', 'hooks.json'), JSON.stringify(pluginHooks));
+  // a second marketplace's copy, listed first and never enabled: the enabled one is the one read
+  writeFileSync(join(cfg, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
+    'tokenbrake@local-dev': [{ scope: 'user', installPath: join(cfg, 'nowhere'), version: '0.0.1' }],
+    'tokenbrake@tokenbrake': [{ scope: 'user', installPath: root, version: '9.9.9', gitCommitSha: 'abcdef1234567890' }] } }));
+  const sp = join(cfg, 'settings.json');
+  const enable = (on) => writeFileSync(sp, JSON.stringify({ ...JSON.parse(existsSync(sp) ? readFileSync(sp, 'utf8') : '{}'), enabledPlugins: { 'tokenbrake@tokenbrake': on } }));
+  const e = { ...process.env, CLAUDE_CONFIG_DIR: cfg };
+  const run = (a) => spawnSync(process.execPath, [join(process.cwd(), 'cli.js'), ...a], { encoding: 'utf8', env: e, cwd: proj, timeout: 120000 });
+  /* Windows looks the plugin's bare `node` up in the working directory before PATH. A node.exe planted in the
+     directory status runs from (here a harmless hostname.exe) must not be what its spawn tests start; Claude Code
+     sets NoDefaultCurrentDirectoryInExePath in its own shells, which would hide that, so it is cleared here. */
+  if (process.platform === 'win32') {
+    copyFileSync(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'hostname.exe'), join(proj, 'node.exe'));
+    for (const k of Object.keys(e)) if (k.toLowerCase() === 'nodefaultcurrentdirectoryinexepath') delete e[k];
+  }
+  const lines = (out, re) => out.split('\n').filter(l => re.test(l));
+  // disabled first: it spawns nothing
+  enable(false);
+  let r = run(['status']);
+  t('a disabled plugin runs nothing, and status says so, naming no guard copy there is none of',
+    /plugin: tokenbrake@tokenbrake .*, disabled/.test(r.stdout) && /PostToolUse guard: missing/.test(r.stdout) && !/spawn test/.test(r.stdout) && !/guard file:/.test(r.stdout)
+      && /missing \(failing commands enter whole; enable it in \/plugin\)/.test(r.stdout),
+    lines(r.stdout, /plugin|PostToolUse|guard file/).join(' | '));
+  r = run(['doctor']);
+  t('doctor names a disabled plugin instead of sending the person to init',
+    r.status === 1 && /installed but disabled/.test(r.stdout) && !/no tokenbrake hooks installed/.test(r.stdout), lines(r.stdout, /ERROR/).join(' | '));
+  mkdirSync(join(cfg, 'hooks', 'tokenbrake'), { recursive: true });
+  writeFileSync(join(cfg, 'hooks', 'tokenbrake', 'guard.js'), '// an older build\n');
+  enable(true);
+  r = run(['status']);
+  t('status reads an enabled plugin: every hook installed (plugin), none missing',
+    /plugin: tokenbrake@tokenbrake 9\.9\.9 \(abcdef123456\), enabled/.test(r.stdout) && lines(r.stdout, /: installed \(plugin\)$/).length === 5 && !/missing/.test(r.stdout), lines(r.stdout, /installed|missing/).length + " hook lines");
+  t('status spawns each of the plugin\'s hooks from the plugin root, with the real node, not one in the working directory', lines(r.stdout, /spawn test \(plugin, node\): ok/).length === 6, lines(r.stdout, /spawn test/).join(' | '));
+  t('status compares the plugin\'s guard with this checkout', /plugin guard build: matches this checkout/.test(r.stdout), lines(r.stdout, /guard/).join(' | '));
+  t('a guard copy an earlier init left, which no settings hook runs, is named as such, not as STALE',
+    /guard file: .*no hook in settings\.json runs it/.test(r.stdout) && !/STALE/.test(r.stdout), lines(r.stdout, /guard/).join(' | '));
+  r = run(['doctor']);
+  t('doctor passes a plugin install, the leftover copy notwithstanding', r.status === 0 && /all checks passed/.test(r.stdout), lines(r.stdout, /WARN|ERROR|passed/).join(" | "));
+  r = run(['status', '--project']);
+  t('status --project names the user-scope plugin as the install that runs here',
+    /installed at user scope instead \(the plugin tokenbrake@tokenbrake\): the guard runs once/.test(r.stdout), lines(r.stdout, /scope/).join(' | '));
+  const projSettings = join(proj, '.claude', 'settings.json');
+  mkdirSync(join(proj, '.claude'), { recursive: true });
+  writeFileSync(projSettings, JSON.stringify({ enabledPlugins: { 'tokenbrake@tokenbrake': false } }));
+  r = run(['status']);
+  t('a project that turns the plugin off is read as off there', /plugin: tokenbrake@tokenbrake .*, disabled/.test(r.stdout) && !/spawn test/.test(r.stdout), lines(r.stdout, /plugin:/).join(' | '));
+  rmSync(projSettings);
+  renameSync(join(root, 'hooks', 'hooks.json'), join(root, 'hooks', 'hooks.off'));
+  r = run(['doctor']);
+  t('doctor names an enabled plugin with no hooks.json instead of sending the person to init',
+    r.status === 1 && /the plugin tokenbrake@tokenbrake is enabled but runs no hooks/.test(r.stdout) && !/no tokenbrake hooks installed/.test(r.stdout), lines(r.stdout, /ERROR/).join(' | '));
+  renameSync(join(root, 'hooks', 'hooks.off'), join(root, 'hooks', 'hooks.json'));
+  writeFileSync(join(root, 'guard.js'), guardSrc + '\n// another build\n');
+  r = run(['doctor']);
+  t('doctor warns when the plugin\'s guard is not this checkout\'s', r.status === 0 && /WARN +plugin guard build: differs/.test(r.stdout), lines(r.stdout, /WARN|ERROR/).join(' | '));
+  const i = run(['init']);
+  t('init says so when the plugin is enabled too', /note: +the plugin tokenbrake@tokenbrake is enabled too: the guard now runs twice per call/.test(i.stdout), lines(i.stdout, /note|twice/).join(' | '));
+  r = run(['status']);
+  const d = run(['doctor']);
+  t('status and doctor say so when settings.json and the plugin both install the guard',
+    /installed twice/.test(r.stdout) && /also installed as the plugin .*runs twice per call/.test(r.stdout) && /WARN .*runs twice per call/.test(d.stdout),
+    lines(r.stdout + d.stdout, /twice/).join(' | '));
+  t('with both installed, doctor still checks the plugin\'s guard', /WARN +plugin guard build: differs/.test(d.stdout) && !/STALE/.test(d.stdout), lines(d.stdout, /WARN|ERROR/).join(' | '));
+  writeFileSync(sp, readFileSync(sp, 'utf8').replace(/\}\s*$/, ',}'));   // a trailing comma: settings.json cannot be read
+  r = run(['status']);
+  t('an unreadable settings.json is not read as one without hooks: no copy called safe to delete, no enabled state guessed',
+    /not valid JSON/.test(r.stdout) && !/safe to delete/.test(r.stdout) && /plugin: .*unknown \(a settings file cannot be read\)/.test(r.stdout), lines(r.stdout, /plugin:|guard file/).join(' | '));
   rmSync(cfg, { recursive: true, force: true });
 }
 

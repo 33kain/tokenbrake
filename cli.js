@@ -145,6 +145,68 @@ function withoutOurs(groups) {
     return hooks.length ? [{ ...g, hooks }] : [];
   });
 }
+// a hook status can spawn: a command, with its args as a list if it has any (a prompt hook has neither)
+const runnable = (h) => isObj(h) && typeof h.command === 'string' && (h.args == null || Array.isArray(h.args));
+/* The plugin install (`claude plugin install tokenbrake@tokenbrake`). Claude Code records it in
+   plugins/installed_plugins.json and runs the plugin's own hooks/hooks.json from its install path, guard.js beside
+   it; it writes no hooks to settings.json. Read from settings alone, a working plugin was "missing" in status and
+   doctor, and a guard copy an old init left behind, which nothing runs, was STALE. A user-scope install, where the
+   README puts it, so it runs in every project. Its hooks run while enabledPlugins has it true, merged the way
+   Claude Code merges it: the user's settings.json, then this project's, then its settings.local.json (managed
+   settings are not read). With more than one tokenbrake@<marketplace>, the enabled one, else one decided on. */
+function pluginInstall() {
+  const reg = readJson(path.join(CFG_DIR, 'plugins', 'installed_plugins.json'), null);
+  const all = isObj(reg) && isObj(reg.plugins) ? reg.plugins : {};
+  const entry = (k) => Array.isArray(all[k]) ? all[k].find(x => isObj(x) && x.scope === 'user' && typeof x.installPath === 'string') : null;
+  const on = Object.create(null);   // no prototype: a "__proto__" key in a settings file is only a key
+  let unread = false;
+  for (const p of [path.join(CFG_DIR, 'settings.json'), path.join(process.cwd(), '.claude', 'settings.json'), path.join(process.cwd(), '.claude', 'settings.local.json')]) {
+    const b = mergeBase(p);
+    if (b.why) unread = true;
+    else if (isObj(b.value.enabledPlugins)) Object.assign(on, b.value.enabledPlugins);
+  }
+  const ids = Object.keys(all).filter(k => k.split('@')[0] === 'tokenbrake' && entry(k));
+  const id = ids.find(k => on[k] === true) || ids.find(k => typeof on[k] === 'boolean') || ids[0];
+  if (!id) return null;
+  const e = entry(id), enabled = on[id] === true;
+  const file = readJson(path.join(e.installPath, 'hooks', 'hooks.json'), null);
+  const hooks = isObj(file) && isObj(file.hooks) ? file.hooks : {};
+  return { id, version: String(e.version || '?'), sha: String(e.gitCommitSha || '').slice(0, 12), root: e.installPath,
+    guardSha: guardSha(path.join(e.installPath, 'guard.js')), enabled,
+    state: enabled ? 'enabled' : on[id] === false ? 'disabled' : unread ? 'unknown (a settings file cannot be read)' : 'not in enabledPlugins',
+    groups: Object.fromEntries(HOOK_EVENTS.map(ev => [ev, enabled && Array.isArray(hooks[ev]) ? hooks[ev].filter(g => isObj(g) && Array.isArray(g.hooks) && g.hooks.some(runnable)) : []])) };
+}
+/* What status and doctor both read:
+   - tokenbrake's hooks in this scope's settings.json and, at user scope, the plugin's;
+   - every hook to spawn, settings.json's first, with the root a plugin hook's ${CLAUDE_PLUGIN_ROOT} stands for;
+   - what brings a missing hook back;
+   - the other scope's install, which under --project includes the plugin.
+   A settings file that cannot be read is not taken as one without hooks: nothing is then the plugin's alone. */
+function installState(settings, unreadable) {
+  const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
+  const has = (ev) => ours(ev).length > 0;
+  const found = pluginInstall(), plugin = PROJECT ? null : found;
+  const inPlugin = (ev) => !!plugin && plugin.groups[ev].length > 0;
+  const settingsHas = HOOK_EVENTS.some(has), pluginOnly = !!plugin && !settingsHas && !unreadable;
+  const spawns = HOOK_EVENTS.flatMap(ev => ours(ev).flatMap(g => g.hooks.filter(isOurHook).map(h => ({ ev, h }))));
+  if (plugin) spawns.push(...HOOK_EVENTS.flatMap(ev => plugin.groups[ev].flatMap(g => g.hooks.filter(runnable).map(h => ({ ev, h, root: plugin.root })))));
+  const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
+  const other = readJson(otherPath, null);
+  const otherIn = [other && other.hooks && HOOK_EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)) && otherPath,
+    PROJECT && found && HOOK_EVENTS.some(ev => found.groups[ev].length > 0) && 'the plugin ' + found.id].filter(Boolean);
+  return { has, inPlugin, plugin, settingsHas, pluginHas: HOOK_EVENTS.some(inPlugin), pluginOnly, spawns,
+    redo: !pluginOnly ? `re-run init${PROJECT ? ' --project' : ''}` : plugin.enabled ? 'update the plugin' : 'enable it in /plugin',
+    other: otherIn.length ? otherIn.join(' and ') : null, otherScope: PROJECT ? 'user' : 'project' };
+}
+/* The plugin's guard.js against this checkout's: status prints the text, doctor reports the ones with a sev.
+   Both check it only where the plugin's hooks run, or would once it is enabled. */
+function pluginBuild(plugin, srcSha) {
+  const p = plugin.guardSha;
+  if (!p) return { sev: 'error', text: `MISSING -- ${plugin.root} has no guard.js`, fix: 'reinstall the plugin' };
+  if (!srcSha) return { text: 'present, and this checkout has no guard.js to compare against' };
+  if (p !== srcSha) return { sev: 'warn', text: `differs from this checkout's guard.js (${p.slice(0, 12)} vs ${srcSha.slice(0, 12)}): the ledger records the plugin's build`, fix: 'update the older of the two' };
+  return { text: `matches this checkout (${srcSha.slice(0, 12)})` };
+}
 /* Hash guard.js by CONTENT, not raw bytes: a Windows checkout with core.autocrlf=true (the default) has a CRLF
    working tree while the git blob and the npm tarball are LF -- identical code, different bytes. Hashing raw
    bytes reported a false STALE on every such checkout, on the very platform tokenbrake ships to. Normalize
@@ -182,6 +244,8 @@ function init() {
     + (decide && decide.why ? ` -- not set: ${cfgPath} ${decide.why}` : ''));
   console.log(`  config:  ${path.join(CFG_DIR, 'tokenbrake.json')} (optional, see README)`);
   console.log(`  ledger:  ${LEDGER}`);
+  const plugin = pluginInstall();
+  if (plugin && plugin.enabled) console.log(`  note:    the plugin ${plugin.id} is enabled too: the guard now runs twice per call; keep one (node cli.js uninstall, or remove the plugin)`);
   console.log('Restart Claude Code (or /hooks to verify). Run `tokenbrake report` after a session.');
 }
 
@@ -262,13 +326,16 @@ const SELF_TESTS = {
   }
 };
 
-function selfTest(h) {
-  const hookArgs = (h.args || []).map(a => a.replace('${CLAUDE_PROJECT_DIR}', process.cwd()));
+function selfTest(h, pluginRoot) {
+  /* Replaced by functions: a `$` in a path is not a replacement pattern. Spawned from the empty throwaway dir:
+     Windows looks a bare command (the plugin's `node`) up in the working directory before PATH, so a node.exe
+     in the repo `status` runs from would run instead -- the same reason the guard's toast sets its cwd. */
+  const hookArgs = (h.args || []).map(a => String(a).replace('${CLAUDE_PROJECT_DIR}', () => process.cwd()).replace('${CLAUDE_PLUGIN_ROOT}', () => pluginRoot || ''));
   const test = SELF_TESTS[hookArgs[1]] || SELF_TESTS.post;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tokenbrake-status-'));
   let r;
   try {
-    r = spawnSync(h.command, hookArgs, { input: JSON.stringify(test.setup(tmp)), encoding: 'utf8', shell: false, timeout: 15000,
+    r = spawnSync(h.command, hookArgs, { input: JSON.stringify(test.setup(tmp)), encoding: 'utf8', shell: false, timeout: 15000, cwd: tmp,
       env: { ...process.env, CLAUDE_CONFIG_DIR: tmp } });
   } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} }
   if (r.error) return `FAILED to start: ${r.error.code || r.error.message} -- '${h.command}' could not be spawned without a shell. Re-run init (records an absolute node path) or init --node=<path-to-node>.`;
@@ -279,47 +346,49 @@ function selfTest(h) {
 function status() {
   const base = mergeBase(settingsPath);
   const settings = base.value || {};
-  const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
-  const has = (ev) => ours(ev).length > 0;
+  const { has, inPlugin, plugin, settingsHas, pluginHas, pluginOnly, spawns, redo, other, otherScope } = installState(settings, !!base.why);
+  const where = (evs, missing) => !evs.every(ev => has(ev) || inPlugin(ev)) ? missing
+    : evs.some(ev => has(ev) && inPlugin(ev)) ? 'installed twice (settings.json and the plugin)'
+    : evs.every(inPlugin) ? 'installed (plugin)' : 'installed';
   console.log(`settings: ${settingsPath}`);
   if (base.why) console.log(`  the settings file ${base.why} -- init and uninstall refuse it as it is; fix or remove it`);
-  console.log(`  PostToolUse guard: ${has('PostToolUse') ? 'installed' : 'missing'}`);
-  console.log(`  PostToolUseFailure guard: ${has('PostToolUseFailure') ? 'installed' : 'missing (failing commands enter whole; re-run init)'}`);
-  console.log(`  PreToolUse Read cap: ${has('PreToolUse') ? 'installed' : 'missing'}`);
-  console.log(`  SessionStart compaction prep: ${has('SessionStart') ? 'installed' : 'missing (re-run init)'}`);
-  console.log(`  Stop and SessionEnd cold-cache warning: ${has('Stop') && has('SessionEnd') ? 'installed' : 'missing (re-run init)'}`);
+  if (plugin) console.log(`  plugin: ${plugin.id} ${plugin.version}${plugin.sha ? ' (' + plugin.sha + ')' : ''}, ${plugin.state} (${plugin.root})`);
+  console.log(`  PostToolUse guard: ${where(['PostToolUse'], 'missing')}`);
+  console.log(`  PostToolUseFailure guard: ${where(['PostToolUseFailure'], `missing (failing commands enter whole; ${redo})`)}`);
+  console.log(`  PreToolUse Read cap: ${where(['PreToolUse'], 'missing')}`);
+  console.log(`  SessionStart compaction prep: ${where(['SessionStart'], `missing (${redo})`)}`);
+  console.log(`  Stop and SessionEnd cold-cache warning: ${where(['Stop', 'SessionEnd'], `missing (${redo})`)}`);
   /* Is the INSTALLED guard the one this checkout ships? `init` copies guard.js; nothing afterwards keeps the
      copy in step. `test.mjs` pins the project-scope copy, and the user-scope copy had nothing watching it at
      all -- so a guard.js change with no re-run leaves the machine quietly running an older build while its
      ledger is read as evidence about the current one. That matters most exactly when the ledger is being
      collected on purpose, which is what a user-scope install is for. */
   const srcSha = guardSha(path.join(__dirname, 'guard.js'));
-  const copySha = guardSha(guardFile);
-  const drift = srcSha && copySha && srcSha !== copySha;
-  console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
-  console.log(`  guard build: ${!copySha ? 'no copy installed'
-    : !srcSha ? 'installed, and this checkout has no guard.js to compare against'
-    : drift ? 'STALE -- the installed copy is not this checkout\'s guard.js (' + copySha.slice(0, 12) + ' vs '
-      + srcSha.slice(0, 12) + '). Re-run `' + (PROJECT ? 'node cli.js init --project' : 'node cli.js init')
-      + '`: until you do, the ledger records an older guard while the report reads it as this one.'
-    : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
-  for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
-    if (!isOurHook(h)) continue;
-    console.log(`  ${ev} spawn test (${h.command}): ${selfTest(h)}`);
+  if (!pluginOnly) {
+    const copySha = guardSha(guardFile);
+    const drift = srcSha && copySha && srcSha !== copySha;
+    console.log(`  guard file: ${fs.existsSync(guardFile) ? 'present' : 'missing'} (${guardFile})`);
+    console.log(`  guard build: ${!copySha ? 'no copy installed'
+      : !srcSha ? 'installed, and this checkout has no guard.js to compare against'
+      : drift ? 'STALE -- the installed copy is not this checkout\'s guard.js (' + copySha.slice(0, 12) + ' vs '
+        + srcSha.slice(0, 12) + '). Re-run `' + (PROJECT ? 'node cli.js init --project' : 'node cli.js init')
+        + '`: until you do, the ledger records an older guard while the report reads it as this one.'
+      : 'matches this checkout (' + srcSha.slice(0, 12) + ')'}`);
+  } else if (fs.existsSync(guardFile)) {
+    console.log(`  guard file: ${guardFile} -- no hook in settings.json runs it (an earlier init left it; safe to delete)`);
   }
+  const pb = plugin && (plugin.enabled || pluginOnly) ? pluginBuild(plugin, srcSha) : null;
+  if (pb) console.log(`  plugin guard build: ${pb.text}${pb.fix ? '; ' + pb.fix : ''}`);
+  for (const { ev, h, root } of spawns) console.log(`  ${ev} spawn test (${root ? 'plugin, ' : ''}${h.command}): ${selfTest(h, root)}`);
+  if (settingsHas && pluginHas) console.log(`  also installed as the plugin ${plugin.id}: the guard runs twice per call here; uninstall one (node cli.js uninstall, or remove the plugin)`);
   /* Both scopes at once means two guards per tool call: Claude Code runs the user-scope hooks and the
      project-scope hooks, each spawns node, each writes the same ledger row. Harmless, wasteful, and the
      ledger shows it as duplicate rows; say so -- but only when this scope has the guard too. The other
      scope carrying it while this one does not is the ordinary case (a project install, `status` run
      without --project), it runs the guard exactly once, and calling that "twice" sent an A/B arm hunting
      for a second install that was not there. */
-  const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
-  const other = readJson(otherPath, null);
-  const otherHas = !!(other && other.hooks && HOOK_EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
-  const thisHas = HOOK_EVENTS.some(has);
-  const otherScope = PROJECT ? 'user' : 'project';
-  if (otherHas && thisHas) console.log(`  also installed at ${otherScope} scope (${otherPath}): the guard runs twice per call here; uninstall one scope`);
-  else if (otherHas) console.log(`  installed at ${otherScope} scope instead (${otherPath}): the guard runs once, from there`);
+  if (other && (settingsHas || pluginHas)) console.log(`  also installed at ${otherScope} scope (${other}): the guard runs twice per call here; uninstall one scope`);
+  else if (other) console.log(`  installed at ${otherScope} scope instead (${other}): the guard runs once, from there`);
   const mark = readJson(INIT_MARK, null);
   console.log(`  compaction window: ${base.why ? 'unknown (the settings file ' + base.why + ')' : windowNote(settings, mark)}`);
   const cfg = readJson(path.join(CFG_DIR, 'tokenbrake.json'), null);
@@ -1396,28 +1465,34 @@ function doctor() {
   const problems = [];
   const base = mergeBase(settingsPath);
   const settings = base.value || {};
-  const ours = (ev) => (settings.hooks && settings.hooks[ev] || []).filter(isOurs);
-  const has = (ev) => ours(ev).length > 0;
+  const { has, inPlugin, plugin, settingsHas, pluginHas, pluginOnly, spawns, redo, other, otherScope } = installState(settings, !!base.why);
 
   console.log(`tokenbrake doctor (${PROJECT ? 'project' : 'user'} scope)`);
   console.log(`  settings: ${settingsPath}`);
+  if (plugin) console.log(`  plugin: ${plugin.id} ${plugin.version}, ${plugin.state}`);
 
-  const missing = HOOK_EVENTS.filter(ev => !has(ev));
+  const missing = HOOK_EVENTS.filter(ev => !has(ev) && !inPlugin(ev));
   /* An unmergeable file first: reporting it as "no hooks installed, run init" sent the person to a command
      that refuses the same file. */
   if (base.why) problems.push({ sev: 'error', msg: `${settingsPath} ${base.why}`, fix: 'fix or remove it; init and uninstall refuse it as it is' });
+  else if (pluginOnly && !plugin.enabled) problems.push({ sev: 'error', msg: `the plugin ${plugin.id} is installed but ${plugin.state}: none of its hooks run`, fix: 'enable it in /plugin' });
+  else if (pluginOnly && missing.length === HOOK_EVENTS.length) problems.push({ sev: 'error', msg: `the plugin ${plugin.id} is enabled but runs no hooks (${path.join(plugin.root, 'hooks', 'hooks.json')})`, fix: 'reinstall the plugin' });
   else if (missing.length === HOOK_EVENTS.length) problems.push({ sev: 'error', msg: 'no tokenbrake hooks installed', fix: 'run: node cli.js init' + (PROJECT ? ' --project' : '') });
-  else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
+  else if (missing.length) problems.push({ sev: 'warn', msg: `missing hook group(s): ${missing.join(', ')}${missing.includes('PostToolUseFailure') ? ' -- failing commands enter whole' : ''}`, fix: redo });
 
   const srcSha = guardSha(path.join(__dirname, 'guard.js'));
-  const copySha = guardSha(guardFile);
-  if (!copySha) problems.push({ sev: has('PostToolUse') ? 'error' : 'warn', msg: `guard file missing (${guardFile})`, fix: `re-run init${PROJECT ? ' --project' : ''}` });
-  else if (srcSha && srcSha !== copySha) {
-    if (FIX) {
-      try { fs.mkdirSync(guardDir, { recursive: true }); fs.copyFileSync(path.join(__dirname, 'guard.js'), guardFile);
-        problems.push({ sev: 'warn', msg: 'installed guard was STALE', fixed: `re-copied guard.js -> ${guardFile}` }); }
-      catch (e) { problems.push({ sev: 'error', msg: `installed guard is STALE and --fix could not re-copy it: ${e.message}`, fix: `check permissions on ${guardDir}` }); }
-    } else problems.push({ sev: 'error', msg: `installed guard is STALE (${copySha.slice(0, 12)} vs source ${srcSha.slice(0, 12)}); the ledger records an older guard than this checkout`, fix: `node cli.js doctor --fix, or node cli.js init${PROJECT ? ' --project' : ''}` });
+  const pb = plugin && (plugin.enabled || pluginOnly) ? pluginBuild(plugin, srcSha) : null;
+  if (pb && pb.sev) problems.push({ sev: pb.sev, msg: `plugin guard build: ${pb.text}`, fix: pb.fix });
+  if (!pluginOnly) {   // with the plugin alone, a copy here is an earlier init's, and nothing runs it
+    const copySha = guardSha(guardFile);
+    if (!copySha) problems.push({ sev: has('PostToolUse') ? 'error' : 'warn', msg: `guard file missing (${guardFile})`, fix: redo });
+    else if (srcSha && srcSha !== copySha) {
+      if (FIX) {
+        try { fs.mkdirSync(guardDir, { recursive: true }); fs.copyFileSync(path.join(__dirname, 'guard.js'), guardFile);
+          problems.push({ sev: 'warn', msg: 'installed guard was STALE', fixed: `re-copied guard.js -> ${guardFile}` }); }
+        catch (e) { problems.push({ sev: 'error', msg: `installed guard is STALE and --fix could not re-copy it: ${e.message}`, fix: `check permissions on ${guardDir}` }); }
+      } else problems.push({ sev: 'error', msg: `installed guard is STALE (${copySha.slice(0, 12)} vs source ${srcSha.slice(0, 12)}); the ledger records an older guard than this checkout`, fix: `node cli.js doctor --fix, or node cli.js init${PROJECT ? ' --project' : ''}` });
+    }
   }
 
   const cfgPath = path.join(CFG_DIR, 'tokenbrake.json');
@@ -1431,16 +1506,14 @@ function doctor() {
     } catch { problems.push({ sev: 'error', msg: `${cfgPath} is not valid JSON; the guard silently falls back to defaults`, fix: 'fix the JSON or delete the file' }); }
   }
 
-  for (const ev of HOOK_EVENTS) for (const g of ours(ev)) for (const h of g.hooks) {
-    if (!isOurHook(h)) continue;
-    const v = selfTest(h);
-    if (!/^ok/.test(v)) problems.push({ sev: 'error', msg: `${ev} hook spawn (${h.command}): ${v}`, fix: 'check the node path; re-run init with --node=<path-to-node>' });
+  for (const { ev, h, root } of spawns) {
+    const v = selfTest(h, root);
+    if (!/^ok/.test(v)) problems.push({ sev: 'error', msg: `${ev} ${root ? 'plugin ' : ''}hook spawn (${h.command}): ${v}`,
+      fix: root ? 'check that node is on the PATH Claude Code starts with' : 'check the node path; re-run init with --node=<path-to-node>' });
   }
+  if (settingsHas && pluginHas) problems.push({ sev: 'warn', msg: `installed in ${settingsPath} and as the plugin ${plugin.id}: the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one (node cli.js uninstall, or remove the plugin)' });
 
-  const otherPath = PROJECT ? path.join(CFG_DIR, 'settings.json') : path.join(process.cwd(), '.claude', 'settings.json');
-  const other = readJson(otherPath, null);
-  const otherHas = !!(other && other.hooks && HOOK_EVENTS.some(ev => (other.hooks[ev] || []).some(isOurs)));
-  if (otherHas && HOOK_EVENTS.some(has)) problems.push({ sev: 'warn', msg: `also installed at ${PROJECT ? 'user' : 'project'} scope (${otherPath}): the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one scope' });
+  if (other && (settingsHas || pluginHas)) problems.push({ sev: 'warn', msg: `also installed at ${otherScope} scope (${other}): the guard runs twice per call and the ledger double-counts`, fix: 'uninstall one scope' });
 
   const fixed = problems.filter(p => p.fixed);
   const errors = problems.filter(p => p.sev === 'error' && !p.fixed);

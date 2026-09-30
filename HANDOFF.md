@@ -1980,3 +1980,37 @@ on the priority list, so no banner showed.
   - Whether an expired reminder leaves the screen as well as the Action Center, and what a locked screen shows.
 
 Still to see for check 2: a warning from a real Claude Code session, with Claude Code as the parent.
+
+## `status` and `doctor` read the plugin install; coldWarn on for check 2 — 2026-09-30
+
+Branch `claude/status-plugin`. The owner's machine runs tokenbrake as the plugin. It was 0.5.0 (2026-09-26), with
+no `Stop` hook, so coldWarn could not have run. The owner updated it to 0.7.0 at `92e9bdb` (`main` with #139) at
+about 02:31. `tokenbrake status` then reported every hook "missing" and `~/.claude/hooks/tokenbrake/guard.js` STALE:
+it read only settings.json, where the plugin writes nothing, and that copy is left from an earlier `init` and nothing
+runs it.
+
+- **`cli.js`.** `pluginInstall` reads `plugins/installed_plugins.json` (user scope) and the plugin's own
+  `hooks/hooks.json`. It reads `enabledPlugins` merged as Claude Code merges it: user settings, then the project's
+  `settings.json` and `settings.local.json`. With more than one `tokenbrake@<marketplace>`, it reads the enabled one.
+  - `status` and `doctor` count its hooks, spawn each from the plugin root (`${CLAUDE_PLUGIN_ROOT}`) and compare
+    its `guard.js` with this checkout's.
+  - They name a leftover copy as one, and report settings.json plus the plugin as running the guard twice. Under
+    `--project` the plugin is the user scope's install. `init` says so too when it installs next to an enabled plugin.
+  - A disabled plugin, or an enabled one with no `hooks.json`, is named instead of "run init".
+  - One `installState` gives both commands the same reading.
+- **Not read:** a project-scope plugin install (its record has not been seen on this machine), and managed
+  settings' `enabledPlugins`.
+- **Review.** `/simplify`, then `/code-review`: 15 findings, 11 fixed. Kept as they are:
+  - a plugin guard that differs from the checkout is a WARN, not STALE's ERROR, because the plugin updates on its
+    own and may be the newer of the two;
+  - a hook mode newer than this CLI is still tested as `post`;
+  - duplicate spawns are not merged, and there is no single list of every install source.
+- **`/security-review`:** one finding, rated 7/10 (under the bar of 8), fixed anyway. On Windows, a `node.exe` in
+  the folder `status` ran from was what the plugin's bare `node` started. The spawn tests now start from their
+  empty throwaway folder, as the guard's toast already does, and `test.mjs` plants one to check.
+- **coldWarn is on** in the owner's `~/.claude/tokenbrake.json` since 02:38, for check 2.
+- **An expired reminder leaves the screen.** A reminder sent at 02:26:59 through the guard's own script, expiring
+  30 seconds later, was gone from the Action Center 46 seconds after it was sent, and the owner saw it leave the
+  screen on its own. That settles one "not known yet" of the entry above.
+
+Still to see: check 2 from a real session, then check 3. The leftover guard copy on the owner's machine can go.
