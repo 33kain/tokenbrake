@@ -2052,3 +2052,19 @@ people's machines, and this is the first step toward it.
   is only counted. `test.mjs` runs it over a session whose cwd, command, version and ledger row carry a path, and
   checks that none of it, and no session or tool id, is in the output.
 - **Points** are the author's calibration, and the block says so. Another plan may weigh the kinds differently.
+- **`--since`** takes a calendar day (YYYY-MM-DD) and refuses anything else, in `--compactions` too: `Date.parse`
+  read `9/19` as 2001-09-19 and widened the view without a word.
+- **On the owner's machine:** 99 sessions (2026-08-22 to 2026-09-30), 298 staged left out; 16 counted compactions,
+  PASS at 36% of the saving (Opus 5.5 13 counted, PASS; Opus 5 3, short of 8); the guard ran in at least 63 of 99
+  sessions, 137 trims, ~11.5M token-reads not carried, net ~10.6M.
+- **Review.** `/simplify`, then `/code-review`: 15 findings, 13 fixed. Left as they are:
+  - staged sessions are parsed whole before `poolSkip` drops them (~1.8 of ~3 s here), and the ledger joins scan the
+    ledger once per session; a shared head read and a bucketed ledger belong to all five pooled views, not this one;
+  - the five pooled views keep their own loop heads rather than one `pooledSessions` generator, for the same reason;
+  - a project-scope plugin install is not named, because its record holds a path.
+- **`/security-review`:** no finding. Every value in the block was traced to a count, a sum, a fixed label or
+  `safeVer`; `mergeBase`'s errors carry only `e.code`, never the message with its path. Below the bar: `safeVer`'s
+  suffix allows 20 letters and digits, and both of its sources are written by Claude Code, not by the model.
+
+Next: a few people outside run `npx tokenbrake report --share` and send the block back. That is the measurement 9
+waits for. `Unreleased` holds `--share`, so it reaches them in the next release.
