@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 — 2026-09-30
+
+A warning before an idle session's cache goes cold (`coldWarn`, off by default, Windows only), and `status` and
+`doctor` that read the plugin install. `init` registers two more hooks (`Stop`, `SessionEnd`), so re-run it after
+upgrading; the plugin carries them already.
 
 - **`coldWarn`, off by default and Windows only: a warning before an idle session's cache goes cold.** When a turn
   ends with at least 100k in context and the session then sits idle for 50 minutes, one notification names the
