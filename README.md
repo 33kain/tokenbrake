@@ -88,7 +88,7 @@ Restart Claude Code (or run `/hooks`: `PreToolUse`, `PostToolUse`, `PostToolUseF
 Python, no Rust binary, no Git Bash. Works on Windows with the PowerShell tool.
 
 ```
-npx tokenbrake status          # what is installed, plus one real spawn of each hook, as Claude Code does it
+npx tokenbrake status          # what is installed (settings or plugin), plus one real spawn of each hook
 ```
 
 The first user-scope `init` also installs a pair: Claude Code's own compaction window, `autoCompactWindow`, at
@@ -586,6 +586,10 @@ npx tokenbrake doctor --fix         # re-copies the guard if the installed copy 
 
 `doctor` is `status` re-cast for scripting and CI: it exits non-zero when something is actually broken
 (no hooks, a stale guard, a hook that cannot spawn, invalid `tokenbrake.json`) and prints the fix for each.
+Both read either install: the hooks `init` wrote to settings.json, and a user-scope plugin with its own
+`hooks.json` (whether it is enabled, a project's own settings included, and whether its `guard.js` is this
+version's). Both installs at once run the guard twice per call, and both commands say so, as does `init` when it
+installs next to an enabled plugin.
 
 ## Saved outputs
 
